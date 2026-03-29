@@ -1,0 +1,14 @@
+node_modules
+dist
+.git
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+.cursor
+.cursorignore
+*.md
+!README.md
+agent-tools
+terminals

@@ -1,0 +1,253 @@
+1) Domain → Organization identity (who owns/operates it)
+
+Outputs
+
+Canonical root domain, parent domains, brand aliases
+
+Legal org name(s) observed publicly (site footer, policies, TLS cert org field when present)
+
+WHOIS/RDAP registrar, registration dates (if not privacy masked), name servers
+
+ASN(s) and ISP/carrier mapping for owned IP ranges
+
+Primary geographies inferred from: WHOIS, ASN, server geo, language/region selectors
+
+Dashboard
+
+“Org Profile” card with confidence + sources per field
+
+2) Web presence map (what properties exist)
+
+Outputs
+
+All discovered domains/subdomains (passive discovery)
+
+Resolved hosts + IPs + CDN/WAF usage flags
+
+Live service list: protocols (http/https), redirects, canonical hosts
+
+Screenshot gallery of key web properties (home, login, portals, admin panels if publicly reachable)
+
+Dashboard
+
+Subdomain inventory table + “New since last run” diff
+
+3) Tech stack fingerprint (what they run)
+
+Outputs
+
+Frontend stack hints: frameworks, libraries (from headers/HTML/JS hints)
+
+Backend stack hints: server headers, cookies, response traits
+
+Third-party services in use (analytics, chat widgets, marketing tags, payment gateways, auth providers)
+
+CMS and plugin hints (WordPress/Drupal/etc.) if visible
+
+Dashboard
+
+“Technology Radar” (categories + counts) + “high-risk/EOL tech” flags
+
+4) Cloud & edge footprint (where it lives)
+
+Outputs
+
+Evidence of cloud providers: AWS/Azure/GCP (DNS patterns, cert SANs, known hostnames)
+
+Storage endpoints discovered: S3-style buckets, Azure blobs, GCS endpoints (existence only)
+
+Email/MX providers, SPF/DMARC/DKIM status + policy strength (deliverability + spoofing risk)
+
+Dashboard
+
+“Cloud/Email Security” section with pass/fail and configuration grades
+
+5) Exposed content & accidental leaks (publicly accessible only)
+
+Outputs
+
+Public files & endpoints discovered in indexing:
+
+PDFs/docs, backups, configs, logs (only what’s publicly reachable/indexed)
+
+API docs (Swagger/OpenAPI), Postman collections
+
+Secrets exposure indicators (pattern-based hits in public JS files / public repos):
+
+API keys/tokens patterns (redacted in UI/report)
+
+Hardcoded endpoints, internal hostnames
+
+Cached/archived URLs (Wayback-like history) for changed/removed pages
+
+Dashboard
+
+“Exposure Findings” with severity, evidence link, first-seen date, and redaction-by-default
+
+6) External attack surface summary (non-intrusive)
+
+Outputs
+
+Public IPs and service banners (from passive sources where possible)
+
+Known open ports/services if sourced from reputable internet scan datasets (optional)
+
+TLS posture: cert chain, expiry, weak protocol/cipher flags (high-level)
+
+WAF/CDN detection, security header posture (HSTS, CSP, etc.)
+
+Dashboard
+
+“Surface Risk Score” + drilldown by asset/service (all evidence-based)
+
+7) Brand & public reputation signals
+
+Outputs
+
+Official social profiles linked from site (LinkedIn, X, GitHub, YouTube)
+
+App store listings (if relevant): Android/iOS package names
+
+Public status pages, trust pages, incident pages if present
+
+Mentions in public news/blogs (optional module)
+
+Dashboard
+
+“Brand Presence” panel + link-outs
+
+LinkedIn module (public-only, domain-driven)
+
+You specifically asked for “LinkedIn data gathered by giving the domain.” Here’s what that should mean without dummy data and without bypassing access controls:
+
+8) LinkedIn: Company profile intelligence (org-level)
+
+Outputs
+
+Most likely company page(s) matched to the domain/brand
+
+Company name, industry, HQ location, company size range
+
+Employee count trend (if shown publicly)
+
+Company specialties/keywords
+
+Public posts themes (security announcements, hiring pushes, acquisitions)
+
+Subsidiaries/related pages (if discoverable)
+
+Dashboard
+
+“LinkedIn Org Snapshot” card with:
+
+Matched page confidence
+
+Evidence links (public URLs) + timestamp of capture
+
+9) LinkedIn: People intelligence (role-based, not creepy)
+
+Outputs
+
+Publicly visible employee list by title/role buckets:
+
+Security leadership (CISO/Head of Security), IT Ops, DevOps, SRE
+
+Engineering leadership, AppSec, SOC, IAM, Network, Cloud
+
+Aggregate stats:
+
+Counts by function (Security/Engineering/IT/HR/Sales)
+
+Seniority distribution (IC/Manager/Director)
+
+Geo distribution (by location on profiles)
+
+Key contacts (optional):
+
+Only role + public profile URL; names optional depending on your policy
+
+Dashboard
+
+“Org Chart Heatmap” (counts by role category), plus optional “Key roles” list
+
+10) LinkedIn: Hiring + tech signals
+
+Outputs
+
+Current job postings tied to the company page:
+
+Roles, locations, seniority
+
+Keywords that reveal stack: SIEM, EDR, cloud provider, identity tools, etc.
+
+Security maturity indicators from hiring:
+
+AppSec roles? SOC roles? Threat intel? GRC?
+
+Dashboard
+
+“Hiring Signals” widget + extracted tech keywords
+
+Important guardrails (so this stays clean):
+
+Use only publicly accessible data (no login-required scraping, no bypassing rate limits/captchas).
+
+If deeper access is needed, use official LinkedIn partner/API access or user-provided exports.
+
+11) Public code & developer footprint (domain-linked)
+
+Outputs
+
+Public GitHub/GitLab orgs associated with the domain/brand
+
+Repos referencing the domain, subdomains, API endpoints
+
+Public CI/CD artifacts hints (badges, exposed build metadata)
+
+Public packages (npm/pypi) tied to org naming
+
+Dashboard
+
+“Code Footprint” panel with repo links + flagged exposures (secrets always redacted)
+
+12) Third-party exposure & supply-chain surface (domain-linked)
+
+Outputs
+
+Public SaaS used (from tags/scripts/headers): analytics, support desks, CRM, auth, CDN
+
+Publicly discoverable vendor portals/subdomains (e.g., help., status., login.)
+
+Public breach/exposure references (only from legitimate public sources) as “risk signals,” not raw data
+
+Dashboard
+
+“Third-Party Surface” list + risk flags
+
+13) Output format requirements (so report = dashboard, not separate truth)
+
+Every data point should carry:
+
+Source type (website / DNS / cert / public search / public profile / public repo)
+
+Evidence link (URL) + captured timestamp
+
+Confidence score (0–100)
+
+Normalization (same field names every run)
+
+Diff support (what changed since last scan)
+
+What the final report should show (minimum)
+
+Executive overview: surface size, top risks, key changes since last run
+
+Asset inventory: domains/subdomains/services/tech stack
+
+Exposure findings: severity + evidence + remediation
+
+Identity intel: LinkedIn org snapshot + role heatmap + hiring signals
+
+Email/DNS security posture: SPF/DMARC/DKIM summary
+
+Appendices: screenshots + evidence URLs + change log
