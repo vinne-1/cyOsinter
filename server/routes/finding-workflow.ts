@@ -6,7 +6,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { storage } from "../storage";
 import { sendError, sendNotFound, sendValidationError } from "./response";
-import { requireAuth } from "./auth-middleware";
+import { requireAuth, requireWorkspaceRole } from "./auth-middleware";
 import { createLogger } from "../logger";
 
 const log = createLogger("finding-workflow-routes");
@@ -92,7 +92,7 @@ findingWorkflowRouter.get("/workspaces/:workspaceId/finding-groups", async (req,
 });
 
 // POST /workspaces/:workspaceId/finding-groups/compute — recompute finding groups
-findingWorkflowRouter.post("/workspaces/:workspaceId/finding-groups/compute", requireAuth, async (req, res) => {
+findingWorkflowRouter.post("/workspaces/:workspaceId/finding-groups/compute", requireAuth, requireWorkspaceRole("owner", "admin", "analyst"), async (req, res) => {
   try {
     const { groupFindings } = await import("../finding-dedup");
     const groupCount = await groupFindings(req.params.workspaceId as string);

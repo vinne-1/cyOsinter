@@ -100,7 +100,7 @@ function ReportDetailDialog({
 
   const deleteMutation = useMutation({
     mutationFn: async () => {
-      if (!report) return;
+      if (!report) throw new Error("No report selected");
       await apiRequest("DELETE", `/api/workspaces/${selectedWorkspaceId}/reports/${report.id}`);
     },
     onSuccess: () => {

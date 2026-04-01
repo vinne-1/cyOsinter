@@ -8,7 +8,7 @@ import {
   findings,
   postureSnapshots,
 } from "@shared/schema";
-import { requireAuth, requireWorkspaceRole } from "./auth-middleware";
+import { requireAuth, requireRole, requireWorkspaceRole } from "./auth-middleware";
 import { sendError, sendValidationError, sendNotFound } from "./response";
 import { createLogger } from "../logger";
 
@@ -104,7 +104,7 @@ retentionRouter.put(
 );
 
 // POST /retention/cleanup — trigger manual retention cleanup
-retentionRouter.post("/retention/cleanup", requireAuth, async (req, res) => {
+retentionRouter.post("/retention/cleanup", requireAuth, requireRole("superadmin"), async (req, res) => {
   try {
     const result = await runRetentionCleanup();
     res.json(result);
@@ -183,6 +183,7 @@ export async function runRetentionCleanup(): Promise<{ deleted: Record<string, n
     log.info({ deleted }, "Retention cleanup completed");
   } catch (err) {
     log.error({ err }, "Retention cleanup failed");
+    throw err;
   }
 
   return { deleted };
