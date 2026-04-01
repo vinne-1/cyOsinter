@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { useDomain } from "@/lib/domain-context";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,6 +20,7 @@ interface RetentionPolicy {
 }
 
 export default function RetentionConfig() {
+  const { selectedWorkspaceId } = useDomain();
   const { toast } = useToast();
 
   const [scanDays, setScanDays] = useState(90);
@@ -27,7 +29,7 @@ export default function RetentionConfig() {
   const [archiveEnabled, setArchiveEnabled] = useState(false);
 
   const { data: config, isLoading } = useQuery<RetentionPolicy>({
-    queryKey: ["/api/retention"],
+    queryKey: [`/api/workspaces/${selectedWorkspaceId}/retention`],
   });
 
   useEffect(() => {
@@ -41,14 +43,14 @@ export default function RetentionConfig() {
 
   const saveMutation = useMutation({
     mutationFn: () =>
-      apiRequest("PUT", "/api/retention", {
+      apiRequest("PUT", `/api/workspaces/${selectedWorkspaceId}/retention`, {
         scanRetentionDays: scanDays,
         findingRetentionDays: findingDays,
         snapshotRetentionDays: snapshotDays,
         archiveEnabled,
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/retention"] });
+      queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${selectedWorkspaceId}/retention`] });
       toast({ title: "Retention policy saved" });
     },
     onError: (err: Error) => {
@@ -59,7 +61,7 @@ export default function RetentionConfig() {
   const cleanupMutation = useMutation({
     mutationFn: () => apiRequest("POST", "/api/retention/cleanup"),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/retention"] });
+      queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${selectedWorkspaceId}/retention`] });
       toast({ title: "Cleanup completed", description: "Expired data has been removed" });
     },
     onError: (err: Error) => {

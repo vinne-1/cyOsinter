@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { useDomain } from "@/lib/domain-context";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -140,6 +141,7 @@ function PlaybookCard({
 }
 
 export default function Playbooks() {
+  const { selectedWorkspaceId } = useDomain();
   const { toast } = useToast();
   const [simResult, setSimResult] = useState<SimulationResult | null>(null);
   const [simDialogOpen, setSimDialogOpen] = useState(false);
@@ -150,7 +152,7 @@ export default function Playbooks() {
 
   const simulate = useMutation({
     mutationFn: async (id: string) => {
-      const res = await apiRequest("POST", `/api/playbooks/${id}/simulate`);
+      const res = await apiRequest("POST", `/api/playbooks/${id}/simulate?workspaceId=${selectedWorkspaceId}`);
       return res.json();
     },
     onSuccess: (data: SimulationResult) => {

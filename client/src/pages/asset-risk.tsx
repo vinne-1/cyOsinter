@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useDomain } from "@/lib/domain-context";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -85,12 +86,19 @@ function sortAssets(assets: AssetRisk[], field: SortField, dir: SortDir): AssetR
 }
 
 export default function AssetRiskPage() {
+  const { selectedWorkspaceId } = useDomain();
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [sortField, setSortField] = useState<SortField>("overallScore");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
 
   const { data, isLoading, isError, error } = useQuery<AssetRiskSummary>({
-    queryKey: ["/api/asset-risk"],
+    queryKey: ["/api/asset-risk", selectedWorkspaceId],
+    queryFn: async () => {
+      const res = await fetch(`/api/asset-risk?workspaceId=${selectedWorkspaceId}`);
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    },
+    enabled: !!selectedWorkspaceId,
   });
 
   function handleSort(field: SortField) {

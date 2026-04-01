@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { useDomain } from "@/lib/domain-context";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -48,6 +49,7 @@ function reputationColor(score: number): string {
 }
 
 export default function ThreatIntel() {
+  const { selectedWorkspaceId } = useDomain();
   const [target, setTarget] = useState("");
   const [submittedTarget, setSubmittedTarget] = useState("");
   const { toast } = useToast();
@@ -69,7 +71,7 @@ export default function ThreatIntel() {
   });
 
   const enrichMutation = useMutation({
-    mutationFn: () => apiRequest("POST", "/api/threat-intel/enrich"),
+    mutationFn: () => apiRequest("POST", `/api/threat-intel/enrich?workspaceId=${selectedWorkspaceId}`),
     onSuccess: () => {
       toast({ title: "Enrichment complete", description: "All findings have been enriched with threat intelligence" });
     },
