@@ -145,17 +145,14 @@ webhooksRouter.patch(
       }
 
       // Verify caller has admin+ role in the webhook's workspace
-      if (!req.user || existing.workspaceId !== (req as any).workspaceId) {
-        // Fall back to checking workspace membership
-        const { workspaceMembers } = await import("@shared/schema");
-        const [member] = await db
-          .select()
-          .from(workspaceMembers)
-          .where(and(eq(workspaceMembers.workspaceId, existing.workspaceId), eq(workspaceMembers.userId, req.user!.id)))
-          .limit(1);
-        if (!member || !["owner", "admin"].includes(member.role)) {
-          return sendError(res, 403, "Forbidden");
-        }
+      const { workspaceMembers } = await import("@shared/schema");
+      const [member] = await db
+        .select()
+        .from(workspaceMembers)
+        .where(and(eq(workspaceMembers.workspaceId, existing.workspaceId), eq(workspaceMembers.userId, req.user!.id)))
+        .limit(1);
+      if (!member || !["owner", "admin"].includes(member.role)) {
+        return sendError(res, 403, "Forbidden");
       }
 
       const updates = { ...parsed.data } as Record<string, unknown>;

@@ -6,6 +6,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { storage } from "../storage";
 import { sendError, sendNotFound, sendValidationError } from "./response";
+import { requireAuth } from "./auth-middleware";
 import { createLogger } from "../logger";
 
 const log = createLogger("finding-workflow-routes");
@@ -85,6 +86,17 @@ findingWorkflowRouter.get("/workspaces/:workspaceId/finding-groups", async (req,
     const { getFindingGroups } = await import("../finding-dedup");
     const groups = await getFindingGroups(req.params.workspaceId as string);
     res.json(groups);
+  } catch (err) {
+    sendError(res, 500, err instanceof Error ? err.message : "Internal error");
+  }
+});
+
+// POST /workspaces/:workspaceId/finding-groups/compute — recompute finding groups
+findingWorkflowRouter.post("/workspaces/:workspaceId/finding-groups/compute", requireAuth, async (req, res) => {
+  try {
+    const { groupFindings } = await import("../finding-dedup");
+    const groupCount = await groupFindings(req.params.workspaceId as string);
+    res.json({ success: true, groupCount });
   } catch (err) {
     sendError(res, 500, err instanceof Error ? err.message : "Internal error");
   }

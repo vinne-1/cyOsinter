@@ -23,6 +23,7 @@ import { scanDiffRouter } from "./scan-diff";
 import { playbooksRouter } from "./playbooks";
 import { assetRiskRouter } from "./asset-risk";
 import { threatIntelRouter } from "./threat-intel";
+import { requireAuth } from "./auth-middleware";
 import { errorHandler } from "./response";
 
 const routeLog = createLogger("routes");
@@ -34,7 +35,16 @@ export async function registerRoutes(
   app: Express
 ): Promise<Server> {
 
-  // Mount domain-specific routers
+  // ── Public routes (no auth required) ──
+  // Auth router is mounted first so /auth/login, /auth/register, /auth/refresh
+  // respond before the global requireAuth middleware runs.
+  app.use("/api", authRouter);
+
+  // ── Global authentication gate ──
+  // Every /api route registered AFTER this line requires a valid session or API key.
+  app.use("/api", requireAuth);
+
+  // ── Protected routes ──
   app.use("/api/workspaces", workspacesRouter);
   app.use("/api", scansRouter);
   app.use("/api", findingsRouter);
@@ -46,7 +56,6 @@ export async function registerRoutes(
   app.use("/api", analyticsRouter);
   app.use("/api", scanProfilesRouter);
   app.use("/api", integrationsTicketsRouter);
-  app.use("/api", authRouter);
   app.use("/api", auditRouter);
   app.use("/api", webhooksRouter);
   app.use("/api", apiKeysRouter);

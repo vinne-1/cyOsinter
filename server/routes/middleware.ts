@@ -4,7 +4,7 @@ import type { Request, Response, NextFunction } from "express";
 export function requireAdmin(req: Request, res: Response, next: NextFunction): void {
   const adminKey = process.env.ADMIN_API_KEY;
   if (adminKey) {
-    const provided = req.headers["x-admin-key"] || req.query.adminKey;
+    const provided = req.headers["x-admin-key"];
     if (provided === adminKey) return next();
     res.status(401).json({ message: "Unauthorized: invalid admin key" });
     return;

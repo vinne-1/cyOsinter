@@ -103,6 +103,17 @@ retentionRouter.put(
   },
 );
 
+// POST /retention/cleanup — trigger manual retention cleanup
+retentionRouter.post("/retention/cleanup", requireAuth, async (req, res) => {
+  try {
+    const result = await runRetentionCleanup();
+    res.json(result);
+  } catch (err) {
+    log.error({ err }, "Manual retention cleanup failed");
+    sendError(res, 500, "Cleanup failed");
+  }
+});
+
 // ── Retention Cleanup ──
 
 function daysAgo(days: number): Date {
