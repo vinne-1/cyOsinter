@@ -1,0 +1,110 @@
+import { Router } from "express";
+import { z } from "zod";
+import { storage } from "../storage";
+import { createLogger } from "../logger";
+import { createWorkspaceSchema, updateWorkspaceSchema, createAssetSchema } from "./schemas";
+
+const routeLog = createLogger("routes");
+
+export const workspacesRouter = Router();
+
+workspacesRouter.get("/", async (_req, res) => {
+  try {
+    const ws = await storage.getWorkspaces();
+    res.json(ws);
+  } catch (err) {
+    routeLog.error({ err }, "Get workspaces error");
+    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+  }
+});
+
+workspacesRouter.post("/:id/purge", async (req, res) => {
+  try {
+    const ws = await storage.getWorkspace(req.params.id);
+    if (!ws) return res.status(404).json({ message: "Workspace not found" });
+    await storage.purgeWorkspaceData(req.params.id);
+    res.status(200).set("Content-Type", "application/json").json({ purged: true, workspaceId: req.params.id });
+  } catch (err) {
+    routeLog.error({ err }, "Purge workspace error");
+    res.status(500).json({ message: err instanceof Error ? err.message : "Failed to purge workspace" });
+  }
+});
+
+workspacesRouter.get("/:id", async (req, res) => {
+  try {
+    const ws = await storage.getWorkspace(req.params.id);
+    if (!ws) return res.status(404).json({ message: "Workspace not found" });
+    res.json(ws);
+  } catch (err) { res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" }); }
+});
+
+workspacesRouter.post("/", async (req, res) => {
+  try {
+    const parsed = createWorkspaceSchema.parse(req.body);
+    const existing = await storage.getWorkspaceByName(parsed.name);
+    if (existing) {
+      return res.status(409).json({ message: "A workspace with this domain already exists", workspace: existing });
+    }
+    const ws = await storage.createWorkspace({ name: parsed.name, description: parsed.description || null, status: "active" });
+    res.status(201).json(ws);
+  } catch (error: unknown) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ message: error.errors[0]?.message || "Validation error" });
+    }
+    const message = error instanceof Error ? error.message : "Unknown error";
+    res.status(400).json({ message });
+  }
+});
+
+workspacesRouter.patch("/:id", async (req, res) => {
+  try {
+    const parsed = updateWorkspaceSchema.parse(req.body);
+    const updated = await storage.updateWorkspace(req.params.id, parsed);
+    if (!updated) return res.status(404).json({ message: "Workspace not found" });
+    res.json(updated);
+  } catch (error: unknown) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ message: error.errors[0]?.message || "Validation error" });
+    }
+    const message = error instanceof Error ? error.message : "Unknown error";
+    res.status(400).json({ message });
+  }
+});
+
+workspacesRouter.delete("/:id", async (req, res) => {
+  try {
+    const ws = await storage.getWorkspace(req.params.id);
+    if (!ws) return res.status(404).json({ message: "Workspace not found" });
+    await storage.deleteWorkspace(req.params.id);
+    res.status(204).send();
+  } catch (err) {
+    routeLog.error({ err }, "Delete workspace error");
+    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+  }
+});
+
+workspacesRouter.get("/:workspaceId/assets", async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(String(req.query.limit ?? "500"), 10) || 500, 5000);
+    const offset = Math.max(parseInt(String(req.query.offset ?? "0"), 10) || 0, 0);
+    const result = await storage.getAssets(req.params.workspaceId, { limit, offset });
+    res.json(result);
+  } catch (err) {
+    routeLog.error({ err }, "Get assets error");
+    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+  }
+});
+
+workspacesRouter.post("/:workspaceId/assets", async (req, res) => {
+  try {
+    const parsed = createAssetSchema.parse({ ...req.body, workspaceId: req.params.workspaceId });
+    const asset = await storage.createAsset(parsed);
+    res.status(201).json(asset);
+  } catch (error: unknown) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ message: error.errors[0]?.message || "Validation error" });
+    }
+    const message = error instanceof Error ? error.message : "Unknown error";
+    res.status(400).json({ message });
+  }
+});

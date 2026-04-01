@@ -1,6 +1,6 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
-const API_BASE = (typeof import.meta !== "undefined" && (import.meta as any).env?.VITE_API_BASE) || "";
+const API_BASE = (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_BASE) || "";
 
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
@@ -120,10 +120,10 @@ export const getQueryFn: <T>(options: {
     await throwIfResNotOk(res);
     const text = await res.text();
     if (!text || text.trim() === "") {
-      return [] as any;
+      return [];
     }
     try {
-      return JSON.parse(text) as any;
+      return JSON.parse(text);
     } catch {
       throw new Error(`Invalid JSON from ${url}`);
     }

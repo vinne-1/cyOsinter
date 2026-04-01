@@ -1,7 +1,19 @@
-import { eq, desc, and, sql, lt } from "drizzle-orm";
+import { eq, desc, and, sql, lt, asc, count } from "drizzle-orm";
 import { db } from "./db";
-import { workspaces, assets, scans, findings, reports, reconModules, continuousMonitoring, uploadedScans, postureSnapshots } from "@shared/schema";
-import type { Workspace, InsertWorkspace, Asset, InsertAsset, Scan, InsertScan, Finding, InsertFinding, Report, InsertReport, ReconModule, InsertReconModule, ContinuousMonitoring, InsertContinuousMonitoring, UploadedScan, InsertUploadedScan, PostureSnapshot, InsertPostureSnapshot } from "@shared/schema";
+import { workspaces, assets, scans, findings, reports, reconModules, continuousMonitoring, uploadedScans, postureSnapshots, alerts, scheduledScans, scanProfiles } from "@shared/schema";
+import type { Workspace, InsertWorkspace, Asset, InsertAsset, Scan, InsertScan, Finding, InsertFinding, Report, InsertReport, ReconModule, InsertReconModule, ContinuousMonitoring, InsertContinuousMonitoring, UploadedScan, InsertUploadedScan, PostureSnapshot, InsertPostureSnapshot, Alert, InsertAlert, ScheduledScan, InsertScheduledScan, ScanProfile, InsertScanProfile } from "@shared/schema";
+
+export interface PaginationOpts {
+  limit?: number;
+  offset?: number;
+}
+
+export interface PaginatedResult<T> {
+  data: T[];
+  total: number;
+  limit: number;
+  offset: number;
+}
 
 export interface IStorage {
   getWorkspaces(): Promise<Workspace[]>;
@@ -12,32 +24,32 @@ export interface IStorage {
   deleteWorkspace(id: string): Promise<void>;
   purgeWorkspaceData(id: string): Promise<void>;
 
-  getAssets(workspaceId: string): Promise<Asset[]>;
+  getAssets(workspaceId: string, opts?: PaginationOpts): Promise<PaginatedResult<Asset>>;
   getAsset(id: string): Promise<Asset | undefined>;
   assetExists(workspaceId: string, type: string, value: string): Promise<boolean>;
   createAsset(asset: InsertAsset): Promise<Asset>;
   deleteAsset(id: string): Promise<void>;
 
-  getScans(workspaceId: string): Promise<Scan[]>;
+  getScans(workspaceId: string, opts?: PaginationOpts): Promise<PaginatedResult<Scan>>;
   getScan(id: string): Promise<Scan | undefined>;
   createScan(scan: InsertScan): Promise<Scan>;
   updateScan(id: string, data: Partial<Scan>): Promise<Scan | undefined>;
   deleteScan(id: string): Promise<void>;
 
-  getFindings(workspaceId: string): Promise<Finding[]>;
+  getFindings(workspaceId: string, opts?: PaginationOpts): Promise<PaginatedResult<Finding>>;
   getAllFindings(): Promise<Finding[]>;
   getFinding(id: string): Promise<Finding | undefined>;
   findingExists(workspaceId: string, title: string, affectedAsset: string, category: string): Promise<boolean>;
   createFinding(finding: InsertFinding): Promise<Finding>;
   updateFinding(id: string, data: Partial<Finding>): Promise<Finding | undefined>;
 
-  getReports(workspaceId: string): Promise<Report[]>;
+  getReports(workspaceId: string, opts?: PaginationOpts): Promise<PaginatedResult<Report>>;
   getReport(id: string): Promise<Report | undefined>;
   createReport(report: InsertReport): Promise<Report>;
   updateReport(id: string, data: Partial<Report>): Promise<Report | undefined>;
   deleteReport(id: string): Promise<void>;
 
-  getReconModules(workspaceId: string): Promise<ReconModule[]>;
+  getReconModules(workspaceId: string, opts?: PaginationOpts): Promise<PaginatedResult<ReconModule>>;
   getReconModule(id: string): Promise<ReconModule | undefined>;
   getReconModulesByType(workspaceId: string, moduleType: string): Promise<ReconModule[]>;
   createReconModule(mod: InsertReconModule): Promise<ReconModule>;
@@ -55,7 +67,32 @@ export interface IStorage {
   getPostureHistory(workspaceId: string, limit?: number): Promise<PostureSnapshot[]>;
   createPostureSnapshot(snapshot: InsertPostureSnapshot): Promise<PostureSnapshot>;
   getStuckScans(maxAgeMs: number): Promise<Scan[]>;
+
+  // Alerts
+  getAlerts(workspaceId: string, limit?: number): Promise<Alert[]>;
+  getUnreadAlertCount(workspaceId: string): Promise<number>;
+  createAlert(alert: InsertAlert): Promise<Alert>;
+  markAlertRead(id: string): Promise<Alert | undefined>;
+  markAllAlertsRead(workspaceId: string): Promise<void>;
+  deleteAlert(id: string): Promise<void>;
+
+  // Scheduled Scans
+  getScheduledScans(workspaceId: string): Promise<ScheduledScan[]>;
+  getScheduledScan(id: string): Promise<ScheduledScan | undefined>;
+  getDueScheduledScans(): Promise<ScheduledScan[]>;
+  createScheduledScan(scan: InsertScheduledScan): Promise<ScheduledScan>;
+  updateScheduledScan(id: string, data: Partial<ScheduledScan>): Promise<ScheduledScan | undefined>;
+  deleteScheduledScan(id: string): Promise<void>;
+
+  // Scan Profiles
+  getScanProfiles(workspaceId: string): Promise<ScanProfile[]>;
+  getScanProfile(id: string): Promise<ScanProfile | undefined>;
+  createScanProfile(profile: InsertScanProfile): Promise<ScanProfile>;
+  updateScanProfile(id: string, data: Partial<ScanProfile>): Promise<ScanProfile | undefined>;
+  deleteScanProfile(id: string): Promise<void>;
 }
+
+const DEFAULT_LIMIT = 500;
 
 export class DatabaseStorage implements IStorage {
   async getWorkspaces(): Promise<Workspace[]> {
@@ -83,26 +120,22 @@ export class DatabaseStorage implements IStorage {
   }
 
   async deleteWorkspace(id: string): Promise<void> {
-    await db.delete(assets).where(eq(assets.workspaceId, id));
-    await db.delete(findings).where(eq(findings.workspaceId, id));
-    await db.delete(scans).where(eq(scans.workspaceId, id));
-    await db.delete(reports).where(eq(reports.workspaceId, id));
-    await db.delete(reconModules).where(eq(reconModules.workspaceId, id));
-    await db.delete(continuousMonitoring).where(eq(continuousMonitoring.workspaceId, id));
-    await db.delete(uploadedScans).where(eq(uploadedScans.workspaceId, id));
-    await db.delete(postureSnapshots).where(eq(postureSnapshots.workspaceId, id));
+    // Foreign keys with ON DELETE CASCADE handle child table cleanup
     await db.delete(workspaces).where(eq(workspaces.id, id));
   }
 
   async purgeWorkspaceData(id: string): Promise<void> {
-    await db.delete(assets).where(eq(assets.workspaceId, id));
-    await db.delete(findings).where(eq(findings.workspaceId, id));
+    // Delete child tables that reference scans first (due to FK ordering)
+    const childTables = [
+      scanProfiles, alerts, scheduledScans, reconModules,
+      postureSnapshots, findings, assets, reports,
+      continuousMonitoring, uploadedScans,
+    ] as const;
+    for (const table of childTables) {
+      await db.delete(table).where(eq(table.workspaceId, id));
+    }
+    // Delete scans last (other tables reference it)
     await db.delete(scans).where(eq(scans.workspaceId, id));
-    await db.delete(reports).where(eq(reports.workspaceId, id));
-    await db.delete(reconModules).where(eq(reconModules.workspaceId, id));
-    await db.delete(continuousMonitoring).where(eq(continuousMonitoring.workspaceId, id));
-    await db.delete(uploadedScans).where(eq(uploadedScans.workspaceId, id));
-    await db.delete(postureSnapshots).where(eq(postureSnapshots.workspaceId, id));
   }
 
   async getPostureHistory(workspaceId: string, limit = 30): Promise<PostureSnapshot[]> {
@@ -118,8 +151,15 @@ export class DatabaseStorage implements IStorage {
     return created;
   }
 
-  async getAssets(workspaceId: string): Promise<Asset[]> {
-    return db.select().from(assets).where(eq(assets.workspaceId, workspaceId)).orderBy(desc(assets.firstSeen));
+  async getAssets(workspaceId: string, opts?: PaginationOpts): Promise<PaginatedResult<Asset>> {
+    const limit = opts?.limit ?? DEFAULT_LIMIT;
+    const offset = opts?.offset ?? 0;
+    const where = eq(assets.workspaceId, workspaceId);
+    const [data, [{ total }]] = await Promise.all([
+      db.select().from(assets).where(where).orderBy(desc(assets.firstSeen)).limit(limit).offset(offset),
+      db.select({ total: count() }).from(assets).where(where),
+    ]);
+    return { data, total, limit, offset };
   }
 
   async getAsset(id: string): Promise<Asset | undefined> {
@@ -150,8 +190,15 @@ export class DatabaseStorage implements IStorage {
     await db.delete(assets).where(eq(assets.id, id));
   }
 
-  async getScans(workspaceId: string): Promise<Scan[]> {
-    return db.select().from(scans).where(eq(scans.workspaceId, workspaceId)).orderBy(desc(scans.startedAt));
+  async getScans(workspaceId: string, opts?: PaginationOpts): Promise<PaginatedResult<Scan>> {
+    const limit = opts?.limit ?? DEFAULT_LIMIT;
+    const offset = opts?.offset ?? 0;
+    const where = eq(scans.workspaceId, workspaceId);
+    const [data, [{ total }]] = await Promise.all([
+      db.select().from(scans).where(where).orderBy(desc(scans.startedAt)).limit(limit).offset(offset),
+      db.select({ total: count() }).from(scans).where(where),
+    ]);
+    return { data, total, limit, offset };
   }
 
   async getStuckScans(maxAgeMs: number): Promise<Scan[]> {
@@ -182,8 +229,15 @@ export class DatabaseStorage implements IStorage {
     await db.delete(scans).where(eq(scans.id, id));
   }
 
-  async getFindings(workspaceId: string): Promise<Finding[]> {
-    return db.select().from(findings).where(eq(findings.workspaceId, workspaceId)).orderBy(desc(findings.discoveredAt));
+  async getFindings(workspaceId: string, opts?: PaginationOpts): Promise<PaginatedResult<Finding>> {
+    const limit = opts?.limit ?? DEFAULT_LIMIT;
+    const offset = opts?.offset ?? 0;
+    const where = eq(findings.workspaceId, workspaceId);
+    const [data, [{ total }]] = await Promise.all([
+      db.select().from(findings).where(where).orderBy(desc(findings.discoveredAt)).limit(limit).offset(offset),
+      db.select({ total: count() }).from(findings).where(where),
+    ]);
+    return { data, total, limit, offset };
   }
 
   async getAllFindings(): Promise<Finding[]> {
@@ -222,8 +276,15 @@ export class DatabaseStorage implements IStorage {
     return updated;
   }
 
-  async getReports(workspaceId: string): Promise<Report[]> {
-    return db.select().from(reports).where(eq(reports.workspaceId, workspaceId)).orderBy(desc(reports.generatedAt));
+  async getReports(workspaceId: string, opts?: PaginationOpts): Promise<PaginatedResult<Report>> {
+    const limit = opts?.limit ?? DEFAULT_LIMIT;
+    const offset = opts?.offset ?? 0;
+    const where = eq(reports.workspaceId, workspaceId);
+    const [data, [{ total }]] = await Promise.all([
+      db.select().from(reports).where(where).orderBy(desc(reports.generatedAt)).limit(limit).offset(offset),
+      db.select({ total: count() }).from(reports).where(where),
+    ]);
+    return { data, total, limit, offset };
   }
 
   async getReport(id: string): Promise<Report | undefined> {
@@ -248,8 +309,15 @@ export class DatabaseStorage implements IStorage {
     await db.delete(reports).where(eq(reports.id, id));
   }
 
-  async getReconModules(workspaceId: string): Promise<ReconModule[]> {
-    return db.select().from(reconModules).where(eq(reconModules.workspaceId, workspaceId)).orderBy(desc(reconModules.generatedAt));
+  async getReconModules(workspaceId: string, opts?: PaginationOpts): Promise<PaginatedResult<ReconModule>> {
+    const limit = opts?.limit ?? DEFAULT_LIMIT;
+    const offset = opts?.offset ?? 0;
+    const where = eq(reconModules.workspaceId, workspaceId);
+    const [data, [{ total }]] = await Promise.all([
+      db.select().from(reconModules).where(where).orderBy(desc(reconModules.generatedAt)).limit(limit).offset(offset),
+      db.select({ total: count() }).from(reconModules).where(where),
+    ]);
+    return { data, total, limit, offset };
   }
 
   async getReconModule(id: string): Promise<ReconModule | undefined> {
@@ -304,6 +372,106 @@ export class DatabaseStorage implements IStorage {
 
   async deleteUploadedScan(id: string): Promise<void> {
     await db.delete(uploadedScans).where(eq(uploadedScans.id, id));
+  }
+
+  // ── Alerts ──
+
+  async getAlerts(workspaceId: string, limit = 50): Promise<Alert[]> {
+    return db.select().from(alerts)
+      .where(eq(alerts.workspaceId, workspaceId))
+      .orderBy(desc(alerts.createdAt))
+      .limit(limit);
+  }
+
+  async getUnreadAlertCount(workspaceId: string): Promise<number> {
+    const [row] = await db.select({ count: sql<number>`count(*)::int` })
+      .from(alerts)
+      .where(and(eq(alerts.workspaceId, workspaceId), eq(alerts.read, false)));
+    return row?.count ?? 0;
+  }
+
+  async createAlert(alert: InsertAlert): Promise<Alert> {
+    const [created] = await db.insert(alerts).values(alert).returning();
+    return created;
+  }
+
+  async markAlertRead(id: string): Promise<Alert | undefined> {
+    const [updated] = await db.update(alerts).set({ read: true }).where(eq(alerts.id, id)).returning();
+    return updated;
+  }
+
+  async markAllAlertsRead(workspaceId: string): Promise<void> {
+    await db.update(alerts).set({ read: true }).where(and(eq(alerts.workspaceId, workspaceId), eq(alerts.read, false)));
+  }
+
+  async deleteAlert(id: string): Promise<void> {
+    await db.delete(alerts).where(eq(alerts.id, id));
+  }
+
+  // ── Scheduled Scans ──
+
+  async getScheduledScans(workspaceId: string): Promise<ScheduledScan[]> {
+    return db.select().from(scheduledScans)
+      .where(eq(scheduledScans.workspaceId, workspaceId))
+      .orderBy(desc(scheduledScans.createdAt));
+  }
+
+  async getScheduledScan(id: string): Promise<ScheduledScan | undefined> {
+    const [row] = await db.select().from(scheduledScans).where(eq(scheduledScans.id, id));
+    return row;
+  }
+
+  async getDueScheduledScans(): Promise<ScheduledScan[]> {
+    return db.select().from(scheduledScans)
+      .where(and(
+        eq(scheduledScans.enabled, true),
+        sql`${scheduledScans.nextRunAt} <= NOW()`,
+      ))
+      .orderBy(asc(scheduledScans.nextRunAt));
+  }
+
+  async createScheduledScan(scan: InsertScheduledScan): Promise<ScheduledScan> {
+    const [created] = await db.insert(scheduledScans).values(scan).returning();
+    return created;
+  }
+
+  async updateScheduledScan(id: string, data: Partial<ScheduledScan>): Promise<ScheduledScan | undefined> {
+    const [updated] = await db.update(scheduledScans).set(data).where(eq(scheduledScans.id, id)).returning();
+    return updated;
+  }
+
+  async deleteScheduledScan(id: string): Promise<void> {
+    await db.delete(scheduledScans).where(eq(scheduledScans.id, id));
+  }
+
+  // ── Scan Profiles ──
+
+  async getScanProfiles(workspaceId: string): Promise<ScanProfile[]> {
+    return db.select().from(scanProfiles)
+      .where(eq(scanProfiles.workspaceId, workspaceId))
+      .orderBy(desc(scanProfiles.createdAt));
+  }
+
+  async getScanProfile(id: string): Promise<ScanProfile | undefined> {
+    const [row] = await db.select().from(scanProfiles).where(eq(scanProfiles.id, id));
+    return row;
+  }
+
+  async createScanProfile(profile: InsertScanProfile): Promise<ScanProfile> {
+    const [created] = await db.insert(scanProfiles).values(profile).returning();
+    return created;
+  }
+
+  async updateScanProfile(id: string, data: Partial<ScanProfile>): Promise<ScanProfile | undefined> {
+    const [updated] = await db.update(scanProfiles)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(scanProfiles.id, id))
+      .returning();
+    return updated;
+  }
+
+  async deleteScanProfile(id: string): Promise<void> {
+    await db.delete(scanProfiles).where(eq(scanProfiles.id, id));
   }
 }
 

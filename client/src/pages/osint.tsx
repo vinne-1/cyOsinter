@@ -60,11 +60,31 @@ const osintFormSchema = z.object({
   ),
 });
 
+interface ScanProfile {
+  id: string;
+  name: string;
+  scanType: string;
+  mode: string;
+}
+
 function NewOSINTScanDialog() {
   const [open, setOpen] = useState(false);
-  const [scanType, setScanType] = useState<"osint" | "full">("full");
+  const [scanType, setScanType] = useState<"osint" | "full" | "dast">("full");
+  const [scanMode, setScanMode] = useState<"standard" | "gold">("gold");
+  const [selectedProfileId, setSelectedProfileId] = useState<string>("");
   const { toast } = useToast();
   const { selectedWorkspaceId, selectedWorkspace } = useDomain();
+
+  const { data: profiles = [] } = useQuery<ScanProfile[]>({
+    queryKey: ["/api/scan-profiles", selectedWorkspaceId],
+    queryFn: async () => {
+      if (!selectedWorkspaceId) return [];
+      const res = await fetch(`/api/scan-profiles?workspaceId=${selectedWorkspaceId}`);
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!selectedWorkspaceId,
+  });
   const form = useForm<z.infer<typeof osintFormSchema>>({
     resolver: zodResolver(osintFormSchema),
     defaultValues: { target: "" },
@@ -78,7 +98,7 @@ function NewOSINTScanDialog() {
 
   const mutation = useMutation({
     mutationFn: async (data: { target: string }) => {
-      const res = await apiRequest("POST", "/api/scans", { target: data.target, type: scanType, status: "pending", workspaceId: selectedWorkspaceId || undefined, mode: "gold" });
+      const res = await apiRequest("POST", "/api/scans", { target: data.target, type: scanType, status: "pending", workspaceId: selectedWorkspaceId || undefined, mode: scanMode, ...(selectedProfileId ? { profileId: selectedProfileId } : {}) });
       return res.json();
     },
     onSuccess: () => {
@@ -128,20 +148,58 @@ function NewOSINTScanDialog() {
                 </FormItem>
               )}
             />
+            {profiles.length > 0 && (
+              <div className="space-y-2">
+                <FormLabel>Scan Profile</FormLabel>
+                <Select value={selectedProfileId} onValueChange={(v) => {
+                  setSelectedProfileId(v);
+                  if (v) {
+                    const p = profiles.find((pr) => pr.id === v);
+                    if (p) {
+                      setScanType(p.scanType as "osint" | "full" | "dast");
+                      setScanMode(p.mode as "standard" | "gold");
+                    }
+                  }
+                }}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="None (manual config)" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">None (manual config)</SelectItem>
+                    {profiles.map((p) => (
+                      <SelectItem key={p.id} value={p.id}>{p.name} ({p.scanType}, {p.mode})</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
             <div className="space-y-2">
               <FormLabel>Scan Type</FormLabel>
-              <Select value={scanType} onValueChange={(v) => setScanType(v as "osint" | "full")}>
+              <Select value={scanType} onValueChange={(v) => setScanType(v as "osint" | "full" | "dast")}>
                 <SelectTrigger data-testid="select-osint-scan-type">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="full">Full Scan (EASM + OSINT)</SelectItem>
+                  <SelectItem value="full">Full Scan (EASM + OSINT + DAST)</SelectItem>
                   <SelectItem value="osint">OSINT Only</SelectItem>
+                  <SelectItem value="dast">DAST Only (Active Testing)</SelectItem>
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                {scanType === "full" ? "Complete scan with all recon modules" : "OSINT discovery only"}
+                {scanType === "full" ? "Complete scan with all recon modules + active testing" : scanType === "dast" ? "Active security tests (headers, CORS, XSS, redirects)" : "OSINT discovery only"}
               </p>
+            </div>
+            <div className="space-y-2">
+              <FormLabel>Scan Mode</FormLabel>
+              <Select value={scanMode} onValueChange={(v) => setScanMode(v as "standard" | "gold")}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="gold">Gold (comprehensive, no limits)</SelectItem>
+                  <SelectItem value="standard">Standard (quick scan)</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <Button type="submit" className="w-full" disabled={mutation.isPending} data-testid="button-start-osint-scan">
               {mutation.isPending ? "Starting..." : "Start Discovery"}
@@ -289,15 +347,15 @@ export default function OSINT() {
                             )}
                           </div>
                         )}
-                        {scan.status === "failed" && (scan as any).errorMessage && (
-                          <p className="text-xs text-red-400 mt-1" title={(scan as any).errorMessage}>
-                            {(scan as any).errorMessage}
+                        {scan.status === "failed" && scan.errorMessage && (
+                          <p className="text-xs text-red-400 mt-1" title={scan.errorMessage}>
+                            {scan.errorMessage}
                           </p>
                         )}
                       </div>
                         <div className="flex items-center gap-3 flex-wrap">
-                          {(scan as any).summary?.assetsDiscovered != null && (
-                            <span className="text-sm font-mono">{(scan as any).summary.assetsDiscovered} assets</span>
+                          {scan.summary?.assetsDiscovered != null && (
+                            <span className="text-sm font-mono">{String(scan.summary.assetsDiscovered)} assets</span>
                           )}
                           <span className="text-sm font-mono">{scan.findingsCount ?? 0} findings</span>
                           <ScanStatusBadge status={scan.status} />

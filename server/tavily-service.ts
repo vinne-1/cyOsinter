@@ -4,6 +4,9 @@
  */
 
 import { getTavilyKey } from "./api-integrations";
+import { createLogger } from "./logger";
+
+const log = createLogger("tavily");
 
 const TAVILY_BASE = "https://api.tavily.com/search";
 
@@ -31,7 +34,7 @@ export async function searchTavilyDork(query: string): Promise<Array<{ title: st
       });
       clearTimeout(t);
       if (!res.ok) {
-        console.warn("[Tavily] Dork search HTTP error:", res.status);
+        log.warn({ status: res.status }, "Tavily dork search HTTP error");
         return [];
       }
       json = await res.json();
@@ -47,7 +50,7 @@ export async function searchTavilyDork(query: string): Promise<Array<{ title: st
       content: String(r.content ?? r.snippet ?? "").slice(0, 500),
     }));
   } catch (err) {
-    console.warn("[Tavily] Dork search failed:", err instanceof Error ? err.message : err);
+    log.warn({ err }, "Tavily dork search failed");
     return [];
   }
 }
@@ -77,7 +80,7 @@ export async function searchThreatIntel(domain: string): Promise<string> {
     });
     clearTimeout(t);
     if (!res.ok) {
-      console.warn("[Tavily] Search failed:", res.status);
+      log.warn({ status: res.status }, "Tavily search failed");
       return "";
     }
     const json = (await res.json()) as { results?: Array<{ content?: string; title?: string }> };
@@ -90,7 +93,7 @@ export async function searchThreatIntel(domain: string): Promise<string> {
     return snippets;
   } catch (err) {
     if (t) clearTimeout(t);
-    console.warn("[Tavily] Error:", (err as Error).message);
+    log.warn({ err }, "Tavily error");
     return "";
   }
 }

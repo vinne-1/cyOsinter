@@ -73,12 +73,31 @@ const assetTypeIcons: Record<string, React.ElementType> = {
   certificate: Lock,
 };
 
+interface ScanProfile {
+  id: string;
+  name: string;
+  scanType: string;
+  mode: string;
+}
+
 function NewScanDialog() {
   const [open, setOpen] = useState(false);
-  const [scanType, setScanType] = useState<"easm" | "full">("full");
+  const [scanType, setScanType] = useState<"easm" | "full" | "dast">("full");
   const [scanMode, setScanMode] = useState<"standard" | "gold">("gold");
+  const [selectedProfileId, setSelectedProfileId] = useState<string>("");
   const { toast } = useToast();
   const { selectedWorkspaceId, selectedWorkspace } = useDomain();
+
+  const { data: profiles = [] } = useQuery<ScanProfile[]>({
+    queryKey: ["/api/scan-profiles", selectedWorkspaceId],
+    queryFn: async () => {
+      if (!selectedWorkspaceId) return [];
+      const res = await fetch(`/api/scan-profiles?workspaceId=${selectedWorkspaceId}`);
+      if (!res.ok) return [];
+      return res.json();
+    },
+    enabled: !!selectedWorkspaceId,
+  });
   const form = useForm<z.infer<typeof scanFormSchema>>({
     resolver: zodResolver(scanFormSchema),
     defaultValues: { target: selectedWorkspace?.name ?? "" },
@@ -92,7 +111,7 @@ function NewScanDialog() {
 
   const mutation = useMutation({
     mutationFn: async (data: z.infer<typeof scanFormSchema>) => {
-      const res = await apiRequest("POST", "/api/scans", { target: data.target, type: scanType, status: "pending", workspaceId: selectedWorkspaceId || undefined, mode: scanMode });
+      const res = await apiRequest("POST", "/api/scans", { target: data.target, type: scanType, status: "pending", workspaceId: selectedWorkspaceId || undefined, mode: scanMode, ...(selectedProfileId ? { profileId: selectedProfileId } : {}) });
       return res.json();
     },
     onSuccess: () => {
@@ -143,19 +162,46 @@ function NewScanDialog() {
                 </FormItem>
               )}
             />
+            {profiles.length > 0 && (
+              <div className="space-y-2">
+                <FormLabel>Scan Profile</FormLabel>
+                <Select value={selectedProfileId} onValueChange={(v) => {
+                  setSelectedProfileId(v);
+                  if (v) {
+                    const p = profiles.find((pr) => pr.id === v);
+                    if (p) {
+                      setScanType(p.scanType as "easm" | "full" | "dast");
+                      setScanMode(p.mode as "standard" | "gold");
+                    }
+                  }
+                }}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="None (manual config)" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="">None (manual config)</SelectItem>
+                    {profiles.map((p) => (
+                      <SelectItem key={p.id} value={p.id}>{p.name} ({p.scanType}, {p.mode})</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">Select a saved profile to auto-fill settings</p>
+              </div>
+            )}
             <div className="space-y-2">
               <FormLabel>Scan Type</FormLabel>
-              <Select value={scanType} onValueChange={(v) => setScanType(v as "easm" | "full")}>
+              <Select value={scanType} onValueChange={(v) => setScanType(v as "easm" | "full" | "dast")}>
                 <SelectTrigger data-testid="select-scan-type">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="full">Full Scan (EASM + OSINT)</SelectItem>
+                  <SelectItem value="full">Full Scan (EASM + OSINT + DAST)</SelectItem>
                   <SelectItem value="easm">EASM Only</SelectItem>
+                  <SelectItem value="dast">DAST Only (Active Testing)</SelectItem>
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                {scanType === "full" ? "Complete scan with all recon modules" : "Attack surface only"}
+                {scanType === "full" ? "Complete scan with all recon modules + active testing" : scanType === "dast" ? "Active security tests (headers, CORS, XSS, redirects)" : "Attack surface only"}
               </p>
             </div>
             <div className="space-y-2">
@@ -372,13 +418,13 @@ export default function EASM() {
                         <div className="min-w-0">
                           <p className="text-sm font-medium truncate">{scan.target}</p>
                           <p className="text-xs text-muted-foreground">
-                            {(scan as any).summary?.assetsDiscovered != null && `${(scan as any).summary.assetsDiscovered} assets · `}
+                            {scan.summary?.assetsDiscovered != null && `${scan.summary.assetsDiscovered} assets · `}
                             {scan.findingsCount ?? 0} findings · {scan.type}
                           </p>
                         </div>
                       </div>
                       <div className="flex items-center gap-2 flex-shrink-0">
-                        {(scan as any).summary?.mode === "gold" && (
+                        {scan.summary?.mode === "gold" && (
                           <Badge variant="outline" className="text-xs bg-amber-600/15 text-amber-400 border-0 no-default-hover-elevate no-default-active-elevate">Gold</Badge>
                         )}
                         <ScanStatusBadge status={scan.status} />
@@ -399,9 +445,9 @@ export default function EASM() {
                         )}
                       </div>
                     )}
-                    {scan.status === "failed" && (scan as any).errorMessage && (
-                      <p className="text-xs text-red-400 mt-1" title={(scan as any).errorMessage}>
-                        {(scan as any).errorMessage}
+                    {scan.status === "failed" && scan.errorMessage && (
+                      <p className="text-xs text-red-400 mt-1" title={scan.errorMessage}>
+                        {scan.errorMessage}
                       </p>
                     )}
                   </div>

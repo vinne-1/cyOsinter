@@ -47,6 +47,7 @@ import {
   Database,
   FileSearch,
   Download,
+  TicketCheck,
 } from "lucide-react";
 import type { Finding, Scan } from "@shared/schema";
 import { SeverityBadge, StatusBadge } from "@/components/severity-badge";
@@ -130,6 +131,30 @@ function FindingDetail({
     },
   });
 
+  const { data: ticketingStatus } = useQuery<{
+    jira: { configured: boolean };
+    github: { configured: boolean };
+  }>({
+    queryKey: ["/api/integrations/ticketing"],
+  });
+
+  const ticketMutation = useMutation({
+    mutationFn: async (provider: "jira" | "github") => {
+      const res = await apiRequest("POST", "/api/integrations/ticketing/create", {
+        findingId: finding!.id,
+        provider,
+      });
+      return res.json() as Promise<{ ticketUrl: string }>;
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${selectedWorkspaceId}/findings`] });
+      toast({ title: "Ticket created", description: data.ticketUrl });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Ticket creation failed", description: err.message, variant: "destructive" });
+    },
+  });
+
   if (!finding) return null;
 
   const evidence = Array.isArray(finding.evidence) ? finding.evidence : [];
@@ -140,6 +165,8 @@ function FindingDetail({
     enrichedAt?: string;
     cveData?: { records?: Array<{ cveId: string; description?: string; cvssScore?: number; cvssSeverity?: string; url: string }> };
     detailedAnalysis?: { analysis?: string; recommendations?: string[]; analyzedAt?: string };
+    ticketUrl?: string;
+    ticketProvider?: string;
   } | null | undefined;
   const cveRecords = aiEnrichment?.cveData?.records ?? [];
   const detailedAnalysis = aiEnrichment?.detailedAnalysis;
@@ -204,6 +231,39 @@ function FindingDetail({
                 {analyzeMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <FileSearch className="w-4 h-4" />}
                 {analyzeMutation.isPending ? "Analyzing..." : "Detailed Analysis"}
               </Button>
+              {aiEnrichment?.ticketUrl ? (
+                <a href={aiEnrichment.ticketUrl} target="_blank" rel="noopener noreferrer">
+                  <Button variant="outline" size="sm">
+                    <ExternalLink className="w-4 h-4" />
+                    View {aiEnrichment.ticketProvider === "jira" ? "Jira" : "GitHub"} Ticket
+                  </Button>
+                </a>
+              ) : (
+                <>
+                  {ticketingStatus?.jira?.configured && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => ticketMutation.mutate("jira")}
+                      disabled={ticketMutation.isPending}
+                    >
+                      {ticketMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <TicketCheck className="w-4 h-4" />}
+                      Jira Ticket
+                    </Button>
+                  )}
+                  {ticketingStatus?.github?.configured && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => ticketMutation.mutate("github")}
+                      disabled={ticketMutation.isPending}
+                    >
+                      {ticketMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <TicketCheck className="w-4 h-4" />}
+                      GitHub Issue
+                    </Button>
+                  )}
+                </>
+              )}
             </div>
           </div>
           {aiEnrichment?.contextualRisks && (
@@ -395,6 +455,14 @@ function exportFindingsCSV(findings: Finding[]) {
 export default function Findings() {
   const { selectedWorkspaceId } = useDomain();
   const { toast } = useToast();
+
+  const { data: ticketingStatus } = useQuery<{
+    jira: { configured: boolean };
+    github: { configured: boolean };
+  }>({
+    queryKey: ["/api/integrations/ticketing"],
+  });
+
   const [searchQuery, setSearchQuery] = useState("");
   const [severityFilter, setSeverityFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -598,6 +666,30 @@ export default function Findings() {
                   <XCircle className="w-4 h-4" />
                   False Positive
                 </Button>
+                {(ticketingStatus?.jira?.configured || ticketingStatus?.github?.configured) && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={async () => {
+                      const provider = ticketingStatus?.jira?.configured ? "jira" : "github";
+                      try {
+                        const res = await apiRequest("POST", "/api/integrations/ticketing/bulk-create", {
+                          findingIds: Array.from(selectedIds),
+                          provider,
+                        });
+                        const data = await res.json() as { results: Array<{ ticketUrl?: string; error?: string }> };
+                        const created = data.results.filter((r) => r.ticketUrl).length;
+                        queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${selectedWorkspaceId}/findings`] });
+                        toast({ title: `${created} ticket(s) created` });
+                      } catch (err) {
+                        toast({ title: "Bulk ticket creation failed", description: err instanceof Error ? err.message : "Failed", variant: "destructive" });
+                      }
+                    }}
+                  >
+                    <TicketCheck className="w-4 h-4" />
+                    Create Tickets
+                  </Button>
+                )}
               </>
             )}
             <Button
@@ -645,6 +737,16 @@ export default function Findings() {
                 <SelectItem value="leaked_credential">Leaked Credential</SelectItem>
                 <SelectItem value="data_leak">Data Leak</SelectItem>
                 <SelectItem value="osint_exposure">OSINT Exposure</SelectItem>
+                <SelectItem value="cors_misconfiguration">CORS Misconfig</SelectItem>
+                <SelectItem value="xss">XSS</SelectItem>
+                <SelectItem value="clickjacking">Clickjacking</SelectItem>
+                <SelectItem value="open_redirect">Open Redirect</SelectItem>
+                <SelectItem value="cookie_security">Cookie Security</SelectItem>
+                <SelectItem value="transport_security">Transport Security</SelectItem>
+                <SelectItem value="http_methods">HTTP Methods</SelectItem>
+                <SelectItem value="subdomain_takeover">Subdomain Takeover</SelectItem>
+                <SelectItem value="api_exposure">API Exposure</SelectItem>
+                <SelectItem value="exposed_credentials">Exposed Credentials</SelectItem>
               </SelectContent>
             </Select>
             <Select value={statusFilter} onValueChange={setStatusFilter}>

@@ -1,0 +1,107 @@
+import { Router } from "express";
+import { z } from "zod";
+import { storage } from "../storage";
+import { createLogger } from "../logger";
+import { getNextCronRun } from "../scan-scheduler";
+import { createScheduledScanSchema, updateScheduledScanSchema } from "./schemas";
+
+const log = createLogger("routes:scheduled-scans");
+
+export const scheduledScansRouter = Router();
+
+// GET /api/workspaces/:workspaceId/scheduled-scans
+scheduledScansRouter.get("/workspaces/:workspaceId/scheduled-scans", async (req, res) => {
+  try {
+    const list = await storage.getScheduledScans(req.params.workspaceId);
+    res.json(list);
+  } catch (err) {
+    log.error({ err }, "Get scheduled scans error");
+    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+  }
+});
+
+// GET /api/scheduled-scans/:id
+scheduledScansRouter.get("/scheduled-scans/:id", async (req, res) => {
+  try {
+    const scheduled = await storage.getScheduledScan(req.params.id);
+    if (!scheduled) return res.status(404).json({ message: "Scheduled scan not found" });
+    res.json(scheduled);
+  } catch (err) {
+    log.error({ err }, "Get scheduled scan error");
+    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+  }
+});
+
+// POST /api/workspaces/:workspaceId/scheduled-scans
+scheduledScansRouter.post("/workspaces/:workspaceId/scheduled-scans", async (req, res) => {
+  try {
+    const parsed = createScheduledScanSchema.parse(req.body);
+    const workspaceId = req.params.workspaceId;
+
+    // Verify workspace exists
+    const workspace = await storage.getWorkspace(workspaceId);
+    if (!workspace) return res.status(404).json({ message: "Workspace not found" });
+
+    const nextRunAt = getNextCronRun(parsed.cronExpression);
+
+    const created = await storage.createScheduledScan({
+      workspaceId,
+      target: parsed.target.trim().toLowerCase(),
+      scanType: parsed.scanType,
+      cronExpression: parsed.cronExpression,
+      mode: parsed.mode,
+      enabled: parsed.enabled,
+      nextRunAt,
+      lastRunAt: null,
+      lastScanId: null,
+    });
+
+    res.status(201).json(created);
+  } catch (error: unknown) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ message: error.errors[0]?.message || "Validation error" });
+    }
+    log.error({ err: error }, "Create scheduled scan error");
+    const message = error instanceof Error ? error.message : "Unknown error";
+    res.status(500).json({ message });
+  }
+});
+
+// PATCH /api/scheduled-scans/:id
+scheduledScansRouter.patch("/scheduled-scans/:id", async (req, res) => {
+  try {
+    const parsed = updateScheduledScanSchema.parse(req.body);
+    const existing = await storage.getScheduledScan(req.params.id);
+    if (!existing) return res.status(404).json({ message: "Scheduled scan not found" });
+
+    const updateData: Record<string, unknown> = { ...parsed };
+
+    // Recompute nextRunAt if cron expression changed
+    if (parsed.cronExpression) {
+      updateData.nextRunAt = getNextCronRun(parsed.cronExpression);
+    }
+
+    const updated = await storage.updateScheduledScan(req.params.id, updateData);
+    res.json(updated);
+  } catch (error: unknown) {
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ message: error.errors[0]?.message || "Validation error" });
+    }
+    log.error({ err: error }, "Update scheduled scan error");
+    const message = error instanceof Error ? error.message : "Unknown error";
+    res.status(500).json({ message });
+  }
+});
+
+// DELETE /api/scheduled-scans/:id
+scheduledScansRouter.delete("/scheduled-scans/:id", async (req, res) => {
+  try {
+    const existing = await storage.getScheduledScan(req.params.id);
+    if (!existing) return res.status(404).json({ message: "Scheduled scan not found" });
+    await storage.deleteScheduledScan(req.params.id);
+    res.status(204).send();
+  } catch (err) {
+    log.error({ err }, "Delete scheduled scan error");
+    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+  }
+});

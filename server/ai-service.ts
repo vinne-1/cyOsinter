@@ -7,6 +7,9 @@ import type { Finding } from "@shared/schema";
 import type { ReconModule } from "@shared/schema";
 import { getOllamaConfig } from "./api-integrations";
 import { getCVEForFinding, type CVERecord } from "./cve-service";
+import { createLogger } from "./logger";
+
+const log = createLogger("ai");
 
 export const AI_REQUEST_TIMEOUT_MS = 30 * 60 * 1000; // 30 min for CPU inference
 const TIMEOUT_MS = AI_REQUEST_TIMEOUT_MS;
@@ -68,7 +71,7 @@ async function callOllama(prompt: string, system?: string, options?: { format?: 
         const is503 = res.status === 503;
         if (is503 && attempt < OLLAMA_RETRY_ATTEMPTS) {
           const delay = OLLAMA_RETRY_DELAYS_MS[attempt - 1] ?? 5000;
-          console.warn(`[Ollama] 503 (model loading?) attempt ${attempt}/${OLLAMA_RETRY_ATTEMPTS}, retrying in ${delay}ms:`, url);
+          log.warn({ url, attempt, maxAttempts: OLLAMA_RETRY_ATTEMPTS, delayMs: delay }, "Ollama 503 (model loading?), retrying");
           await new Promise((r) => setTimeout(r, delay));
           continue;
         }
@@ -97,7 +100,7 @@ async function callOllama(prompt: string, system?: string, options?: { format?: 
         lastErr.message.includes("socket hang up");
       if (isConnectionError && attempt < OLLAMA_RETRY_ATTEMPTS) {
         const delay = OLLAMA_RETRY_DELAYS_MS[attempt - 1] ?? 5000;
-        console.warn(`[Ollama] URL=${url} attempt=${attempt}/${OLLAMA_RETRY_ATTEMPTS} error=${lastErr.message} code=${errCode ?? "n/a"}, retrying in ${delay}ms`);
+        log.warn({ url, attempt, maxAttempts: OLLAMA_RETRY_ATTEMPTS, errCode: errCode ?? "n/a", delayMs: delay, err: lastErr }, "Ollama connection error, retrying");
         await new Promise((r) => setTimeout(r, delay));
         continue;
       }
@@ -107,7 +110,7 @@ async function callOllama(prompt: string, system?: string, options?: { format?: 
         );
       }
       if (lastErr.message.includes("ECONNREFUSED") || lastErr.message.includes("fetch failed")) {
-        console.warn(`[Ollama] Final failure URL=${url} error=${lastErr.message} code=${errCode ?? "n/a"}`);
+        log.warn({ url, errCode: errCode ?? "n/a", err: lastErr }, "Ollama final failure");
         throw new Error("Cannot reach Ollama. Ensure ollama serve is running and the base URL is correct.");
       }
       throw lastErr;
@@ -472,7 +475,7 @@ export async function generateWorkspaceInsights(
   options?: { cveContext?: CVERecord[]; webSearchContext?: string }
 ): Promise<WorkspaceInsightsResult> {
   const ollamaConfig = getOllamaConfig();
-  console.warn("[AI insights] Config: baseUrl=", ollamaConfig.baseUrl, "model=", ollamaConfig.model, "enabled=", ollamaConfig.enabled);
+  log.warn({ baseUrl: ollamaConfig.baseUrl, model: ollamaConfig.model, enabled: ollamaConfig.enabled }, "AI insights config");
   if (!ollamaConfig.enabled) {
     return {
       ...buildFallbackInsights(findings, reconModules, workspaceName),
@@ -485,7 +488,7 @@ export async function generateWorkspaceInsights(
   // Pre-flight: verify Ollama is reachable before long-running inference
   const status = await getOllamaStatus();
   if (!status.reachable) {
-    console.warn("[AI insights] Ollama not reachable at", ollamaConfig.baseUrl);
+    log.warn({ baseUrl: ollamaConfig.baseUrl }, "AI insights: Ollama not reachable");
     return {
       ...buildFallbackInsights(findings, reconModules, workspaceName),
       isAIGenerated: false,
@@ -553,7 +556,7 @@ Respond in valid JSON only. No markdown, no code blocks. Use exactly these keys:
       }
     })();
     if (!parsed || typeof parsed !== "object") {
-      console.warn("[AI insights] Ollama returned non-JSON, using fallback. Raw length:", raw?.length);
+      log.warn({ rawLength: raw?.length }, "AI insights: Ollama returned non-JSON, using fallback");
       return {
         ...buildFallbackInsights(findings, reconModules, workspaceName),
         isAIGenerated: false,
@@ -580,7 +583,7 @@ Respond in valid JSON only. No markdown, no code blocks. Use exactly these keys:
     };
   } catch (err) {
     const errDetail = sanitizeErrorDetail(err);
-    console.warn("[AI insights] Ollama error:", errDetail);
+    log.warn({ errDetail }, "AI insights: Ollama error");
     const isTimeout =
       err instanceof Error &&
       (err.name === "AbortError" || (err.message && err.message.includes("aborted")));
@@ -634,7 +637,7 @@ Respond in JSON only:
   try {
     raw = await callOllama(prompt, system, { format: "json" });
   } catch (err) {
-    console.warn("[AI analyze] Ollama error:", err instanceof Error ? err.message : err);
+    log.warn({ err }, "AI analyze: Ollama error");
     return {
       analysis: finding.description,
       recommendations: [],

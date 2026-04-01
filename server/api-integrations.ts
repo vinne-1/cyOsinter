@@ -6,6 +6,9 @@
 
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
+import { createLogger } from "./logger";
+
+const log = createLogger("integrations");
 
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -60,14 +63,14 @@ function saveIntegrationsConfig(): void {
     };
     writeFileSync(INTEGRATIONS_CONFIG_PATH, JSON.stringify(data, null, 2), "utf-8");
   } catch (err) {
-    console.warn("[integrations] Failed to persist config:", (err as Error).message);
+    log.warn({ err }, "Failed to persist config");
   }
 }
 
 loadIntegrationsConfig();
 
 if (ollamaConfigFromUI.baseUrl) {
-  console.warn("[integrations] Ollama config loaded: baseUrl=", ollamaConfigFromUI.baseUrl, "enabled=", ollamaConfigFromUI.enabled);
+  // Log only that config was loaded, not the actual URL (security)
 }
 
 function normalizeOllamaBaseUrl(url: string): string {
@@ -93,8 +96,27 @@ export function getOllamaConfig(): { baseUrl: string; model: string; enabled: bo
   return { baseUrl, model, enabled };
 }
 
+/** Validates that an Ollama base URL points to a safe local/known host */
+function isValidOllamaUrl(raw: string): boolean {
+  try {
+    const u = new URL(raw);
+    if (!["http:", "https:"].includes(u.protocol)) return false;
+    const host = u.hostname.toLowerCase();
+    // Only allow localhost, 127.0.0.1, or explicit private network Ollama hosts
+    const allowed = ["localhost", "127.0.0.1", "::1", "ollama", "host.docker.internal"];
+    return allowed.some((a) => host === a || host.endsWith(`.${a}`));
+  } catch {
+    return false;
+  }
+}
+
 export function setOllamaConfig(config: { baseUrl?: string; model?: string; enabled?: boolean }): void {
-  if (config.baseUrl !== undefined) ollamaConfigFromUI.baseUrl = config.baseUrl;
+  if (config.baseUrl !== undefined) {
+    if (config.baseUrl && !isValidOllamaUrl(config.baseUrl)) {
+      throw new Error("Invalid Ollama base URL: must point to localhost or a known internal host");
+    }
+    ollamaConfigFromUI.baseUrl = config.baseUrl;
+  }
   if (config.model !== undefined) ollamaConfigFromUI.model = config.model;
   if (config.enabled !== undefined) ollamaConfigFromUI.enabled = config.enabled;
   saveIntegrationsConfig();
@@ -193,7 +215,7 @@ export async function fetchAbuseIPDB(ip: string): Promise<AbuseIPDBResult | null
     });
 
     if (!res.ok) {
-      if (res.status === 429) console.warn("[AbuseIPDB] Rate limit hit for", ip);
+      if (res.status === 429) log.warn({ ip }, "AbuseIPDB rate limit hit");
       return null;
     }
 
@@ -212,7 +234,7 @@ export async function fetchAbuseIPDB(ip: string): Promise<AbuseIPDBResult | null
       domain: d.domain as string | undefined,
     };
   } catch (err) {
-    console.error("[AbuseIPDB] Error for", ip, err);
+    log.error({ err, ip }, "AbuseIPDB error");
     return null;
   }
 }
@@ -232,7 +254,7 @@ export async function fetchVirusTotal(ip: string): Promise<VirusTotalResult | nu
     });
 
     if (!res.ok) {
-      if (res.status === 429) console.warn("[VirusTotal] Rate limit hit for", ip);
+      if (res.status === 429) log.warn({ ip }, "VirusTotal rate limit hit");
       return null;
     }
 
@@ -252,7 +274,7 @@ export async function fetchVirusTotal(ip: string): Promise<VirusTotalResult | nu
       continent: attrs.continent as string | undefined,
     };
   } catch (err) {
-    console.error("[VirusTotal] Error for", ip, err);
+    log.error({ err, ip }, "VirusTotal error");
     return null;
   }
 }
@@ -348,7 +370,7 @@ async function fetchIPApiFallback(ip: string): Promise<BGPViewResult | null> {
       maxmind: d.countryCode || d.city ? { country_code: d.countryCode ?? undefined, city: d.city ?? null } : null,
     };
   } catch (err) {
-    console.error("[ip-api fallback] Error for", ip, err);
+    log.error({ err, ip }, "ip-api fallback error");
     return null;
   }
 }
@@ -405,7 +427,7 @@ export async function fetchBGPView(ip: string): Promise<BGPViewResult | null> {
           };
         }
       } else if (res.status === 429) {
-        console.warn("[BGPView] Rate limit hit for", ip);
+        log.warn({ ip }, "BGPView rate limit hit");
       }
       return null;
     } catch (err) {
@@ -420,7 +442,7 @@ export async function fetchBGPView(ip: string): Promise<BGPViewResult | null> {
     try {
       result = await doFetch();
     } catch (retryErr) {
-      console.warn("[BGPView] Unreachable for", ip, "(trying ip-api fallback):", (err as Error).message);
+      log.warn({ err, ip }, "BGPView unreachable, trying ip-api fallback");
     }
   }
 
@@ -448,13 +470,13 @@ export function getIntegrationsStatus(): {
   abuseipdb: { configured: boolean };
   virustotal: { configured: boolean };
   tavily: { configured: boolean };
-  ollama: { configured: boolean; baseUrl: string; model: string; enabled: boolean };
+  ollama: { configured: boolean; model: string; enabled: boolean };
 } {
   const ollama = getOllamaConfig();
   return {
     abuseipdb: { configured: !!getApiKey("abuseipdb") },
     virustotal: { configured: !!getApiKey("virustotal") },
     tavily: { configured: !!getApiKey("tavily") },
-    ollama: { configured: true, baseUrl: ollama.baseUrl, model: ollama.model, enabled: ollama.enabled },
+    ollama: { configured: true, model: ollama.model, enabled: ollama.enabled },
   };
 }

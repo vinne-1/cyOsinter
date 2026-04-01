@@ -1,4 +1,4 @@
-import * as XLSX from "xlsx";
+import ExcelJS from "exceljs";
 
 export interface ReportExportInput {
   title: string;
@@ -65,12 +65,14 @@ export function generateReportCsv(input: ReportExportInput): string {
   return lines.join("\n");
 }
 
-export function generateReportExcel(input: ReportExportInput): Buffer {
-  const wb = XLSX.utils.book_new();
+export async function generateReportExcel(input: ReportExportInput): Promise<Buffer> {
+  const wb = new ExcelJS.Workbook();
 
-  const findingsData = [
-    ["ID", "Title", "Severity", "Status", "Category", "Affected Asset", "Description"],
-    ...input.findings.map((f) => [
+  // Findings sheet
+  const wsFindings = wb.addWorksheet("Findings");
+  wsFindings.addRow(["ID", "Title", "Severity", "Status", "Category", "Affected Asset", "Description"]);
+  for (const f of input.findings) {
+    wsFindings.addRow([
       f.id,
       f.title,
       f.severity,
@@ -78,57 +80,56 @@ export function generateReportExcel(input: ReportExportInput): Buffer {
       f.category ?? "",
       f.affectedAsset ?? "",
       (f.description ?? "").replace(/\n/g, " ").slice(0, 2000),
-    ]),
-  ];
-  const wsFindings = XLSX.utils.aoa_to_sheet(findingsData);
-  XLSX.utils.book_append_sheet(wb, wsFindings, "Findings");
+    ]);
+  }
 
-  const summaryData: (string | number | null)[][] = [
-    ["Report", input.title],
-    ["Generated", input.generatedAt ? new Date(input.generatedAt).toLocaleString() : "N/A"],
-    ["Summary", input.summary || "No summary available."],
-  ];
+  // Summary sheet
+  const wsSummary = wb.addWorksheet("Summary");
+  wsSummary.addRow(["Report", input.title]);
+  wsSummary.addRow(["Generated", input.generatedAt ? new Date(input.generatedAt).toLocaleString() : "N/A"]);
+  wsSummary.addRow(["Summary", input.summary || "No summary available."]);
+
   const content = input.content || {};
   if (content.totalFindings !== undefined) {
-    summaryData.push(["", ""]);
-    summaryData.push(["Overview", ""]);
-    summaryData.push(["Total Findings", content.totalFindings as number]);
-    if (content.criticalCount !== undefined) summaryData.push(["Critical", content.criticalCount as number]);
-    if (content.highCount !== undefined) summaryData.push(["High", content.highCount as number]);
-    if (content.mediumCount !== undefined) summaryData.push(["Medium", content.mediumCount as number]);
-    if (content.lowCount !== undefined) summaryData.push(["Low", content.lowCount as number]);
-    if (content.resolvedCount !== undefined) summaryData.push(["Resolved", content.resolvedCount as number]);
+    wsSummary.addRow([]);
+    wsSummary.addRow(["Overview"]);
+    wsSummary.addRow(["Total Findings", content.totalFindings as number]);
+    if (content.criticalCount !== undefined) wsSummary.addRow(["Critical", content.criticalCount as number]);
+    if (content.highCount !== undefined) wsSummary.addRow(["High", content.highCount as number]);
+    if (content.mediumCount !== undefined) wsSummary.addRow(["Medium", content.mediumCount as number]);
+    if (content.lowCount !== undefined) wsSummary.addRow(["Low", content.lowCount as number]);
+    if (content.resolvedCount !== undefined) wsSummary.addRow(["Resolved", content.resolvedCount as number]);
   }
+
   const attackSurface = content.attackSurface as Record<string, unknown> | undefined;
   if (attackSurface?.surfaceRiskScore != null) {
-    summaryData.push(["", ""]);
-    summaryData.push(["Attack Surface", ""]);
-    summaryData.push(["Surface Risk Score", `${attackSurface.surfaceRiskScore}/100`]);
+    wsSummary.addRow([]);
+    wsSummary.addRow(["Attack Surface"]);
+    wsSummary.addRow(["Surface Risk Score", `${attackSurface.surfaceRiskScore}/100`]);
   }
+
   const attackSurfaceSummary = content.attackSurfaceSummary as { totalHosts: number; highRiskCount: number; wafCoverage: number } | undefined;
   if (attackSurfaceSummary) {
-    summaryData.push(["Total Hosts", attackSurfaceSummary.totalHosts as number]);
-    summaryData.push(["High Risk Count", attackSurfaceSummary.highRiskCount as number]);
-    summaryData.push(["WAF Coverage %", attackSurfaceSummary.wafCoverage as number]);
+    wsSummary.addRow(["Total Hosts", attackSurfaceSummary.totalHosts]);
+    wsSummary.addRow(["High Risk Count", attackSurfaceSummary.highRiskCount]);
+    wsSummary.addRow(["WAF Coverage %", attackSurfaceSummary.wafCoverage]);
   }
-  const wsSummary = XLSX.utils.aoa_to_sheet(summaryData);
-  XLSX.utils.book_append_sheet(wb, wsSummary, "Summary");
 
+  // Posture Trend sheet
   const postureTrend = content.postureTrend as Array<{ snapshotAt: string; surfaceRiskScore: number | null; securityScore: number | null; findingsCount: number }> | undefined;
   if (postureTrend && postureTrend.length > 0) {
-    const trendData = [
-      ["Date", "Surface Risk Score", "Security Score", "Findings Count"],
-      ...postureTrend.map((p) => [
+    const wsTrend = wb.addWorksheet("Posture Trend");
+    wsTrend.addRow(["Date", "Surface Risk Score", "Security Score", "Findings Count"]);
+    for (const p of postureTrend) {
+      wsTrend.addRow([
         new Date(p.snapshotAt).toLocaleDateString(),
         p.surfaceRiskScore ?? "",
         p.securityScore ?? "",
         p.findingsCount ?? "",
-      ]),
-    ];
-    const wsTrend = XLSX.utils.aoa_to_sheet(trendData);
-    XLSX.utils.book_append_sheet(wb, wsTrend, "Posture Trend");
+      ]);
+    }
   }
 
-  const buffer = XLSX.write(wb, { type: "buffer", bookType: "xlsx" });
-  return Buffer.from(buffer);
+  const arrayBuffer = await wb.xlsx.writeBuffer();
+  return Buffer.from(arrayBuffer);
 }

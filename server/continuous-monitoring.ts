@@ -1,6 +1,9 @@
 import { storage } from "./storage";
 import { runEASMScan, runOSINTScan, buildReconModules } from "./scanner";
 import { computeSecurityScore } from "@shared/scoring";
+import { createLogger } from "./logger";
+
+const log = createLogger("monitoring");
 
 const INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -62,7 +65,7 @@ export function stopMonitoring(workspaceId: string): boolean {
   session.abortController.abort();
   activeSessions.delete(workspaceId);
   storage.updateContinuousMonitoring(session.cmId, { status: "stopped" }).catch((err: Error) => {
-    console.warn("[ContinuousMonitoring] Failed to update status to stopped:", err.message);
+    log.warn({ err }, "Failed to update status to stopped");
   });
   return true;
 }
@@ -160,7 +163,7 @@ export async function startMonitoring(target: string, workspaceId?: string): Pro
               await storage.createAsset({ workspaceId: wsId!, type: asset.type, value: asset.value, status: "active", tags: asset.tags });
               newAssetsCount++;
             } catch (assetErr) {
-              console.warn("[Monitoring] Failed to create asset:", assetErr instanceof Error ? assetErr.message : assetErr);
+              log.warn({ err: assetErr }, "Failed to create asset");
             }
           }
         }
@@ -174,7 +177,7 @@ export async function startMonitoring(target: string, workspaceId?: string): Pro
               newFindingsCount++;
             }
           } catch (findErr) {
-            console.error(`[CM] Failed to create finding "${f.title}":`, findErr);
+            log.error({ err: findErr, title: f.title }, "Failed to create finding");
           }
         }
 
@@ -218,7 +221,7 @@ export async function startMonitoring(target: string, workspaceId?: string): Pro
         });
 
         try {
-          const modules = await storage.getReconModules(wsId!);
+          const { data: modules } = await storage.getReconModules(wsId!);
           const attackSurface = modules.find((m) => m.moduleType === "attack_surface")?.data as Record<string, unknown> | undefined;
           const assetInventory = (attackSurface?.assetInventory || []) as Array<{ riskScore: number; waf: string }>;
           const totalHosts = assetInventory.length || 0;
@@ -241,7 +244,7 @@ export async function startMonitoring(target: string, workspaceId?: string): Pro
           });
         } catch (snapErr) {
           const err = snapErr instanceof Error ? snapErr : new Error(String(snapErr));
-          console.error("[CM] Posture snapshot error:", err.message, err.stack);
+          log.error({ err }, "Posture snapshot error");
         }
 
         await storage.updateContinuousMonitoring(cm.id, {
@@ -259,7 +262,7 @@ export async function startMonitoring(target: string, workspaceId?: string): Pro
           await storage.updateScan(scan.id, { status: "failed", completedAt: new Date(), errorMessage: "Stopped by user" });
           break;
         }
-        console.error("Continuous monitoring scan error:", err);
+        log.error({ err }, "Continuous monitoring scan error");
         await storage.updateScan(scan.id, {
           status: "failed",
           completedAt: new Date(),

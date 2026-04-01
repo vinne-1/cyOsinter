@@ -14,7 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plug, Shield, CheckCircle2, XCircle, Loader2, Cpu, Search, PowerOff } from "lucide-react";
+import { Plug, Shield, CheckCircle2, XCircle, Loader2, Cpu, Search, PowerOff, TicketCheck, Github } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -55,11 +55,26 @@ export default function Integrations() {
   const [ollamaEnabled, setOllamaEnabled] = useState(false);
   const [shutdownDialogOpen, setShutdownDialogOpen] = useState(false);
   const [shutdownPending, setShutdownPending] = useState(false);
+  // Jira/GitHub ticketing state
+  const [jiraBaseUrl, setJiraBaseUrl] = useState("");
+  const [jiraEmail, setJiraEmail] = useState("");
+  const [jiraToken, setJiraToken] = useState("");
+  const [jiraProjectKey, setJiraProjectKey] = useState("");
+  const [ghToken, setGhToken] = useState("");
+  const [ghOwner, setGhOwner] = useState("");
+  const [ghRepo, setGhRepo] = useState("");
   const { toast } = useToast();
   const qc = useQueryClient();
 
   const { data: status, isLoading } = useQuery<IntegrationsStatus>({
     queryKey: ["/api/integrations/status"],
+  });
+
+  const { data: ticketingStatus } = useQuery<{
+    jira: { configured: boolean; projectKey: string | null };
+    github: { configured: boolean; owner: string | null; repo: string | null };
+  }>({
+    queryKey: ["/api/integrations/ticketing"],
   });
 
   const { data: ollamaStatus, refetch: refetchOllamaStatus } = useQuery<{ reachable: boolean; modelLoaded?: boolean }>({
@@ -545,17 +560,119 @@ export default function Integrations() {
 
       <div>
         <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-3">
-          Additional Integrations
+          Ticketing Integrations
         </h2>
-        <Card>
-          <CardContent className="py-8 text-center">
-            <Plug className="w-10 h-10 text-muted-foreground/40 mx-auto mb-3" />
-            <p className="text-sm font-medium text-muted-foreground">More integrations coming soon</p>
-            <p className="text-xs text-muted-foreground mt-1">
-              GreyNoise, Shodan, and other threat intel providers will be available in future updates
-            </p>
-          </CardContent>
-        </Card>
+        <p className="text-sm text-muted-foreground mb-3">
+          Create tickets from findings directly in Jira or GitHub Issues.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <Card>
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between gap-2">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <TicketCheck className="w-4 h-4" />
+                  Jira
+                </CardTitle>
+                <Badge
+                  variant="outline"
+                  className={`text-xs border-0 ${ticketingStatus?.jira?.configured ? "bg-green-600/15 text-green-400" : "bg-slate-600/15 text-slate-400"}`}
+                >
+                  {ticketingStatus?.jira?.configured ? (
+                    <><CheckCircle2 className="w-3 h-3 mr-1" /> Configured</>
+                  ) : (
+                    <><XCircle className="w-3 h-3 mr-1" /> Not configured</>
+                  )}
+                </Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                Create Jira issues from findings with severity-based priority mapping.
+              </p>
+              <div className="space-y-2">
+                <Input placeholder="Jira Base URL (e.g. https://myorg.atlassian.net)" value={jiraBaseUrl} onChange={(e) => setJiraBaseUrl(e.target.value)} className="text-sm" />
+                <Input placeholder="Email" value={jiraEmail} onChange={(e) => setJiraEmail(e.target.value)} className="text-sm" />
+                <Input type="password" placeholder="API Token" value={jiraToken} onChange={(e) => setJiraToken(e.target.value)} className="text-sm font-mono" />
+                <Input placeholder="Project Key (e.g. SEC)" value={jiraProjectKey} onChange={(e) => setJiraProjectKey(e.target.value)} className="text-sm font-mono" />
+              </div>
+              <div className="flex gap-2">
+                <Button size="sm" disabled={!jiraBaseUrl.trim() || !jiraToken.trim()} onClick={async () => {
+                  try {
+                    const res = await fetch("/api/integrations/ticketing/jira", {
+                      method: "PUT",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ baseUrl: jiraBaseUrl.trim(), email: jiraEmail.trim(), apiToken: jiraToken.trim(), projectKey: jiraProjectKey.trim() }),
+                    });
+                    if (!res.ok) { const e = await res.json().catch(() => ({ message: "Failed" })); throw new Error(e.message); }
+                    qc.invalidateQueries({ queryKey: ["/api/integrations/ticketing"] });
+                    toast({ title: "Jira configured" });
+                    setJiraToken("");
+                  } catch (err) { toast({ title: "Error", description: err instanceof Error ? err.message : "Failed", variant: "destructive" }); }
+                }}>Save</Button>
+                {ticketingStatus?.jira?.configured && (
+                  <Button variant="ghost" size="sm" className="text-destructive" onClick={async () => {
+                    await fetch("/api/integrations/ticketing/jira", { method: "DELETE" });
+                    qc.invalidateQueries({ queryKey: ["/api/integrations/ticketing"] });
+                    toast({ title: "Jira config removed" });
+                  }}>Remove</Button>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between gap-2">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Github className="w-4 h-4" />
+                  GitHub Issues
+                </CardTitle>
+                <Badge
+                  variant="outline"
+                  className={`text-xs border-0 ${ticketingStatus?.github?.configured ? "bg-green-600/15 text-green-400" : "bg-slate-600/15 text-slate-400"}`}
+                >
+                  {ticketingStatus?.github?.configured ? (
+                    <><CheckCircle2 className="w-3 h-3 mr-1" /> Configured</>
+                  ) : (
+                    <><XCircle className="w-3 h-3 mr-1" /> Not configured</>
+                  )}
+                </Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                Create GitHub issues from findings with security labels.
+              </p>
+              <div className="space-y-2">
+                <Input type="password" placeholder="Personal Access Token" value={ghToken} onChange={(e) => setGhToken(e.target.value)} className="text-sm font-mono" />
+                <Input placeholder="Repository Owner" value={ghOwner} onChange={(e) => setGhOwner(e.target.value)} className="text-sm" />
+                <Input placeholder="Repository Name" value={ghRepo} onChange={(e) => setGhRepo(e.target.value)} className="text-sm" />
+              </div>
+              <div className="flex gap-2">
+                <Button size="sm" disabled={!ghToken.trim() || !ghOwner.trim() || !ghRepo.trim()} onClick={async () => {
+                  try {
+                    const res = await fetch("/api/integrations/ticketing/github", {
+                      method: "PUT",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ token: ghToken.trim(), owner: ghOwner.trim(), repo: ghRepo.trim() }),
+                    });
+                    if (!res.ok) { const e = await res.json().catch(() => ({ message: "Failed" })); throw new Error(e.message); }
+                    qc.invalidateQueries({ queryKey: ["/api/integrations/ticketing"] });
+                    toast({ title: "GitHub configured" });
+                    setGhToken("");
+                  } catch (err) { toast({ title: "Error", description: err instanceof Error ? err.message : "Failed", variant: "destructive" }); }
+                }}>Save</Button>
+                {ticketingStatus?.github?.configured && (
+                  <Button variant="ghost" size="sm" className="text-destructive" onClick={async () => {
+                    await fetch("/api/integrations/ticketing/github", { method: "DELETE" });
+                    qc.invalidateQueries({ queryKey: ["/api/integrations/ticketing"] });
+                    toast({ title: "GitHub config removed" });
+                  }}>Remove</Button>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       </div>
 
       <div>
