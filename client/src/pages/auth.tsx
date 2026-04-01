@@ -11,7 +11,8 @@ import { apiRequest } from "@/lib/queryClient";
 
 export function useAuth() {
   const token = localStorage.getItem("auth_token");
-  const user = JSON.parse(localStorage.getItem("auth_user") || "null");
+  let user: unknown = null;
+  try { user = JSON.parse(localStorage.getItem("auth_user") || "null"); } catch { /* corrupted storage */ }
   const isAuthenticated = !!token;
 
   function login(token: string, refreshToken: string, user: unknown) {

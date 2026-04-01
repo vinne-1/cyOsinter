@@ -1,12 +1,40 @@
 import { Router } from "express";
 import { z } from "zod";
 import crypto from "crypto";
+import dns from "dns/promises";
 import { eq, and } from "drizzle-orm";
 import { db } from "../db";
 import { webhookEndpoints } from "@shared/schema";
 import { requireAuth, requireWorkspaceRole } from "./auth-middleware";
 import { sendError, sendValidationError, sendNotFound } from "./response";
+import { encrypt, decrypt } from "../crypto";
 import { createLogger } from "../logger";
+
+/** Check if a hostname resolves to a private/loopback IP (SSRF prevention) */
+async function isPrivateHost(hostname: string): Promise<boolean> {
+  try {
+    const addrs = await dns.resolve4(hostname);
+    return addrs.some((ip) => {
+      const parts = ip.split(".").map(Number);
+      return (
+        parts[0] === 127 ||
+        parts[0] === 10 ||
+        (parts[0] === 172 && parts[1]! >= 16 && parts[1]! <= 31) ||
+        (parts[0] === 192 && parts[1] === 168) ||
+        (parts[0] === 169 && parts[1] === 254) ||
+        parts[0] === 0
+      );
+    });
+  } catch {
+    return false;
+  }
+}
+
+/** Omit the secret from a webhook row for API responses */
+function sanitizeWebhook(row: typeof webhookEndpoints.$inferSelect) {
+  const { secret: _secret, ...rest } = row;
+  return { ...rest, hasSecret: !!_secret };
+}
 
 const log = createLogger("webhooks");
 
@@ -17,7 +45,10 @@ const MAX_RETRIES = 3;
 
 const createWebhookSchema = z.object({
   name: z.string().min(1, "Name is required"),
-  url: z.string().url("Must be a valid URL"),
+  url: z.string().url("Must be a valid URL").refine(
+    (u) => { try { return new URL(u).protocol === "https:"; } catch { return false; } },
+    "Webhook URL must use HTTPS",
+  ),
   secret: z.string().optional(),
   events: z.array(z.string()).min(1, "At least one event is required"),
   provider: z.enum(["generic", "slack", "teams", "pagerduty"]).default("generic"),
@@ -44,7 +75,7 @@ webhooksRouter.get(
         .from(webhookEndpoints)
         .where(eq(webhookEndpoints.workspaceId, req.params.workspaceId as string));
 
-      res.json(rows);
+      res.json(rows.map(sanitizeWebhook));
     } catch (err) {
       log.error({ err }, "Failed to list webhooks");
       sendError(res, 500, "Failed to list webhooks");
@@ -64,19 +95,27 @@ webhooksRouter.post(
         return sendValidationError(res, parsed.error.errors[0]?.message ?? "Validation error");
       }
 
+      // SSRF protection: reject private/loopback webhook URLs
+      const webhookHost = new URL(parsed.data.url).hostname;
+      if (await isPrivateHost(webhookHost)) {
+        return sendError(res, 400, "Webhook URL must not target private or internal networks");
+      }
+
+      const encryptedSecret = parsed.data.secret ? encrypt(parsed.data.secret) : null;
+
       const [webhook] = await db
         .insert(webhookEndpoints)
         .values({
           workspaceId: req.params.workspaceId as string,
           name: parsed.data.name,
           url: parsed.data.url,
-          secret: parsed.data.secret ?? null,
+          secret: encryptedSecret,
           events: parsed.data.events,
           provider: parsed.data.provider,
         })
         .returning();
 
-      res.status(201).json(webhook);
+      res.status(201).json(sanitizeWebhook(webhook));
     } catch (err) {
       log.error({ err }, "Failed to create webhook");
       sendError(res, 500, "Failed to create webhook");
@@ -105,13 +144,32 @@ webhooksRouter.patch(
         return sendNotFound(res, "Webhook");
       }
 
+      // Verify caller has admin+ role in the webhook's workspace
+      if (!req.user || existing.workspaceId !== (req as any).workspaceId) {
+        // Fall back to checking workspace membership
+        const { workspaceMembers } = await import("@shared/schema");
+        const [member] = await db
+          .select()
+          .from(workspaceMembers)
+          .where(and(eq(workspaceMembers.workspaceId, existing.workspaceId), eq(workspaceMembers.userId, req.user!.id)))
+          .limit(1);
+        if (!member || !["owner", "admin"].includes(member.role)) {
+          return sendError(res, 403, "Forbidden");
+        }
+      }
+
+      const updates = { ...parsed.data } as Record<string, unknown>;
+      if (parsed.data.secret !== undefined) {
+        updates.secret = parsed.data.secret ? encrypt(parsed.data.secret) : null;
+      }
+
       const [updated] = await db
         .update(webhookEndpoints)
-        .set(parsed.data)
+        .set(updates)
         .where(eq(webhookEndpoints.id, req.params.id as string))
         .returning();
 
-      res.json(updated);
+      res.json(sanitizeWebhook(updated));
     } catch (err) {
       log.error({ err }, "Failed to update webhook");
       sendError(res, 500, "Failed to update webhook");
@@ -133,6 +191,17 @@ webhooksRouter.delete(
 
       if (!existing) {
         return sendNotFound(res, "Webhook");
+      }
+
+      // Verify workspace ownership
+      const { workspaceMembers } = await import("@shared/schema");
+      const [member] = await db
+        .select()
+        .from(workspaceMembers)
+        .where(and(eq(workspaceMembers.workspaceId, existing.workspaceId), eq(workspaceMembers.userId, req.user!.id)))
+        .limit(1);
+      if (!member || !["owner", "admin"].includes(member.role)) {
+        return sendError(res, 403, "Forbidden");
       }
 
       await db.delete(webhookEndpoints).where(eq(webhookEndpoints.id, req.params.id as string));
@@ -263,6 +332,12 @@ async function deliverWebhook(
   let body: string;
   const headers: Record<string, string> = { "Content-Type": "application/json" };
 
+  // Decrypt the stored secret for use in signing/routing
+  let plainSecret: string | null = null;
+  if (webhook.secret) {
+    try { plainSecret = decrypt(webhook.secret); } catch { plainSecret = webhook.secret; /* legacy unencrypted */ }
+  }
+
   switch (provider) {
     case "slack":
       body = JSON.stringify(formatSlackPayload(String(payload.event ?? "unknown"), payload));
@@ -272,16 +347,16 @@ async function deliverWebhook(
       break;
     case "pagerduty": {
       const pdPayload = formatPagerDutyPayload(String(payload.event ?? "unknown"), payload);
-      if (webhook.secret) {
-        (pdPayload as Record<string, unknown>).routing_key = webhook.secret;
+      if (plainSecret) {
+        (pdPayload as Record<string, unknown>).routing_key = plainSecret;
       }
       body = JSON.stringify(pdPayload);
       break;
     }
     default:
       body = JSON.stringify(payload);
-      if (webhook.secret) {
-        headers["X-Webhook-Signature"] = signPayload(body, webhook.secret);
+      if (plainSecret) {
+        headers["X-Webhook-Signature"] = signPayload(body, plainSecret);
       }
       break;
   }

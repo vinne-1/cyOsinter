@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useDomain } from "@/lib/domain-context";
+import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -94,8 +95,7 @@ export default function AssetRiskPage() {
   const { data, isLoading, isError, error } = useQuery<AssetRiskSummary>({
     queryKey: ["/api/asset-risk", selectedWorkspaceId],
     queryFn: async () => {
-      const res = await fetch(`/api/asset-risk?workspaceId=${selectedWorkspaceId}`);
-      if (!res.ok) throw new Error(await res.text());
+      const res = await apiRequest("GET", `/api/asset-risk?workspaceId=${selectedWorkspaceId}`);
       return res.json();
     },
     enabled: !!selectedWorkspaceId,
