@@ -123,7 +123,12 @@ export const getQueryFn: <T>(options: {
       return [];
     }
     try {
-      return JSON.parse(text);
+      const json = JSON.parse(text);
+      // Auto-unwrap paginated envelope: { data: [...], total, limit, offset }
+      if (json && typeof json === "object" && Array.isArray(json.data) && "total" in json && "offset" in json) {
+        return json.data;
+      }
+      return json;
     } catch {
       throw new Error(`Invalid JSON from ${url}`);
     }
