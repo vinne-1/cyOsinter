@@ -98,6 +98,23 @@ function ReportDetailDialog({
     enabled: !!selectedWorkspaceId,
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: async () => {
+      if (!report) return;
+      await apiRequest("DELETE", `/api/workspaces/${selectedWorkspaceId}/reports/${report.id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${selectedWorkspaceId}/reports`] });
+      toast({ title: "Report deleted" });
+      setDeleteDialogOpen(false);
+      onOpenChange(false);
+      onDeleted?.();
+    },
+    onError: (error: Error) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
   if (!report) return null;
 
   const reportFindings = findings.filter((f) =>
@@ -121,22 +138,6 @@ function ReportDetailDialog({
 
   const attackSurface = contentAttackSurface ?? modules.find(m => m.moduleType === "attack_surface")?.data as Record<string, unknown> | undefined;
   const cloud = contentCloudFootprint ?? modules.find(m => m.moduleType === "cloud_footprint")?.data as Record<string, unknown> | undefined;
-
-  const deleteMutation = useMutation({
-    mutationFn: async () => {
-      await apiRequest("DELETE", `/api/workspaces/${selectedWorkspaceId}/reports/${report.id}`);
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${selectedWorkspaceId}/reports`] });
-      toast({ title: "Report deleted" });
-      setDeleteDialogOpen(false);
-      onOpenChange(false);
-      onDeleted?.();
-    },
-    onError: (error: Error) => {
-      toast({ title: "Error", description: error.message, variant: "destructive" });
-    },
-  });
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
