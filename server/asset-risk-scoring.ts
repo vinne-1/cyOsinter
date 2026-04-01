@@ -27,7 +27,7 @@ const FACTOR_WEIGHTS = {
   tlsIssues: 0.15,
 } as const;
 
-function countFindingsBySeverity(
+export function countFindingsBySeverity(
   findings: readonly Finding[],
 ): Record<string, number> {
   const counts: Record<string, number> = {
@@ -44,7 +44,7 @@ function countFindingsBySeverity(
   return counts;
 }
 
-function computeCriticalFindingsFactor(counts: Record<string, number>): RiskFactor {
+export function computeCriticalFindingsFactor(counts: Record<string, number>): RiskFactor {
   const critCount = counts.critical ?? 0;
   // Each critical finding adds 20 points, capped at 100
   const score = Math.min(100, critCount * 20);
@@ -56,7 +56,7 @@ function computeCriticalFindingsFactor(counts: Record<string, number>): RiskFact
   };
 }
 
-function computeHighFindingsFactor(counts: Record<string, number>): RiskFactor {
+export function computeHighFindingsFactor(counts: Record<string, number>): RiskFactor {
   const highCount = counts.high ?? 0;
   // Each high finding adds 10 points, capped at 100
   const score = Math.min(100, highCount * 10);
@@ -68,7 +68,7 @@ function computeHighFindingsFactor(counts: Record<string, number>): RiskFactor {
   };
 }
 
-function computeExposureFactor(findings: readonly Finding[]): RiskFactor {
+export function computeExposureFactor(findings: readonly Finding[]): RiskFactor {
   const exposureCategories = new Set([
     "open-port",
     "exposed-service",
@@ -94,7 +94,7 @@ function computeExposureFactor(findings: readonly Finding[]): RiskFactor {
   };
 }
 
-function computeTlsFactor(findings: readonly Finding[]): RiskFactor {
+export function computeTlsFactor(findings: readonly Finding[]): RiskFactor {
   const tlsCategories = new Set([
     "tls",
     "ssl",
@@ -120,7 +120,7 @@ function computeTlsFactor(findings: readonly Finding[]): RiskFactor {
   };
 }
 
-function computeOverallScore(factors: readonly RiskFactor[]): number {
+export function computeOverallScore(factors: readonly RiskFactor[]): number {
   const weighted = factors.reduce(
     (sum, f) => sum + f.score * f.weight,
     0,
@@ -128,7 +128,7 @@ function computeOverallScore(factors: readonly RiskFactor[]): number {
   return Math.round(Math.min(100, Math.max(0, weighted)));
 }
 
-function determineTrend(
+export function determineTrend(
   currentScore: number,
   findings: readonly Finding[],
 ): "improving" | "stable" | "degrading" {
@@ -155,7 +155,9 @@ function findingsForAsset(
   const normalized = assetValue.toLowerCase();
   return allFindings.filter((f) => {
     const affected = (f.affectedAsset ?? "").toLowerCase();
-    return affected === normalized || affected.includes(normalized);
+    return affected === normalized
+      || affected.endsWith(`.${normalized}`)
+      || affected.startsWith(`${normalized}:`);
   });
 }
 

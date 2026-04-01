@@ -162,7 +162,8 @@ export function requireWorkspaceRole(...roles: string[]) {
       // Superadmins bypass workspace role checks
       if (req.user.role === "superadmin") return next();
 
-      const workspaceId = req.params.workspaceId as string;
+      const workspaceId = (req.params.workspaceId as string)
+        || (req.query.workspaceId as string);
       if (!workspaceId) {
         sendError(res, 400, "Workspace ID is required");
         return;

@@ -67,7 +67,12 @@ async function runScanners(
     const nucleiUrls = buildNucleiUrls(target, results.easmResults, gold);
     const nucleiProgress: ProgressFn = (m, p, s, e) =>
       onProgress(`[Nuclei] ${m}`, Math.round(75 + (p * 15) / 100), `nuclei_${s}`, e ? Math.ceil(e * 0.15) : undefined);
-    results.nucleiResults = await runNucleiScan(target, nucleiUrls, nucleiProgress, { mode });
+    try {
+      results.nucleiResults = await runNucleiScan(target, nucleiUrls, nucleiProgress, { mode });
+    } catch (nucleiErr) {
+      log.warn({ err: nucleiErr }, "Nuclei scan unavailable (non-fatal) — install nuclei for full vulnerability scanning");
+      results.nucleiResults = { findings: [], nucleiResults: [], skipped: true, reason: String(nucleiErr instanceof Error ? nucleiErr.message : nucleiErr) };
+    }
 
     await onProgress("[DAST] Running active security tests...", 92, "dast_start");
     try {
@@ -191,8 +196,9 @@ async function storeReconModules(
           source: "Nuclei scanner (all templates)",
           hits: results.nucleiResults.nucleiResults ?? [],
           templateCount: results.nucleiResults.nucleiResults?.length ?? 0,
-          allTemplatesLoaded: true,
-          skipped: false,
+          allTemplatesLoaded: !results.nucleiResults.skipped,
+          skipped: results.nucleiResults.skipped ?? false,
+          skipReason: results.nucleiResults.reason,
           verifiedAt: new Date().toISOString(),
         },
         confidence: 95,

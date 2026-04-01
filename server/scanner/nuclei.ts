@@ -82,22 +82,34 @@ export async function runNucleiScan(
 
   const checkNuclei = (nucleiPath: string): Promise<boolean> =>
     new Promise((resolve) => {
-      const proc = spawn(nucleiPath, ["-version"], { stdio: ["ignore", "pipe", "pipe"], env: spawnEnv });
+      let proc: ReturnType<typeof spawn> | null = null;
+      const timeout = setTimeout(() => {
+        try { proc?.kill(); } catch {}
+        resolve(false);
+      }, 5000);
+      try {
+        proc = spawn(nucleiPath, ["-version"], { stdio: ["ignore", "pipe", "pipe"], env: spawnEnv });
+      } catch {
+        clearTimeout(timeout);
+        resolve(false);
+        return;
+      }
       proc.stdout?.on("data", () => {});
       proc.stderr?.on("data", () => {});
-      proc.on("close", (code) => resolve(code === 0));
-      proc.on("error", () => resolve(false));
+      proc.on("close", (code) => { clearTimeout(timeout); resolve(code === 0); });
+      proc.on("error", () => { clearTimeout(timeout); resolve(false); });
     });
 
-  let nucleiPath = "nuclei";
-  if (!(await checkNuclei("nuclei"))) {
+  let nucleiPath: string | null = null;
+  if (await checkNuclei("nuclei")) {
+    nucleiPath = "nuclei";
+  } else {
     const altPath = path.join(goBin, "nuclei");
     if (await checkNuclei(altPath)) {
       nucleiPath = altPath;
     }
   }
-  const isAvailable = await checkNuclei(nucleiPath);
-  if (!isAvailable) {
+  if (!nucleiPath) {
     throw new Error(
       "Nuclei is required for full scans but is not installed or not in PATH. " +
       "Use Docker: docker compose up -d (app image includes Nuclei). " +

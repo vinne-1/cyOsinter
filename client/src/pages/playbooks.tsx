@@ -147,11 +147,13 @@ export default function Playbooks() {
   const [simDialogOpen, setSimDialogOpen] = useState(false);
 
   const { data: playbooks = [], isLoading } = useQuery<Playbook[]>({
-    queryKey: ["/api/playbooks"],
+    queryKey: ["/api/playbooks", selectedWorkspaceId],
+    enabled: !!selectedWorkspaceId,
   });
 
   const simulate = useMutation({
     mutationFn: async (id: string) => {
+      if (!selectedWorkspaceId) throw new Error("No workspace selected");
       const res = await apiRequest("POST", `/api/playbooks/${id}/simulate?workspaceId=${selectedWorkspaceId}`);
       return res.json();
     },

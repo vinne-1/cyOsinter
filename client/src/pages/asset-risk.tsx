@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useDomain } from "@/lib/domain-context";
 import { apiRequest } from "@/lib/queryClient";
@@ -33,19 +33,12 @@ interface RiskFactor {
 }
 
 interface AssetRisk {
-  id: string;
+  assetId: string;
   hostname: string;
   overallScore: number;
-  trend: "up" | "down" | "stable";
-  topRiskFactor: string;
-  riskFactors: RiskFactor[];
-}
-
-interface AssetRiskSummary {
-  totalAssets: number;
-  criticalRiskCount: number;
-  averageScore: number;
-  assets: AssetRisk[];
+  trend: "improving" | "stable" | "degrading";
+  factors: RiskFactor[];
+  lastUpdated: string;
 }
 
 type SortField = "hostname" | "overallScore";
@@ -65,13 +58,13 @@ function progressBarColor(score: number): string {
   return "bg-green-500";
 }
 
-function TrendIcon({ trend }: { trend: "up" | "down" | "stable" }) {
+function TrendIcon({ trend }: { trend: string }) {
   switch (trend) {
-    case "up":
+    case "degrading":
       return <TrendingUp className="w-4 h-4 text-red-500" />;
-    case "down":
+    case "improving":
       return <TrendingDown className="w-4 h-4 text-green-500" />;
-    case "stable":
+    default:
       return <Minus className="w-4 h-4 text-muted-foreground" />;
   }
 }
@@ -86,13 +79,19 @@ function sortAssets(assets: AssetRisk[], field: SortField, dir: SortDir): AssetR
   });
 }
 
+function topRiskFactor(factors: RiskFactor[]): string {
+  if (!factors || factors.length === 0) return "N/A";
+  const sorted = [...factors].sort((a, b) => b.score * b.weight - a.score * a.weight);
+  return sorted[0]?.name ?? "N/A";
+}
+
 export default function AssetRiskPage() {
   const { selectedWorkspaceId } = useDomain();
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [sortField, setSortField] = useState<SortField>("overallScore");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
 
-  const { data, isLoading, isError, error } = useQuery<AssetRiskSummary>({
+  const { data: assets, isLoading, isError, error } = useQuery<AssetRisk[]>({
     queryKey: ["/api/asset-risk", selectedWorkspaceId],
     queryFn: async () => {
       const res = await apiRequest("GET", `/api/asset-risk?workspaceId=${selectedWorkspaceId}`);
@@ -139,11 +138,14 @@ export default function AssetRiskPage() {
     );
   }
 
-  if (!data) {
-    return null;
-  }
+  const assetList = Array.isArray(assets) ? assets : [];
+  const totalAssets = assetList.length;
+  const criticalRiskCount = assetList.filter((a) => a.overallScore >= 80).length;
+  const averageScore = totalAssets > 0
+    ? assetList.reduce((sum, a) => sum + a.overallScore, 0) / totalAssets
+    : 0;
 
-  const sorted = sortAssets(data.assets, sortField, sortDir);
+  const sorted = sortAssets(assetList, sortField, sortDir);
 
   return (
     <div className="p-6 space-y-6">
@@ -166,7 +168,7 @@ export default function AssetRiskPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-2xl font-bold">{data.totalAssets}</p>
+            <p className="text-2xl font-bold">{totalAssets}</p>
           </CardContent>
         </Card>
         <Card>
@@ -177,7 +179,7 @@ export default function AssetRiskPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-2xl font-bold text-red-600">{data.criticalRiskCount}</p>
+            <p className="text-2xl font-bold text-red-600">{criticalRiskCount}</p>
           </CardContent>
         </Card>
         <Card>
@@ -188,14 +190,14 @@ export default function AssetRiskPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className={`text-2xl font-bold ${scoreColor(data.averageScore)}`}>
-              {data.averageScore.toFixed(1)}
+            <p className={`text-2xl font-bold ${scoreColor(averageScore)}`}>
+              {averageScore.toFixed(1)}
             </p>
           </CardContent>
         </Card>
       </div>
 
-      {data.assets.length === 0 ? (
+      {assetList.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-16">
             <Shield className="w-12 h-12 text-muted-foreground mb-4" />
@@ -235,12 +237,11 @@ export default function AssetRiskPage() {
               </TableHeader>
               <TableBody>
                 {sorted.map((asset) => (
-                  <>
+                  <React.Fragment key={asset.assetId}>
                     <TableRow
-                      key={asset.id}
                       className="cursor-pointer"
                       onClick={() =>
-                        setExpandedId(expandedId === asset.id ? null : asset.id)
+                        setExpandedId(expandedId === asset.assetId ? null : asset.assetId)
                       }
                     >
                       <TableCell className="font-medium">{asset.hostname}</TableCell>
@@ -261,22 +262,22 @@ export default function AssetRiskPage() {
                         <TrendIcon trend={asset.trend} />
                       </TableCell>
                       <TableCell>
-                        <Badge variant="outline">{asset.topRiskFactor}</Badge>
+                        <Badge variant="outline">{topRiskFactor(asset.factors)}</Badge>
                       </TableCell>
                       <TableCell>
-                        {expandedId === asset.id ? (
+                        {expandedId === asset.assetId ? (
                           <ChevronUp className="w-4 h-4 text-muted-foreground" />
                         ) : (
                           <ChevronDown className="w-4 h-4 text-muted-foreground" />
                         )}
                       </TableCell>
                     </TableRow>
-                    {expandedId === asset.id && (
-                      <TableRow key={`${asset.id}-factors`}>
+                    {expandedId === asset.assetId && (
+                      <TableRow key={`${asset.assetId}-factors`}>
                         <TableCell colSpan={5} className="bg-muted/50">
                           <div className="py-2 space-y-2">
                             <p className="text-sm font-medium mb-2">Risk Factor Breakdown</p>
-                            {asset.riskFactors.map((factor, idx) => (
+                            {(asset.factors ?? []).map((factor, idx) => (
                               <div
                                 key={`${factor.name}-${idx}`}
                                 className="flex items-center justify-between p-3 rounded-md border bg-background"
@@ -304,7 +305,7 @@ export default function AssetRiskPage() {
                         </TableCell>
                       </TableRow>
                     )}
-                  </>
+                  </React.Fragment>
                 ))}
               </TableBody>
             </Table>

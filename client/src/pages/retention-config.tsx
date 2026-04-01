@@ -30,6 +30,7 @@ export default function RetentionConfig() {
 
   const { data: config, isLoading } = useQuery<RetentionPolicy>({
     queryKey: [`/api/workspaces/${selectedWorkspaceId}/retention`],
+    enabled: !!selectedWorkspaceId,
   });
 
   useEffect(() => {

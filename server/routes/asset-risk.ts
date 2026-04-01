@@ -4,6 +4,7 @@
 
 import { Router } from "express";
 import { sendError } from "./response";
+import { requireAuth, requireWorkspaceRole } from "./auth-middleware";
 import { createLogger } from "../logger";
 
 const log = createLogger("asset-risk-routes");
@@ -11,7 +12,7 @@ const log = createLogger("asset-risk-routes");
 export const assetRiskRouter = Router();
 
 // GET /api/asset-risk — get risk scores for all assets in workspace
-assetRiskRouter.get("/asset-risk", async (req, res) => {
+assetRiskRouter.get("/asset-risk", requireAuth, requireWorkspaceRole("owner", "admin", "analyst", "viewer"), async (req, res) => {
   try {
     const workspaceId = req.query.workspaceId as string;
     if (!workspaceId) {
@@ -28,10 +29,10 @@ assetRiskRouter.get("/asset-risk", async (req, res) => {
 });
 
 // GET /api/asset-risk/:assetId/history — get risk history for an asset
-assetRiskRouter.get("/asset-risk/:assetId/history", async (req, res) => {
+assetRiskRouter.get("/asset-risk/:assetId/history", requireAuth, async (req, res) => {
   try {
     const { getAssetRiskHistory } = await import("../asset-risk-scoring");
-    const history = await getAssetRiskHistory(req.params.assetId);
+    const history = await getAssetRiskHistory(req.params.assetId as string);
     res.json(history);
   } catch (err) {
     log.error({ err }, "Asset risk history lookup failed");
