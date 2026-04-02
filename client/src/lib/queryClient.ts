@@ -9,6 +9,11 @@ async function throwIfResNotOk(res: Response) {
   }
 }
 
+function authHeaders(): Record<string, string> {
+  const token = localStorage.getItem("auth_token");
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 export function buildUrl(path: string): string {
   const base = API_BASE.replace(/\/$/, "");
   const p = path.startsWith("/") ? path : `/${path}`;
@@ -34,7 +39,7 @@ export async function apiRequest(
   try {
     res = await fetch(fullUrl, {
       method,
-      headers: data ? { "Content-Type": "application/json" } : {},
+      headers: { ...authHeaders(), ...(data ? { "Content-Type": "application/json" } : {}) },
       body: data ? JSON.stringify(data) : undefined,
       credentials: "include",
       signal: controller?.signal,
@@ -71,7 +76,7 @@ export async function apiRequestNoParse(
   try {
     res = await fetch(fullUrl, {
       method,
-      headers: data ? { "Content-Type": "application/json" } : {},
+      headers: { ...authHeaders(), ...(data ? { "Content-Type": "application/json" } : {}) },
       body: data ? JSON.stringify(data) : undefined,
       credentials: "include",
     });
@@ -110,6 +115,7 @@ export const getQueryFn: <T>(options: {
     }
     const url = buildUrl(path);
     const res = await fetch(url, {
+      headers: authHeaders(),
       credentials: "include",
     });
 
