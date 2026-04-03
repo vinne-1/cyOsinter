@@ -387,7 +387,11 @@ export const insertSessionSchema = createInsertSchema(sessions).omit({ id: true,
 export const insertWorkspaceMemberSchema = createInsertSchema(workspaceMembers).omit({ id: true, joinedAt: true });
 export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ id: true, timestamp: true });
 export const insertFindingGroupSchema = createInsertSchema(findingGroups).omit({ id: true, createdAt: true, updatedAt: true });
-export const insertWebhookEndpointSchema = createInsertSchema(webhookEndpoints).omit({ id: true, createdAt: true, lastTriggeredAt: true, failCount: true });
+export const insertWebhookEndpointSchema = createInsertSchema(webhookEndpoints).omit({ id: true, createdAt: true, lastTriggeredAt: true, failCount: true }).extend({
+  url: z.string().url().refine((u) => {
+    try { return ["http:", "https:"].includes(new URL(u).protocol); } catch { return false; }
+  }, "Webhook URL must use http or https"),
+});
 export const insertApiKeySchema = createInsertSchema(apiKeys).omit({ id: true, createdAt: true, lastUsedAt: true, revokedAt: true });
 export const insertRetentionPolicySchema = createInsertSchema(retentionPolicies).omit({ id: true, createdAt: true, updatedAt: true, lastCleanupAt: true });
 

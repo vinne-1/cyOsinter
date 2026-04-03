@@ -9,6 +9,7 @@ const log = createLogger("finding-dedup");
 function tokenize(text: string): Set<string> {
   return new Set(
     text
+      .slice(0, 2000) // cap input length to prevent expensive set operations
       .toLowerCase()
       .split(/[\s\W]+/)
       .filter((t) => t.length > 0),
@@ -17,7 +18,7 @@ function tokenize(text: string): Set<string> {
 
 function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
   if (a.size === 0 && b.size === 0) {
-    return 1;
+    return 0; // two empty inputs are not meaningfully similar
   }
 
   let intersectionSize = 0;
@@ -83,6 +84,14 @@ export async function groupFindings(workspaceId: string): Promise<number> {
 
     if (allFindings.length === 0) {
       return 0;
+    }
+
+    // Guard against O(n²) DoS — cap findings for grouping
+    const MAX_FOR_GROUPING = 2000;
+    if (allFindings.length > MAX_FOR_GROUPING) {
+      log.warn({ workspaceId, total: allFindings.length, cap: MAX_FOR_GROUPING },
+        "Capping findings for grouping to prevent DoS");
+      allFindings.length = MAX_FOR_GROUPING;
     }
 
     const groups: Array<{

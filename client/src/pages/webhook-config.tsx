@@ -158,6 +158,7 @@ export default function WebhookConfig() {
       queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${selectedWorkspaceId}/webhooks`] });
       toast({ title: "Webhook deleted" });
     },
+    onError: (err: Error) => toast({ title: "Delete failed", description: err.message, variant: "destructive" }),
   });
 
   const testMutation = useMutation({

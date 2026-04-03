@@ -71,7 +71,10 @@ export default function ThreatIntel() {
   });
 
   const enrichMutation = useMutation({
-    mutationFn: () => apiRequest("POST", `/api/threat-intel/enrich?workspaceId=${selectedWorkspaceId}`),
+    mutationFn: () => {
+      if (!selectedWorkspaceId) throw new Error("No workspace selected");
+      return apiRequest("POST", `/api/threat-intel/enrich?workspaceId=${selectedWorkspaceId}`);
+    },
     onSuccess: () => {
       toast({ title: "Enrichment complete", description: "All findings have been enriched with threat intelligence" });
     },

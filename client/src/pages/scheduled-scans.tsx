@@ -271,7 +271,9 @@ export default function ScheduledScans() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${selectedWorkspaceId}/scheduled-scans`] });
+      toast({ title: "Schedule updated" });
     },
+    onError: (err: Error) => toast({ title: "Toggle failed", description: err.message, variant: "destructive" }),
   });
 
   const deleteSchedule = useMutation({
@@ -282,6 +284,7 @@ export default function ScheduledScans() {
       queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${selectedWorkspaceId}/scheduled-scans`] });
       toast({ title: "Schedule deleted" });
     },
+    onError: (err: Error) => toast({ title: "Delete failed", description: err.message, variant: "destructive" }),
   });
 
   if (isLoading) {

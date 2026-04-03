@@ -52,6 +52,7 @@ export default function Alerts() {
       queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${selectedWorkspaceId}/alerts`] });
       queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${selectedWorkspaceId}/alerts/unread-count`] });
     },
+    onError: (err: Error) => toast({ title: "Failed to mark as read", description: err.message, variant: "destructive" }),
   });
 
   const deleteAlert = useMutation({
@@ -61,6 +62,7 @@ export default function Alerts() {
       queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${selectedWorkspaceId}/alerts`] });
       queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${selectedWorkspaceId}/alerts/unread-count`] });
     },
+    onError: (err: Error) => toast({ title: "Delete failed", description: err.message, variant: "destructive" }),
   });
 
   const unreadCount = alerts.filter((a) => !a.read).length;

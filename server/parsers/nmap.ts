@@ -43,6 +43,7 @@ function parseNmapNormal(text: string): ParsedNmap {
     if (portMatch && currentHost) {
       const [, portStr, protocol, state, rest] = portMatch;
       const port = parseInt(portStr!, 10);
+      if (port < 1 || port > 65535) continue; // skip invalid port numbers
       const servicePart = (rest ?? "").trim();
       const service = servicePart || undefined;
       currentHost.ports.push({ port, protocol, state, service });
@@ -62,7 +63,7 @@ function parseNmapNormal(text: string): ParsedNmap {
 }
 
 function parseNmapXml(text: string): ParsedNmap {
-  const parser = new XMLParser({ ignoreAttributes: false });
+  const parser = new XMLParser({ ignoreAttributes: false, parseAttributeValue: false });
   let parsed: Record<string, unknown>;
   try {
     parsed = parser.parse(text) as Record<string, unknown>;
@@ -116,6 +117,11 @@ function parseNmapXml(text: string): ParsedNmap {
 }
 
 export function parseNmap(rawContent: string, fileType: "nmap" | "nikto" | "generic"): ParsedNmap {
+  // Guard against oversized files (10 MB max)
+  if (rawContent.length > 10 * 1024 * 1024) {
+    throw new Error("Scan file too large (max 10 MB)");
+  }
+
   if (fileType !== "nmap") {
     return { hosts: [], rawSummary: rawContent.slice(0, 5000) };
   }

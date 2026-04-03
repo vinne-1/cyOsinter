@@ -17,7 +17,12 @@ export interface ReportExportInput {
 }
 
 function escapeCsvCell(value: string): string {
-  const str = String(value ?? "");
+  let str = String(value ?? "");
+  // Neutralise CSV formula injection: prefix dangerous leading chars
+  const dangerous = ["=", "+", "-", "@", "\t", "\r"];
+  if (dangerous.some((c) => str.startsWith(c))) {
+    str = `'${str}`;
+  }
   if (str.includes(",") || str.includes('"') || str.includes("\n")) {
     return `"${str.replace(/"/g, '""')}"`;
   }
@@ -54,12 +59,12 @@ export function generateReportCsv(input: ReportExportInput): string {
   if (content.totalFindings !== undefined) {
     lines.push("");
     lines.push("Overview");
-    lines.push(`Total Findings,${content.totalFindings}`);
-    if (content.criticalCount !== undefined) lines.push(`Critical,${content.criticalCount}`);
-    if (content.highCount !== undefined) lines.push(`High,${content.highCount}`);
-    if (content.mediumCount !== undefined) lines.push(`Medium,${content.mediumCount}`);
-    if (content.lowCount !== undefined) lines.push(`Low,${content.lowCount}`);
-    if (content.resolvedCount !== undefined) lines.push(`Resolved,${content.resolvedCount}`);
+    lines.push(`Total Findings,${escapeCsvCell(String(content.totalFindings))}`);
+    if (content.criticalCount !== undefined) lines.push(`Critical,${escapeCsvCell(String(content.criticalCount))}`);
+    if (content.highCount !== undefined) lines.push(`High,${escapeCsvCell(String(content.highCount))}`);
+    if (content.mediumCount !== undefined) lines.push(`Medium,${escapeCsvCell(String(content.mediumCount))}`);
+    if (content.lowCount !== undefined) lines.push(`Low,${escapeCsvCell(String(content.lowCount))}`);
+    if (content.resolvedCount !== undefined) lines.push(`Resolved,${escapeCsvCell(String(content.resolvedCount))}`);
   }
 
   return lines.join("\n");

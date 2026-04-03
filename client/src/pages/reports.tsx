@@ -136,8 +136,8 @@ function ReportDetailDialog({
     summary?: { total: number; byCategory: Record<string, number> };
   } | undefined;
 
-  const attackSurface = contentAttackSurface ?? modules.find(m => m.moduleType === "attack_surface")?.data as Record<string, unknown> | undefined;
-  const cloud = contentCloudFootprint ?? modules.find(m => m.moduleType === "cloud_footprint")?.data as Record<string, unknown> | undefined;
+  const attackSurface = contentAttackSurface ?? (modules.find(m => m.moduleType === "attack_surface")?.data as Record<string, unknown> | undefined);
+  const cloud = contentCloudFootprint ?? (modules.find(m => m.moduleType === "cloud_footprint")?.data as Record<string, unknown> | undefined);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

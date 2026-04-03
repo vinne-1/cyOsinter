@@ -98,6 +98,7 @@ function ScanProfilesPage() {
       queryClient.invalidateQueries({ queryKey: ["/api/scan-profiles"] });
       toast({ title: "Profile deleted" });
     },
+    onError: (err: Error) => toast({ title: "Delete failed", description: err.message, variant: "destructive" }),
   });
 
   function resetForm() {

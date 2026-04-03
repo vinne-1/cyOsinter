@@ -332,14 +332,27 @@ async function runBackgroundEnrichment(workspaceId: string): Promise<void> {
  * Programmatically trigger a scan. Returns the scan ID.
  * Used by both the POST /api/scans route and the scan scheduler.
  */
+const DOMAIN_REGEX = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
+const VALID_SCAN_TYPES = ["full", "easm", "osint", "dast"];
+const VALID_SCAN_MODES: ScanMode[] = ["standard", "gold"];
+
 export async function triggerScan(
   target: string,
   type: string,
   workspaceId: string,
   mode: string,
 ): Promise<string> {
+  // Defensive validation — route layer validates too, but this is also called by the scheduler
+  const normalizedTarget = target.trim().toLowerCase().replace(/[./]+$/, "");
+  if (!DOMAIN_REGEX.test(normalizedTarget)) {
+    throw new Error("Invalid scan target domain");
+  }
+  if (!VALID_SCAN_TYPES.includes(type)) {
+    throw new Error(`Invalid scan type: ${type}`);
+  }
+
   const scan = await storage.createScan({
-    workspaceId, target, type, status: "pending",
+    workspaceId, target: normalizedTarget, type, status: "pending",
   });
 
   await storage.updateScan(scan.id, { status: "running", startedAt: new Date() });
@@ -356,7 +369,7 @@ export async function triggerScan(
   // Fire-and-forget the actual scan work
   (async () => {
     try {
-      const scanMode = mode as ScanMode;
+      const scanMode: ScanMode = VALID_SCAN_MODES.includes(mode as ScanMode) ? (mode as ScanMode) : "standard";
       const results = await runScanners(target, type, scanMode, onProgress);
 
       const allFindings: RawFinding[] = [
@@ -413,7 +426,7 @@ export async function triggerScan(
         await storage.updateScan(scan.id, {
           status: "failed",
           completedAt: new Date(),
-          errorMessage: err instanceof Error ? err.message : String(err),
+          errorMessage: (err instanceof Error ? err.message : String(err)).slice(0, 1000),
           progressMessage: null,
           progressPercent: null,
           currentStep: null,

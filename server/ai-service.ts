@@ -347,7 +347,7 @@ export async function consolidateScanResults(
     .join("\n");
   const prompt = `You are a cybersecurity analyst. Consolidate uploaded scan results into findings.
 
-TARGET: ${workspaceTarget}
+TARGET: ${sanitize(workspaceTarget)}
 
 EXISTING FINDINGS (id, title, asset):
 ${existingSummary || "(none)"}
@@ -409,7 +409,8 @@ export function buildFallbackInsights(
 ): WorkspaceInsightsResult {
   const crit = findings.filter((f) => f.severity === "critical").length;
   const high = findings.filter((f) => f.severity === "high").length;
-  const summary = `Workspace ${workspaceName} has ${findings.length} security findings (${crit} critical, ${high} high). ` +
+  const safeWorkspaceName = (workspaceName ?? "").replace(/[\x00-\x1f]/g, "").slice(0, 200);
+  const summary = `Workspace ${safeWorkspaceName} has ${findings.length} security findings (${crit} critical, ${high} high). ` +
     (reconModules.length > 0
       ? `Intelligence data includes ${reconModules.length} recon modules. `
       : "") +
@@ -524,7 +525,7 @@ export async function generateWorkspaceInsights(
   const crit = findings.filter((f) => f.severity === "critical").length;
   const high = findings.filter((f) => f.severity === "high").length;
 
-  const prompt = `You are a cybersecurity analyst. Synthesize intelligence for workspace "${workspaceName}".
+  const prompt = `You are a cybersecurity analyst. Synthesize intelligence for workspace "${sanitize(workspaceName)}".
 
 FINDINGS (${findings.length} total, ${crit} critical, ${high} high):
 ${findingContext || "(none)"}
