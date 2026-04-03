@@ -8,6 +8,7 @@ import { startMonitoring, stopMonitoring, getMonitoringStatus } from "../continu
 import { enrichIPs, getIntegrationsStatus } from "../api-integrations";
 import { getOllamaStatus } from "../ai-service";
 import { requireAdmin } from "./middleware";
+import { requireWorkspaceRole } from "./auth-middleware";
 import { startContinuousMonitoringSchema, stopContinuousMonitoringSchema } from "./schemas";
 
 const routeLog = createLogger("routes");
@@ -16,6 +17,9 @@ const STUCK_SCAN_AGE_MS = 2 * 60 * 60 * 1000; // 2 hours
 
 export function createAdminRouter(httpServer: Server): Router {
   const adminRouter = Router();
+
+  const wsAuth = requireWorkspaceRole("owner", "admin", "analyst", "viewer");
+  const wsOwnerAdmin = requireWorkspaceRole("owner", "admin");
 
   adminRouter.get("/integrations/status", (_req, res) => {
     res.json(getIntegrationsStatus());
@@ -62,7 +66,7 @@ export function createAdminRouter(httpServer: Server): Router {
     }, 500);
   });
 
-  adminRouter.post("/continuous-monitoring/start", async (req, res) => {
+  adminRouter.post("/continuous-monitoring/start", wsOwnerAdmin, async (req, res) => {
     try {
       const parsed = startContinuousMonitoringSchema.parse(req.body);
       const result = await startMonitoring(parsed.target, parsed.workspaceId);
@@ -76,7 +80,7 @@ export function createAdminRouter(httpServer: Server): Router {
     }
   });
 
-  adminRouter.post("/continuous-monitoring/stop", async (req, res) => {
+  adminRouter.post("/continuous-monitoring/stop", wsOwnerAdmin, async (req, res) => {
     try {
       const parsed = stopContinuousMonitoringSchema.parse(req.body);
       const stopped = stopMonitoring(parsed.workspaceId);
@@ -90,18 +94,18 @@ export function createAdminRouter(httpServer: Server): Router {
     }
   });
 
-  adminRouter.get("/continuous-monitoring/status/:workspaceId", async (req, res) => {
+  adminRouter.get("/continuous-monitoring/status/:workspaceId", wsAuth, async (req, res) => {
     try {
-      const status = getMonitoringStatus(req.params.workspaceId);
+      const status = getMonitoringStatus(req.params.workspaceId as string);
       res.json(status);
     } catch (err) { res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" }); }
   });
 
-  adminRouter.get("/workspaces/:workspaceId/recon-modules", async (req, res) => {
+  adminRouter.get("/workspaces/:workspaceId/recon-modules", wsAuth, async (req, res) => {
     try {
       const limit = Math.min(parseInt(String(req.query.limit ?? "500"), 10) || 500, 5000);
       const offset = Math.max(parseInt(String(req.query.offset ?? "0"), 10) || 0, 0);
-      const result = await storage.getReconModules(req.params.workspaceId, { limit, offset });
+      const result = await storage.getReconModules(req.params.workspaceId as string, { limit, offset });
       res.json(result);
     } catch (err) {
       routeLog.error({ err }, "Get recon modules error");
@@ -117,17 +121,17 @@ export function createAdminRouter(httpServer: Server): Router {
     } catch (err) { res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" }); }
   });
 
-  adminRouter.get("/workspaces/:workspaceId/posture-history", async (req, res) => {
+  adminRouter.get("/workspaces/:workspaceId/posture-history", wsAuth, async (req, res) => {
     try {
       const limit = Math.min(parseInt(req.query.limit as string, 10) || 30, 100);
-      const snapshots = await storage.getPostureHistory(req.params.workspaceId, limit);
+      const snapshots = await storage.getPostureHistory(req.params.workspaceId as string, limit);
       res.json(snapshots);
     } catch (err) { res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" }); }
   });
 
-  adminRouter.post("/workspaces/:workspaceId/posture-history/backfill", async (req, res) => {
+  adminRouter.post("/workspaces/:workspaceId/posture-history/backfill", wsAuth, async (req, res) => {
     try {
-      const workspaceId = req.params.workspaceId;
+      const workspaceId = req.params.workspaceId as string;
       const [scansResult, existingSnapshots, modulesResult, findingsResult] = await Promise.all([
         storage.getScans(workspaceId),
         storage.getPostureHistory(workspaceId, 500),
@@ -174,9 +178,9 @@ export function createAdminRouter(httpServer: Server): Router {
     }
   });
 
-  adminRouter.get("/workspaces/:workspaceId/ip-enrichment", async (req, res) => {
+  adminRouter.get("/workspaces/:workspaceId/ip-enrichment", wsAuth, async (req, res) => {
     try {
-      const workspaceId = req.params.workspaceId;
+      const workspaceId = req.params.workspaceId as string;
       const { data: ipAssets } = await storage.getAssets(workspaceId);
       const ipsFromAssets = ipAssets.filter((a) => a.type === "ip").map((a) => a.value);
       const { data: modules } = await storage.getReconModules(workspaceId);
@@ -193,7 +197,7 @@ export function createAdminRouter(httpServer: Server): Router {
   });
 
   // Scan comparison: diff findings between two scans
-  adminRouter.get("/workspaces/:workspaceId/scan-diff", async (req, res) => {
+  adminRouter.get("/workspaces/:workspaceId/scan-diff", wsAuth, async (req, res) => {
     try {
       const { scan1, scan2 } = req.query;
       if (!scan1 || !scan2 || typeof scan1 !== "string" || typeof scan2 !== "string") {

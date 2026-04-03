@@ -5,6 +5,7 @@
 import { Router } from "express";
 import { sendError, sendNotFound } from "./response";
 import { createLogger } from "../logger";
+import { requireWorkspaceRole } from "./auth-middleware";
 
 const log = createLogger("playbooks-routes");
 
@@ -32,8 +33,10 @@ playbooksRouter.get("/playbooks/:id", async (req, res) => {
   }
 });
 
+const wsAuth = requireWorkspaceRole("owner", "admin", "analyst", "viewer");
+
 // POST /api/playbooks/:id/simulate — run attack simulation
-playbooksRouter.post("/playbooks/:id/simulate", async (req, res) => {
+playbooksRouter.post("/playbooks/:id/simulate", wsAuth, async (req, res) => {
   try {
     const workspaceId = (req.query.workspaceId as string) || (req.body?.workspaceId as string);
     if (!workspaceId) {
@@ -41,7 +44,7 @@ playbooksRouter.post("/playbooks/:id/simulate", async (req, res) => {
     }
 
     const { simulateAttack } = await import("../attack-simulation");
-    const result = await simulateAttack(workspaceId, req.params.id);
+    const result = await simulateAttack(workspaceId, req.params.id as string);
     res.json(result);
   } catch (err) {
     log.error({ err }, "Playbook simulation failed");

@@ -3,17 +3,20 @@ import { z } from "zod";
 import { storage } from "../storage";
 import { createLogger } from "../logger";
 import { triggerScan } from "../scan-trigger";
+import { requireWorkspaceRole } from "./auth-middleware";
 import { createScanSchema } from "./schemas";
 
 const routeLog = createLogger("routes");
 
 export const scansRouter = Router();
 
-scansRouter.get("/workspaces/:workspaceId/scans", async (req, res) => {
+const wsAuth = requireWorkspaceRole("owner", "admin", "analyst", "viewer");
+
+scansRouter.get("/workspaces/:workspaceId/scans", wsAuth, async (req, res) => {
   try {
     const limit = Math.min(parseInt(String(req.query.limit ?? "500"), 10) || 500, 5000);
     const offset = Math.max(parseInt(String(req.query.offset ?? "0"), 10) || 0, 0);
-    const result = await storage.getScans(req.params.workspaceId, { limit, offset });
+    const result = await storage.getScans(req.params.workspaceId as string, { limit, offset });
     res.json(result);
   } catch (err) {
     routeLog.error({ err }, "Get scans error");

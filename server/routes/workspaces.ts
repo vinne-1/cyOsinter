@@ -3,6 +3,7 @@ import { z } from "zod";
 import { storage } from "../storage";
 import { createLogger } from "../logger";
 import { createWorkspaceSchema, updateWorkspaceSchema, createAssetSchema } from "./schemas";
+import { requireWorkspaceRole } from "./auth-middleware";
 
 const routeLog = createLogger("routes");
 
@@ -18,12 +19,13 @@ workspacesRouter.get("/", async (_req, res) => {
   }
 });
 
-workspacesRouter.post("/:id/purge", async (req, res) => {
+workspacesRouter.post("/:workspaceId/purge", requireWorkspaceRole("owner"), async (req, res) => {
   try {
-    const ws = await storage.getWorkspace(req.params.id);
+    const workspaceId = req.params.workspaceId as string;
+    const ws = await storage.getWorkspace(workspaceId);
     if (!ws) return res.status(404).json({ message: "Workspace not found" });
-    await storage.purgeWorkspaceData(req.params.id);
-    res.status(200).set("Content-Type", "application/json").json({ purged: true, workspaceId: req.params.id });
+    await storage.purgeWorkspaceData(workspaceId);
+    res.status(200).set("Content-Type", "application/json").json({ purged: true, workspaceId });
   } catch (err) {
     routeLog.error({ err }, "Purge workspace error");
     res.status(500).json({ message: err instanceof Error ? err.message : "Failed to purge workspace" });
@@ -83,11 +85,14 @@ workspacesRouter.delete("/:id", async (req, res) => {
   }
 });
 
-workspacesRouter.get("/:workspaceId/assets", async (req, res) => {
+const wsAuth = requireWorkspaceRole("owner", "admin", "analyst", "viewer");
+const wsWrite = requireWorkspaceRole("owner", "admin", "analyst");
+
+workspacesRouter.get("/:workspaceId/assets", wsAuth, async (req, res) => {
   try {
     const limit = Math.min(parseInt(String(req.query.limit ?? "500"), 10) || 500, 5000);
     const offset = Math.max(parseInt(String(req.query.offset ?? "0"), 10) || 0, 0);
-    const result = await storage.getAssets(req.params.workspaceId, { limit, offset });
+    const result = await storage.getAssets(req.params.workspaceId as string, { limit, offset });
     res.json(result);
   } catch (err) {
     routeLog.error({ err }, "Get assets error");
@@ -95,7 +100,7 @@ workspacesRouter.get("/:workspaceId/assets", async (req, res) => {
   }
 });
 
-workspacesRouter.post("/:workspaceId/assets", async (req, res) => {
+workspacesRouter.post("/:workspaceId/assets", wsWrite, async (req, res) => {
   try {
     const parsed = createAssetSchema.parse({ ...req.body, workspaceId: req.params.workspaceId });
     const asset = await storage.createAsset(parsed);

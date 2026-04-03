@@ -4,15 +4,19 @@ import { storage } from "../storage";
 import { createLogger } from "../logger";
 import { getNextCronRun } from "../scan-scheduler";
 import { createScheduledScanSchema, updateScheduledScanSchema } from "./schemas";
+import { requireWorkspaceRole } from "./auth-middleware";
 
 const log = createLogger("routes:scheduled-scans");
+
+const wsAuth = requireWorkspaceRole("owner", "admin", "analyst", "viewer");
+const wsWrite = requireWorkspaceRole("owner", "admin", "analyst");
 
 export const scheduledScansRouter = Router();
 
 // GET /api/workspaces/:workspaceId/scheduled-scans
-scheduledScansRouter.get("/workspaces/:workspaceId/scheduled-scans", async (req, res) => {
+scheduledScansRouter.get("/workspaces/:workspaceId/scheduled-scans", wsAuth, async (req, res) => {
   try {
-    const list = await storage.getScheduledScans(req.params.workspaceId);
+    const list = await storage.getScheduledScans(req.params.workspaceId as string);
     res.json(list);
   } catch (err) {
     log.error({ err }, "Get scheduled scans error");
@@ -33,10 +37,10 @@ scheduledScansRouter.get("/scheduled-scans/:id", async (req, res) => {
 });
 
 // POST /api/workspaces/:workspaceId/scheduled-scans
-scheduledScansRouter.post("/workspaces/:workspaceId/scheduled-scans", async (req, res) => {
+scheduledScansRouter.post("/workspaces/:workspaceId/scheduled-scans", wsWrite, async (req, res) => {
   try {
     const parsed = createScheduledScanSchema.parse(req.body);
-    const workspaceId = req.params.workspaceId;
+    const workspaceId = req.params.workspaceId as string;
 
     // Verify workspace exists
     const workspace = await storage.getWorkspace(workspaceId);

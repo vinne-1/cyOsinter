@@ -2,17 +2,20 @@ import { Router } from "express";
 import { storage } from "../storage";
 import { createLogger } from "../logger";
 import { generateComplianceReport, generateAllComplianceReports } from "../compliance-mapper";
+import { requireWorkspaceRole } from "./auth-middleware";
 
 const log = createLogger("routes:analytics");
+
+const wsAuth = requireWorkspaceRole("owner", "admin", "analyst", "viewer");
 
 export const analyticsRouter = Router();
 
 // ── Compliance Mapping ──
 
 // GET /api/workspaces/:workspaceId/compliance
-analyticsRouter.get("/workspaces/:workspaceId/compliance", async (req, res) => {
+analyticsRouter.get("/workspaces/:workspaceId/compliance", wsAuth, async (req, res) => {
   try {
-    const { data: findings } = await storage.getFindings(req.params.workspaceId);
+    const { data: findings } = await storage.getFindings(req.params.workspaceId as string);
     const reports = generateAllComplianceReports(findings);
     res.json(reports);
   } catch (err) {
@@ -22,13 +25,13 @@ analyticsRouter.get("/workspaces/:workspaceId/compliance", async (req, res) => {
 });
 
 // GET /api/workspaces/:workspaceId/compliance/:framework
-analyticsRouter.get("/workspaces/:workspaceId/compliance/:framework", async (req, res) => {
+analyticsRouter.get("/workspaces/:workspaceId/compliance/:framework", wsAuth, async (req, res) => {
   try {
     const framework = req.params.framework as "owasp" | "cis" | "nist";
     if (!["owasp", "cis", "nist"].includes(framework)) {
       return res.status(400).json({ message: "Invalid framework. Use: owasp, cis, nist" });
     }
-    const { data: findings } = await storage.getFindings(req.params.workspaceId);
+    const { data: findings } = await storage.getFindings(req.params.workspaceId as string);
     const report = generateComplianceReport(findings, framework);
     res.json(report);
   } catch (err) {
@@ -40,10 +43,10 @@ analyticsRouter.get("/workspaces/:workspaceId/compliance/:framework", async (req
 // ── Vulnerability Trend Analytics ──
 
 // GET /api/workspaces/:workspaceId/trends/severity
-analyticsRouter.get("/workspaces/:workspaceId/trends/severity", async (req, res) => {
+analyticsRouter.get("/workspaces/:workspaceId/trends/severity", wsAuth, async (req, res) => {
   try {
     const limit = Math.min(parseInt(String(req.query.limit) || "30", 10) || 30, 100);
-    const snapshots = await storage.getPostureHistory(req.params.workspaceId, limit);
+    const snapshots = await storage.getPostureHistory(req.params.workspaceId as string, limit);
 
     // Return chronological order (oldest first for charts)
     const trend = snapshots.reverse().map((s) => ({
@@ -66,9 +69,9 @@ analyticsRouter.get("/workspaces/:workspaceId/trends/severity", async (req, res)
 });
 
 // GET /api/workspaces/:workspaceId/trends/findings
-analyticsRouter.get("/workspaces/:workspaceId/trends/findings", async (req, res) => {
+analyticsRouter.get("/workspaces/:workspaceId/trends/findings", wsAuth, async (req, res) => {
   try {
-    const { data: findings } = await storage.getFindings(req.params.workspaceId);
+    const { data: findings } = await storage.getFindings(req.params.workspaceId as string);
 
     // Group findings by discovery date (day resolution)
     const byDay = new Map<string, { total: number; critical: number; high: number; medium: number; low: number; info: number }>();
@@ -97,9 +100,9 @@ analyticsRouter.get("/workspaces/:workspaceId/trends/findings", async (req, res)
 });
 
 // GET /api/workspaces/:workspaceId/trends/categories
-analyticsRouter.get("/workspaces/:workspaceId/trends/categories", async (req, res) => {
+analyticsRouter.get("/workspaces/:workspaceId/trends/categories", wsAuth, async (req, res) => {
   try {
-    const { data: findings } = await storage.getFindings(req.params.workspaceId);
+    const { data: findings } = await storage.getFindings(req.params.workspaceId as string);
 
     const byCategory = new Map<string, { total: number; open: number; resolved: number; critical: number; high: number }>();
     for (const f of findings) {
@@ -125,9 +128,9 @@ analyticsRouter.get("/workspaces/:workspaceId/trends/categories", async (req, re
 });
 
 // GET /api/workspaces/:workspaceId/trends/mttr  (Mean Time to Resolve)
-analyticsRouter.get("/workspaces/:workspaceId/trends/mttr", async (req, res) => {
+analyticsRouter.get("/workspaces/:workspaceId/trends/mttr", wsAuth, async (req, res) => {
   try {
-    const { data: findings } = await storage.getFindings(req.params.workspaceId);
+    const { data: findings } = await storage.getFindings(req.params.workspaceId as string);
     const resolved = findings.filter((f) => f.status === "resolved" && f.resolvedAt && f.discoveredAt);
 
     const bySeverity: Record<string, { count: number; totalHours: number }> = {};

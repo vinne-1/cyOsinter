@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import { storage } from "../storage";
 import { createLogger } from "../logger";
+import { requireWorkspaceRole } from "./auth-middleware";
 import { createReportSchema } from "./schemas";
 import { buildReportContent } from "./report-helpers";
 
@@ -9,11 +10,14 @@ const routeLog = createLogger("routes");
 
 export const reportsRouter = Router();
 
-reportsRouter.get("/workspaces/:workspaceId/reports", async (req, res) => {
+const wsAuth = requireWorkspaceRole("owner", "admin", "analyst", "viewer");
+const wsWrite = requireWorkspaceRole("owner", "admin", "analyst");
+
+reportsRouter.get("/workspaces/:workspaceId/reports", wsAuth, async (req, res) => {
   try {
     const limit = Math.min(parseInt(String(req.query.limit ?? "500"), 10) || 500, 5000);
     const offset = Math.max(parseInt(String(req.query.offset ?? "0"), 10) || 0, 0);
-    const result = await storage.getReports(req.params.workspaceId, { limit, offset });
+    const result = await storage.getReports(req.params.workspaceId as string, { limit, offset });
     res.json(result);
   } catch (err) { res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" }); }
 });
@@ -26,15 +30,16 @@ reportsRouter.get("/reports/:id", async (req, res) => {
   } catch (err) { res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" }); }
 });
 
-reportsRouter.post("/workspaces/:workspaceId/reports", async (req, res) => {
+reportsRouter.post("/workspaces/:workspaceId/reports", wsWrite, async (req, res) => {
   try {
-    const parsed = createReportSchema.parse({ ...req.body, workspaceId: req.params.workspaceId });
+    const workspaceId = req.params.workspaceId as string;
+    const parsed = createReportSchema.parse({ ...req.body, workspaceId });
     const report = await storage.createReport(parsed);
 
     setTimeout(async () => {
       try {
         await storage.updateReport(report.id, { status: "generating" });
-        const { content, summary } = await buildReportContent(req.params.workspaceId, report.findingIds ?? undefined, report.type);
+        const { content, summary } = await buildReportContent(workspaceId, report.findingIds ?? undefined, report.type);
         await storage.updateReport(report.id, {
           status: "completed",
           content,
@@ -57,14 +62,16 @@ reportsRouter.post("/workspaces/:workspaceId/reports", async (req, res) => {
   }
 });
 
-reportsRouter.get("/workspaces/:workspaceId/reports/:reportId/export", async (req, res) => {
+reportsRouter.get("/workspaces/:workspaceId/reports/:reportId/export", wsAuth, async (req, res) => {
   try {
-    const report = await storage.getReport(req.params.reportId);
+    const workspaceId = req.params.workspaceId as string;
+    const reportId = req.params.reportId as string;
+    const report = await storage.getReport(reportId);
     if (!report) return res.status(404).json({ message: "Report not found" });
-    if (report.workspaceId !== req.params.workspaceId) return res.status(404).json({ message: "Report not found" });
+    if (report.workspaceId !== workspaceId) return res.status(404).json({ message: "Report not found" });
     if (report.status !== "completed") return res.status(400).json({ message: "Report not yet completed" });
 
-    const { data: allFindings } = await storage.getFindings(req.params.workspaceId);
+    const { data: allFindings } = await storage.getFindings(workspaceId);
     const reportFindings = allFindings
       .filter((f) => (report.findingIds || []).includes(f.id))
       .map((f) => ({
@@ -120,12 +127,14 @@ reportsRouter.get("/workspaces/:workspaceId/reports/:reportId/export", async (re
   }
 });
 
-reportsRouter.delete("/workspaces/:workspaceId/reports/:reportId", async (req, res) => {
+reportsRouter.delete("/workspaces/:workspaceId/reports/:reportId", wsWrite, async (req, res) => {
   try {
-    const report = await storage.getReport(req.params.reportId);
+    const workspaceId = req.params.workspaceId as string;
+    const reportId = req.params.reportId as string;
+    const report = await storage.getReport(reportId);
     if (!report) return res.status(404).json({ message: "Report not found" });
-    if (report.workspaceId !== req.params.workspaceId) return res.status(404).json({ message: "Report not found" });
-    await storage.deleteReport(req.params.reportId);
+    if (report.workspaceId !== workspaceId) return res.status(404).json({ message: "Report not found" });
+    await storage.deleteReport(reportId);
     res.status(204).send();
   } catch (err) {
     routeLog.error({ err }, "Delete report error");

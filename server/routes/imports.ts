@@ -4,9 +4,11 @@ import { storage } from "../storage";
 import { createLogger } from "../logger";
 import { parseNmap, nmapToTextSummary } from "../parsers/nmap";
 import { consolidateScanResults } from "../ai-service";
+import { requireWorkspaceRole } from "./auth-middleware";
 import { validSeverities } from "./schemas";
 
 const routeLog = createLogger("routes");
+const wsWrite = requireWorkspaceRole("owner", "admin", "analyst");
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -22,11 +24,12 @@ const upload = multer({
 
 export const importsRouter = Router();
 
-importsRouter.get("/workspaces/:workspaceId/imports", async (req, res) => {
+importsRouter.get("/workspaces/:workspaceId/imports", wsWrite, async (req, res) => {
   try {
-    const ws = await storage.getWorkspace(req.params.workspaceId);
+    const workspaceId = req.params.workspaceId as string;
+    const ws = await storage.getWorkspace(workspaceId);
     if (!ws) return res.status(404).json({ message: "Workspace not found" });
-    const scans = await storage.getUploadedScans(req.params.workspaceId);
+    const scans = await storage.getUploadedScans(workspaceId);
     res.json(scans);
   } catch (err) {
     routeLog.error({ err }, "List imports error");
@@ -34,9 +37,10 @@ importsRouter.get("/workspaces/:workspaceId/imports", async (req, res) => {
   }
 });
 
-importsRouter.post("/workspaces/:workspaceId/imports", upload.single("file"), async (req, res) => {
+importsRouter.post("/workspaces/:workspaceId/imports", wsWrite, upload.single("file"), async (req, res) => {
   try {
-    const ws = await storage.getWorkspace(req.params.workspaceId as string);
+    const workspaceId = req.params.workspaceId as string;
+    const ws = await storage.getWorkspace(workspaceId);
     if (!ws) return res.status(404).json({ message: "Workspace not found" });
     const file = req.file as Express.Multer.File | undefined;
     if (!file || !file.buffer) return res.status(400).json({ message: "No file uploaded" });
@@ -46,7 +50,7 @@ importsRouter.post("/workspaces/:workspaceId/imports", upload.single("file"), as
     const rawContent = file.buffer.toString("utf-8");
     const parsed = parseNmap(rawContent, type as "nmap" | "nikto" | "generic");
     const scan = await storage.createUploadedScan({
-      workspaceId: req.params.workspaceId as string,
+      workspaceId,
       filename: file.originalname,
       fileType: type,
       rawContent,
@@ -59,9 +63,10 @@ importsRouter.post("/workspaces/:workspaceId/imports", upload.single("file"), as
   }
 });
 
-importsRouter.post("/workspaces/:workspaceId/imports/:id/consolidate", async (req, res) => {
+importsRouter.post("/workspaces/:workspaceId/imports/:id/consolidate", wsWrite, async (req, res) => {
   try {
-    const { workspaceId, id } = req.params;
+    const workspaceId = req.params.workspaceId as string;
+    const id = req.params.id as string;
     const ws = await storage.getWorkspace(workspaceId);
     if (!ws) return res.status(404).json({ message: "Workspace not found" });
     const scan = await storage.getUploadedScan(id);
@@ -103,11 +108,13 @@ importsRouter.post("/workspaces/:workspaceId/imports/:id/consolidate", async (re
   }
 });
 
-importsRouter.delete("/workspaces/:workspaceId/imports/:id", async (req, res) => {
+importsRouter.delete("/workspaces/:workspaceId/imports/:id", wsWrite, async (req, res) => {
   try {
-    const scan = await storage.getUploadedScan(req.params.id);
-    if (!scan || scan.workspaceId !== req.params.workspaceId) return res.status(404).json({ message: "Import not found" });
-    await storage.deleteUploadedScan(req.params.id);
+    const workspaceId = req.params.workspaceId as string;
+    const id = req.params.id as string;
+    const scan = await storage.getUploadedScan(id);
+    if (!scan || scan.workspaceId !== workspaceId) return res.status(404).json({ message: "Import not found" });
+    await storage.deleteUploadedScan(id);
     res.status(200).json({ deleted: true });
   } catch (err) {
     routeLog.error({ err }, "Delete import error");

@@ -163,7 +163,8 @@ export function requireWorkspaceRole(...roles: string[]) {
       if (req.user.role === "superadmin") return next();
 
       const workspaceId = (req.params.workspaceId as string)
-        || (req.query.workspaceId as string);
+        || (req.query.workspaceId as string)
+        || (req.body?.workspaceId as string | undefined);
       if (!workspaceId) {
         sendError(res, 400, "Workspace ID is required");
         return;

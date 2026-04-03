@@ -5,15 +5,18 @@ import { createLogger } from "../logger";
 import { enrichFinding, generateWorkspaceInsights, buildFallbackInsights, analyzeFindingDetails, fetchCVEContextForInsights } from "../ai-service";
 import { searchThreatIntel } from "../tavily-service";
 import { getCVEForFinding } from "../cve-service";
+import { requireWorkspaceRole } from "./auth-middleware";
 import { updateFindingSchema } from "./schemas";
 
 const routeLog = createLogger("routes");
 
 export const findingsRouter = Router();
 
-findingsRouter.get("/workspaces/:workspaceId/findings", async (req, res) => {
+const wsAuth = requireWorkspaceRole("owner", "admin", "analyst", "viewer");
+
+findingsRouter.get("/workspaces/:workspaceId/findings", wsAuth, async (req, res) => {
   try {
-    const result = await storage.getFindings(req.params.workspaceId);
+    const result = await storage.getFindings(req.params.workspaceId as string);
     const { severity, status, search, page, pageSize } = req.query;
 
     let filtered = result.data as Array<Record<string, unknown>>;
@@ -69,33 +72,37 @@ findingsRouter.patch("/findings/:id", async (req, res) => {
   }
 });
 
-findingsRouter.post("/workspaces/:workspaceId/findings/:id/enrich", async (req, res) => {
+findingsRouter.post("/workspaces/:workspaceId/findings/:id/enrich", wsAuth, async (req, res) => {
   res.setTimeout(1800000); // 30 min for Ollama
   try {
-    const finding = await storage.getFinding(req.params.id);
+    const workspaceId = req.params.workspaceId as string;
+    const findingId = req.params.id as string;
+    const finding = await storage.getFinding(findingId);
     if (!finding) return res.status(404).json({ message: "Finding not found" });
-    if (finding.workspaceId !== req.params.workspaceId) return res.status(404).json({ message: "Finding not found" });
-    const { data: modules } = await storage.getReconModules(req.params.workspaceId);
+    if (finding.workspaceId !== workspaceId) return res.status(404).json({ message: "Finding not found" });
+    const { data: modules } = await storage.getReconModules(workspaceId);
     let result: { enhancedDescription: string; contextualRisks?: string; additionalRemediation?: string };
     try {
       result = await enrichFinding(finding, modules);
     } catch (enrichErr) {
-      routeLog.warn({ err: enrichErr, findingId: req.params.id }, "Enrich fallback for finding");
+      routeLog.warn({ err: enrichErr, findingId }, "Enrich fallback for finding");
       result = { enhancedDescription: finding.description };
     }
     const aiEnrichment = {
       ...result,
       enrichedAt: new Date().toISOString(),
     };
-    const updated = await storage.updateFinding(req.params.id, { aiEnrichment });
+    const updated = await storage.updateFinding(findingId, { aiEnrichment });
     if (!updated) return res.status(404).json({ message: "Finding not found" });
     res.json(updated);
   } catch (err) {
     routeLog.warn({ err }, "Enrich error");
-    const finding = await storage.getFinding(req.params.id);
-    if (finding && finding.workspaceId === req.params.workspaceId) {
+    const workspaceId = req.params.workspaceId as string;
+    const findingId = req.params.id as string;
+    const finding = await storage.getFinding(findingId);
+    if (finding && finding.workspaceId === workspaceId) {
       const aiEnrichment = { enhancedDescription: finding.description, enrichedAt: new Date().toISOString() };
-      const updated = await storage.updateFinding(req.params.id, { aiEnrichment }).catch(() => null);
+      const updated = await storage.updateFinding(findingId, { aiEnrichment }).catch(() => null);
       if (updated) return res.json(updated);
       return res.json({ ...finding, aiEnrichment });
     }
@@ -103,9 +110,9 @@ findingsRouter.post("/workspaces/:workspaceId/findings/:id/enrich", async (req, 
   }
 });
 
-findingsRouter.get("/workspaces/:workspaceId/ai-insights", async (req, res) => {
+findingsRouter.get("/workspaces/:workspaceId/ai-insights", wsAuth, async (req, res) => {
   try {
-    const { workspaceId } = req.params;
+    const workspaceId = req.params.workspaceId as string;
     const ws = await storage.getWorkspace(workspaceId);
     if (!ws) return res.status(404).json({ message: "Workspace not found" });
     const [findingsResult, modulesResult] = await Promise.all([
@@ -119,10 +126,10 @@ findingsRouter.get("/workspaces/:workspaceId/ai-insights", async (req, res) => {
   }
 });
 
-findingsRouter.post("/workspaces/:workspaceId/ai-insights/summary", async (req, res) => {
+findingsRouter.post("/workspaces/:workspaceId/ai-insights/summary", wsAuth, async (req, res) => {
   res.setTimeout(1800000); // 30 min for Ollama inference
   try {
-    const { workspaceId } = req.params;
+    const workspaceId = req.params.workspaceId as string;
     const ws = await storage.getWorkspace(workspaceId);
     if (!ws) return res.status(404).json({ message: "Workspace not found" });
     const [findingsResult, modulesResult] = await Promise.all([
@@ -145,11 +152,12 @@ findingsRouter.post("/workspaces/:workspaceId/ai-insights/summary", async (req, 
     const fallbackErrorDetail = msg.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, "").slice(0, 500);
     routeLog.warn({ msg }, "AI insights error, returning fallback");
     try {
-      const ws = await storage.getWorkspace(req.params.workspaceId);
+      const workspaceId = req.params.workspaceId as string;
+      const ws = await storage.getWorkspace(workspaceId);
       if (ws) {
         const [fRes, mRes] = await Promise.all([
-          storage.getFindings(req.params.workspaceId),
-          storage.getReconModules(req.params.workspaceId),
+          storage.getFindings(workspaceId),
+          storage.getReconModules(workspaceId),
         ]);
         const fallback = buildFallbackInsights(fRes.data, mRes.data, ws.name);
         const reason =
@@ -174,9 +182,10 @@ findingsRouter.post("/workspaces/:workspaceId/ai-insights/summary", async (req, 
   }
 });
 
-findingsRouter.post("/workspaces/:workspaceId/findings/:id/cve-lookup", async (req, res) => {
+findingsRouter.post("/workspaces/:workspaceId/findings/:id/cve-lookup", wsAuth, async (req, res) => {
   try {
-    const { workspaceId, id } = req.params;
+    const workspaceId = req.params.workspaceId as string;
+    const id = req.params.id as string;
     const finding = await storage.getFinding(id);
     if (!finding || finding.workspaceId !== workspaceId) return res.status(404).json({ message: "Finding not found" });
     const { data: modules } = await storage.getReconModules(workspaceId);
@@ -221,10 +230,11 @@ findingsRouter.post("/workspaces/:workspaceId/findings/:id/cve-lookup", async (r
   }
 });
 
-findingsRouter.post("/workspaces/:workspaceId/findings/:id/analyze", async (req, res) => {
+findingsRouter.post("/workspaces/:workspaceId/findings/:id/analyze", wsAuth, async (req, res) => {
   res.setTimeout(1800000); // 30 min for Ollama
   try {
-    const { workspaceId, id } = req.params;
+    const workspaceId = req.params.workspaceId as string;
+    const id = req.params.id as string;
     const finding = await storage.getFinding(id);
     if (!finding || finding.workspaceId !== workspaceId) return res.status(404).json({ message: "Finding not found" });
     const { data: modules } = await storage.getReconModules(workspaceId);
@@ -245,11 +255,13 @@ findingsRouter.post("/workspaces/:workspaceId/findings/:id/analyze", async (req,
     res.json({ ...result, finding: updated });
   } catch (err) {
     routeLog.warn({ err }, "Analyze error");
-    const finding = await storage.getFinding(req.params.id);
-    if (finding && finding.workspaceId === req.params.workspaceId) {
+    const workspaceId = req.params.workspaceId as string;
+    const id = req.params.id as string;
+    const finding = await storage.getFinding(id);
+    if (finding && finding.workspaceId === workspaceId) {
       const fallback = { analysis: finding.description, recommendations: [] };
       const aiEnrichment = (finding.aiEnrichment as Record<string, unknown>) ?? {};
-      const updated = await storage.updateFinding(req.params.id, {
+      const updated = await storage.updateFinding(id, {
         aiEnrichment: {
           ...aiEnrichment,
           detailedAnalysis: { ...fallback, analyzedAt: new Date().toISOString() },
@@ -262,11 +274,12 @@ findingsRouter.post("/workspaces/:workspaceId/findings/:id/analyze", async (req,
   }
 });
 
-findingsRouter.post("/workspaces/:workspaceId/findings/enrich-all", async (req, res) => {
+findingsRouter.post("/workspaces/:workspaceId/findings/enrich-all", wsAuth, async (req, res) => {
   res.setTimeout(3600000); // 60 min for batch (many findings x 30 min each)
   try {
-    const { data: findingsList } = await storage.getFindings(req.params.workspaceId);
-    const { data: modules } = await storage.getReconModules(req.params.workspaceId);
+    const workspaceId = req.params.workspaceId as string;
+    const { data: findingsList } = await storage.getFindings(workspaceId);
+    const { data: modules } = await storage.getReconModules(workspaceId);
     let enriched = 0;
     for (const f of findingsList) {
       try {
@@ -282,7 +295,8 @@ findingsRouter.post("/workspaces/:workspaceId/findings/enrich-all", async (req, 
     res.json({ enriched, total: findingsList.length });
   } catch (err) {
     routeLog.warn({ err }, "Enrich-all error");
-    const fallbackResult = await storage.getFindings(req.params.workspaceId).catch(() => ({ data: [], total: 0, limit: 0, offset: 0 }));
+    const workspaceId = req.params.workspaceId as string;
+    const fallbackResult = await storage.getFindings(workspaceId).catch(() => ({ data: [], total: 0, limit: 0, offset: 0 }));
     res.json({ enriched: 0, total: fallbackResult.total, partial: true });
   }
 });

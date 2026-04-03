@@ -80,7 +80,9 @@ findingWorkflowRouter.patch("/findings/bulk/workflow", async (req, res) => {
 
 // ── Finding groups (dedup) ──
 
-findingWorkflowRouter.get("/workspaces/:workspaceId/finding-groups", async (req, res) => {
+const wsAuth = requireWorkspaceRole("owner", "admin", "analyst", "viewer");
+
+findingWorkflowRouter.get("/workspaces/:workspaceId/finding-groups", wsAuth, async (req, res) => {
   try {
     // Finding groups would come from storage — for now use the dedup service
     const { getFindingGroups } = await import("../finding-dedup");

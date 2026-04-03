@@ -1,16 +1,20 @@
 import { Router } from "express";
 import { storage } from "../storage";
 import { createLogger } from "../logger";
+import { requireWorkspaceRole } from "./auth-middleware";
 
 const log = createLogger("routes:alerts");
+
+const wsAuth = requireWorkspaceRole("owner", "admin", "analyst", "viewer");
+const wsWrite = requireWorkspaceRole("owner", "admin", "analyst");
 
 export const alertsRouter = Router();
 
 // GET /api/workspaces/:workspaceId/alerts
-alertsRouter.get("/workspaces/:workspaceId/alerts", async (req, res) => {
+alertsRouter.get("/workspaces/:workspaceId/alerts", wsAuth, async (req, res) => {
   try {
     const limit = Math.min(parseInt(String(req.query.limit) || "50", 10) || 50, 200);
-    const alertsList = await storage.getAlerts(req.params.workspaceId, limit);
+    const alertsList = await storage.getAlerts(req.params.workspaceId as string, limit);
     res.json(alertsList);
   } catch (err) {
     log.error({ err }, "Get alerts error");
@@ -19,9 +23,9 @@ alertsRouter.get("/workspaces/:workspaceId/alerts", async (req, res) => {
 });
 
 // GET /api/workspaces/:workspaceId/alerts/unread-count
-alertsRouter.get("/workspaces/:workspaceId/alerts/unread-count", async (req, res) => {
+alertsRouter.get("/workspaces/:workspaceId/alerts/unread-count", wsAuth, async (req, res) => {
   try {
-    const count = await storage.getUnreadAlertCount(req.params.workspaceId);
+    const count = await storage.getUnreadAlertCount(req.params.workspaceId as string);
     res.json({ count });
   } catch (err) {
     log.error({ err }, "Get unread alert count error");
@@ -42,9 +46,9 @@ alertsRouter.patch("/alerts/:id/read", async (req, res) => {
 });
 
 // POST /api/workspaces/:workspaceId/alerts/mark-all-read
-alertsRouter.post("/workspaces/:workspaceId/alerts/mark-all-read", async (req, res) => {
+alertsRouter.post("/workspaces/:workspaceId/alerts/mark-all-read", wsWrite, async (req, res) => {
   try {
-    await storage.markAllAlertsRead(req.params.workspaceId);
+    await storage.markAllAlertsRead(req.params.workspaceId as string);
     res.json({ success: true });
   } catch (err) {
     log.error({ err }, "Mark all alerts read error");

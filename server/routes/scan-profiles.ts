@@ -3,6 +3,7 @@ import { z } from "zod";
 import { storage } from "../storage";
 import { createLogger } from "../logger";
 import type { ScanProfileConfig } from "@shared/schema";
+import { requireWorkspaceRole } from "./auth-middleware";
 
 const log = createLogger("scan-profiles");
 
@@ -39,10 +40,13 @@ const updateProfileSchema = z.object({
   isDefault: z.boolean().optional(),
 });
 
+const wsAuth = requireWorkspaceRole("owner", "admin", "analyst", "viewer");
+const wsWrite = requireWorkspaceRole("owner", "admin", "analyst");
+
 export const scanProfilesRouter = Router();
 
 // GET /api/scan-profiles?workspaceId=...
-scanProfilesRouter.get("/scan-profiles", async (req, res) => {
+scanProfilesRouter.get("/scan-profiles", wsAuth, async (req, res) => {
   try {
     const workspaceId = req.query.workspaceId as string;
     if (!workspaceId) return res.status(400).json({ message: "workspaceId required" });
@@ -67,7 +71,7 @@ scanProfilesRouter.get("/scan-profiles/:id", async (req, res) => {
 });
 
 // POST /api/scan-profiles
-scanProfilesRouter.post("/scan-profiles", async (req, res) => {
+scanProfilesRouter.post("/scan-profiles", wsWrite, async (req, res) => {
   try {
     const parsed = createProfileSchema.parse(req.body);
     const profile = await storage.createScanProfile({
@@ -83,10 +87,10 @@ scanProfilesRouter.post("/scan-profiles", async (req, res) => {
 });
 
 // PATCH /api/scan-profiles/:id
-scanProfilesRouter.patch("/scan-profiles/:id", async (req, res) => {
+scanProfilesRouter.patch("/scan-profiles/:id", wsWrite, async (req, res) => {
   try {
     const parsed = updateProfileSchema.parse(req.body);
-    const updated = await storage.updateScanProfile(req.params.id, {
+    const updated = await storage.updateScanProfile(req.params.id as string, {
       ...parsed,
       config: parsed.config as ScanProfileConfig | undefined,
     });
@@ -100,9 +104,9 @@ scanProfilesRouter.patch("/scan-profiles/:id", async (req, res) => {
 });
 
 // DELETE /api/scan-profiles/:id
-scanProfilesRouter.delete("/scan-profiles/:id", async (req, res) => {
+scanProfilesRouter.delete("/scan-profiles/:id", wsWrite, async (req, res) => {
   try {
-    await storage.deleteScanProfile(req.params.id);
+    await storage.deleteScanProfile(req.params.id as string);
     res.status(204).send();
   } catch (err) {
     log.error({ err }, "Failed to delete scan profile");
