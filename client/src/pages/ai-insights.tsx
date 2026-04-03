@@ -44,7 +44,7 @@ export default function AIInsights() {
   const [expandedFindingId, setExpandedFindingId] = useState<string | null>(null);
 
   const { data: insightsData, isLoading } = useQuery<WorkspaceInsightsData>({
-    queryKey: [`/api/workspaces/${selectedWorkspaceId ?? ""}/ai-insights`],
+    queryKey: [`/api/workspaces/${selectedWorkspaceId}/ai-insights`],
     enabled: !!selectedWorkspaceId,
   });
 

@@ -606,9 +606,11 @@ export default function Integrations() {
                 }}>Save</Button>
                 {ticketingStatus?.jira?.configured && (
                   <Button variant="ghost" size="sm" className="text-destructive" onClick={async () => {
-                    await apiRequest("DELETE", "/api/integrations/ticketing/jira");
-                    qc.invalidateQueries({ queryKey: ["/api/integrations/ticketing"] });
-                    toast({ title: "Jira config removed" });
+                    try {
+                      await apiRequest("DELETE", "/api/integrations/ticketing/jira");
+                      qc.invalidateQueries({ queryKey: ["/api/integrations/ticketing"] });
+                      toast({ title: "Jira config removed" });
+                    } catch (err) { toast({ title: "Error", description: err instanceof Error ? err.message : "Failed", variant: "destructive" }); }
                   }}>Remove</Button>
                 )}
               </div>
@@ -654,9 +656,11 @@ export default function Integrations() {
                 }}>Save</Button>
                 {ticketingStatus?.github?.configured && (
                   <Button variant="ghost" size="sm" className="text-destructive" onClick={async () => {
-                    await apiRequest("DELETE", "/api/integrations/ticketing/github");
-                    qc.invalidateQueries({ queryKey: ["/api/integrations/ticketing"] });
-                    toast({ title: "GitHub config removed" });
+                    try {
+                      await apiRequest("DELETE", "/api/integrations/ticketing/github");
+                      qc.invalidateQueries({ queryKey: ["/api/integrations/ticketing"] });
+                      toast({ title: "GitHub config removed" });
+                    } catch (err) { toast({ title: "Error", description: err instanceof Error ? err.message : "Failed", variant: "destructive" }); }
                   }}>Remove</Button>
                 )}
               </div>
