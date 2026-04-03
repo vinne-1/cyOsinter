@@ -24,7 +24,10 @@ export function initNotifications(httpServer: Server): void {
 
     ws.on("message", (raw) => {
       try {
-        const msg = JSON.parse(String(raw));
+        const str = String(raw);
+        // Reject oversized messages to prevent JSON.parse DoS
+        if (str.length > 4096) return;
+        const msg = JSON.parse(str);
         if (msg.type === "subscribe" && typeof msg.workspaceId === "string") {
           client.workspaceId = msg.workspaceId;
         }
