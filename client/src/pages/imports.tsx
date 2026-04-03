@@ -41,8 +41,10 @@ export default function Imports() {
       formData.append("file", file);
       formData.append("fileType", fileType);
       const url = buildUrl(`/api/workspaces/${selectedWorkspaceId}/imports`);
+      const token = localStorage.getItem("auth_token");
       const res = await fetch(url, {
         method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
         body: formData,
         credentials: "include",
       });

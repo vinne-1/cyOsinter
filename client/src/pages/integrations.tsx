@@ -598,12 +598,7 @@ export default function Integrations() {
               <div className="flex gap-2">
                 <Button size="sm" disabled={!jiraBaseUrl.trim() || !jiraToken.trim()} onClick={async () => {
                   try {
-                    const res = await fetch("/api/integrations/ticketing/jira", {
-                      method: "PUT",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ baseUrl: jiraBaseUrl.trim(), email: jiraEmail.trim(), apiToken: jiraToken.trim(), projectKey: jiraProjectKey.trim() }),
-                    });
-                    if (!res.ok) { const e = await res.json().catch(() => ({ message: "Failed" })); throw new Error(e.message); }
+                    await apiRequest("PUT", "/api/integrations/ticketing/jira", { baseUrl: jiraBaseUrl.trim(), email: jiraEmail.trim(), apiToken: jiraToken.trim(), projectKey: jiraProjectKey.trim() });
                     qc.invalidateQueries({ queryKey: ["/api/integrations/ticketing"] });
                     toast({ title: "Jira configured" });
                     setJiraToken("");
@@ -611,7 +606,7 @@ export default function Integrations() {
                 }}>Save</Button>
                 {ticketingStatus?.jira?.configured && (
                   <Button variant="ghost" size="sm" className="text-destructive" onClick={async () => {
-                    await fetch("/api/integrations/ticketing/jira", { method: "DELETE" });
+                    await apiRequest("DELETE", "/api/integrations/ticketing/jira");
                     qc.invalidateQueries({ queryKey: ["/api/integrations/ticketing"] });
                     toast({ title: "Jira config removed" });
                   }}>Remove</Button>
@@ -651,12 +646,7 @@ export default function Integrations() {
               <div className="flex gap-2">
                 <Button size="sm" disabled={!ghToken.trim() || !ghOwner.trim() || !ghRepo.trim()} onClick={async () => {
                   try {
-                    const res = await fetch("/api/integrations/ticketing/github", {
-                      method: "PUT",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ token: ghToken.trim(), owner: ghOwner.trim(), repo: ghRepo.trim() }),
-                    });
-                    if (!res.ok) { const e = await res.json().catch(() => ({ message: "Failed" })); throw new Error(e.message); }
+                    await apiRequest("PUT", "/api/integrations/ticketing/github", { token: ghToken.trim(), owner: ghOwner.trim(), repo: ghRepo.trim() });
                     qc.invalidateQueries({ queryKey: ["/api/integrations/ticketing"] });
                     toast({ title: "GitHub configured" });
                     setGhToken("");
@@ -664,7 +654,7 @@ export default function Integrations() {
                 }}>Save</Button>
                 {ticketingStatus?.github?.configured && (
                   <Button variant="ghost" size="sm" className="text-destructive" onClick={async () => {
-                    await fetch("/api/integrations/ticketing/github", { method: "DELETE" });
+                    await apiRequest("DELETE", "/api/integrations/ticketing/github");
                     qc.invalidateQueries({ queryKey: ["/api/integrations/ticketing"] });
                     toast({ title: "GitHub config removed" });
                   }}>Remove</Button>

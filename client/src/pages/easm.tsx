@@ -89,13 +89,7 @@ function NewScanDialog() {
   const { selectedWorkspaceId, selectedWorkspace } = useDomain();
 
   const { data: profiles = [] } = useQuery<ScanProfile[]>({
-    queryKey: ["/api/scan-profiles", selectedWorkspaceId],
-    queryFn: async () => {
-      if (!selectedWorkspaceId) return [];
-      const res = await fetch(`/api/scan-profiles?workspaceId=${selectedWorkspaceId}`);
-      if (!res.ok) return [];
-      return res.json();
-    },
+    queryKey: ["/api/scan-profiles", { workspaceId: selectedWorkspaceId }],
     enabled: !!selectedWorkspaceId,
   });
   const form = useForm<z.infer<typeof scanFormSchema>>({

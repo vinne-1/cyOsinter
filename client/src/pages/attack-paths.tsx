@@ -373,13 +373,7 @@ function AttackPathsPage() {
   const { selectedWorkspace: workspace } = useDomain();
 
   const { data: findings = [], isLoading } = useQuery<Finding[]>({
-    queryKey: ["/api/findings", workspace?.id],
-    queryFn: async () => {
-      if (!workspace) return [];
-      const res = await fetch(`/api/workspaces/${workspace.id}/findings`);
-      if (!res.ok) return [];
-      return res.json();
-    },
+    queryKey: [`/api/workspaces/${workspace?.id}/findings`],
     enabled: !!workspace,
   });
 

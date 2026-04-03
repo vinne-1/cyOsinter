@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { apiRequest } from "@/lib/queryClient";
 import { useDomain } from "@/lib/domain-context";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -56,27 +57,13 @@ function ScanProfilesPage() {
   });
 
   const { data: profiles = [], isLoading } = useQuery<ScanProfile[]>({
-    queryKey: ["/api/scan-profiles", workspace?.id],
-    queryFn: async () => {
-      if (!workspace) return [];
-      const res = await fetch(`/api/scan-profiles?workspaceId=${workspace.id}`);
-      if (!res.ok) throw new Error("Failed to load profiles");
-      return res.json();
-    },
+    queryKey: ["/api/scan-profiles", { workspaceId: workspace?.id }],
     enabled: !!workspace,
   });
 
   const createMutation = useMutation({
     mutationFn: async (data: typeof form) => {
-      const res = await fetch("/api/scan-profiles", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...data, workspaceId: workspace?.id }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ message: "Failed" }));
-        throw new Error(err.message);
-      }
+      const res = await apiRequest("POST", "/api/scan-profiles", { ...data, workspaceId: workspace?.id });
       return res.json();
     },
     onSuccess: () => {
@@ -90,15 +77,7 @@ function ScanProfilesPage() {
 
   const updateMutation = useMutation({
     mutationFn: async ({ id, data }: { id: string; data: typeof form }) => {
-      const res = await fetch(`/api/scan-profiles/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ message: "Failed" }));
-        throw new Error(err.message);
-      }
+      const res = await apiRequest("PATCH", `/api/scan-profiles/${id}`, data);
       return res.json();
     },
     onSuccess: () => {
@@ -113,7 +92,7 @@ function ScanProfilesPage() {
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
-      await fetch(`/api/scan-profiles/${id}`, { method: "DELETE" });
+      await apiRequest("DELETE", `/api/scan-profiles/${id}`);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/scan-profiles"] });
