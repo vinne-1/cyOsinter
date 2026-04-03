@@ -26,6 +26,9 @@ findingWorkflowRouter.patch("/findings/:id/workflow", async (req, res) => {
   try {
     const finding = await storage.getFinding(req.params.id);
     if (!finding) return sendNotFound(res, "Finding");
+    // Verify caller has access to the finding's workspace
+    const membership = await storage.getWorkspaceMember(finding.workspaceId, req.user!.id);
+    if (!membership) return sendNotFound(res, "Finding");
 
     const parsed = transitionSchema.parse(req.body);
     const updates: Record<string, unknown> = { workflowState: parsed.state };
@@ -59,6 +62,12 @@ findingWorkflowRouter.patch("/findings/bulk/workflow", async (req, res) => {
       try {
         const finding = await storage.getFinding(id);
         if (!finding) {
+          results.push({ id, success: false, error: "Not found" });
+          continue;
+        }
+        // Verify caller has access to the finding's workspace
+        const membership = await storage.getWorkspaceMember(finding.workspaceId, req.user!.id);
+        if (!membership) {
           results.push({ id, success: false, error: "Not found" });
           continue;
         }

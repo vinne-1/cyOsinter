@@ -36,9 +36,13 @@ alertsRouter.get("/workspaces/:workspaceId/alerts/unread-count", wsAuth, async (
 // PATCH /api/alerts/:id/read
 alertsRouter.patch("/alerts/:id/read", async (req, res) => {
   try {
-    const alert = await storage.markAlertRead(req.params.id);
+    const alert = await storage.getAlert(req.params.id);
     if (!alert) return res.status(404).json({ message: "Alert not found" });
-    res.json(alert);
+    // Verify caller has access to the alert's workspace
+    const membership = await storage.getWorkspaceMember(alert.workspaceId, req.user!.id);
+    if (!membership) return res.status(404).json({ message: "Alert not found" });
+    const updated = await storage.markAlertRead(req.params.id);
+    res.json(updated);
   } catch (err) {
     log.error({ err }, "Mark alert read error");
     res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
@@ -59,6 +63,11 @@ alertsRouter.post("/workspaces/:workspaceId/alerts/mark-all-read", wsWrite, asyn
 // DELETE /api/alerts/:id
 alertsRouter.delete("/alerts/:id", async (req, res) => {
   try {
+    const alert = await storage.getAlert(req.params.id);
+    if (!alert) return res.status(404).json({ message: "Alert not found" });
+    // Verify caller has access to the alert's workspace
+    const membership = await storage.getWorkspaceMember(alert.workspaceId, req.user!.id);
+    if (!membership) return res.status(404).json({ message: "Alert not found" });
     await storage.deleteAlert(req.params.id);
     res.status(204).send();
   } catch (err) {

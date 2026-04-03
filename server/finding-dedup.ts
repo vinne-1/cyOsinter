@@ -86,13 +86,11 @@ export async function groupFindings(workspaceId: string): Promise<number> {
       return 0;
     }
 
-    // Guard against O(n²) DoS — cap findings for grouping
+    // Guard against O(n²) DoS — cap findings for grouping (immutable slice)
     const MAX_FOR_GROUPING = 2000;
-    if (allFindings.length > MAX_FOR_GROUPING) {
-      log.warn({ workspaceId, total: allFindings.length, cap: MAX_FOR_GROUPING },
-        "Capping findings for grouping to prevent DoS");
-      allFindings.length = MAX_FOR_GROUPING;
-    }
+    const findingsToGroup = allFindings.length > MAX_FOR_GROUPING
+      ? (() => { log.warn({ workspaceId, total: allFindings.length, cap: MAX_FOR_GROUPING }, "Capping findings for grouping to prevent DoS"); return allFindings.slice(0, MAX_FOR_GROUPING); })()
+      : allFindings;
 
     const groups: Array<{
       members: typeof allFindings;
@@ -103,23 +101,23 @@ export async function groupFindings(workspaceId: string): Promise<number> {
 
     const assigned = new Set<string>();
 
-    for (let i = 0; i < allFindings.length; i++) {
-      if (assigned.has(allFindings[i].id)) {
+    for (let i = 0; i < findingsToGroup.length; i++) {
+      if (assigned.has(findingsToGroup[i].id)) {
         continue;
       }
 
-      const group = [allFindings[i]];
-      assigned.add(allFindings[i].id);
+      const group = [findingsToGroup[i]];
+      assigned.add(findingsToGroup[i].id);
 
-      for (let j = i + 1; j < allFindings.length; j++) {
-        if (assigned.has(allFindings[j].id)) {
+      for (let j = i + 1; j < findingsToGroup.length; j++) {
+        if (assigned.has(findingsToGroup[j].id)) {
           continue;
         }
 
-        const similarity = computeSimilarity(allFindings[i], allFindings[j]);
+        const similarity = computeSimilarity(findingsToGroup[i], findingsToGroup[j]);
         if (similarity > SIMILARITY_THRESHOLD) {
-          group.push(allFindings[j]);
-          assigned.add(allFindings[j].id);
+          group.push(findingsToGroup[j]);
+          assigned.add(findingsToGroup[j].id);
         }
       }
 
@@ -133,8 +131,8 @@ export async function groupFindings(workspaceId: string): Promise<number> {
 
         groups.push({
           members: group,
-          title: allFindings[i].title,
-          category: allFindings[i].category,
+          title: findingsToGroup[i].title,
+          category: findingsToGroup[i].category,
           severity: bestSeverity,
         });
       }

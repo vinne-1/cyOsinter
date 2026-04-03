@@ -26,7 +26,7 @@ async function isPrivateHost(hostname: string): Promise<boolean> {
       );
     });
   } catch {
-    return false;
+    return true; // fail-closed: if DNS resolution fails, treat as private
   }
 }
 
@@ -56,7 +56,10 @@ const createWebhookSchema = z.object({
 
 const updateWebhookSchema = z.object({
   name: z.string().min(1).optional(),
-  url: z.string().url().optional(),
+  url: z.string().url().refine(
+    (u) => { try { return new URL(u).protocol === "https:"; } catch { return false; } },
+    "Webhook URL must use HTTPS",
+  ).optional(),
   secret: z.string().nullable().optional(),
   events: z.array(z.string()).min(1).optional(),
   provider: z.enum(["generic", "slack", "teams", "pagerduty"]).optional(),
@@ -153,6 +156,14 @@ webhooksRouter.patch(
         .limit(1);
       if (!member || !["owner", "admin"].includes(member.role)) {
         return sendError(res, 403, "Forbidden");
+      }
+
+      // SSRF protection on URL update
+      if (parsed.data.url) {
+        const webhookHost = new URL(parsed.data.url).hostname;
+        if (await isPrivateHost(webhookHost)) {
+          return sendError(res, 400, "Webhook URL must not target private or internal networks");
+        }
       }
 
       const updates = { ...parsed.data } as Record<string, unknown>;

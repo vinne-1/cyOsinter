@@ -1,7 +1,7 @@
 import { eq, desc, and, sql, lt, asc, count } from "drizzle-orm";
 import { db } from "./db";
-import { workspaces, assets, scans, findings, reports, reconModules, continuousMonitoring, uploadedScans, postureSnapshots, alerts, scheduledScans, scanProfiles } from "@shared/schema";
-import type { Workspace, InsertWorkspace, Asset, InsertAsset, Scan, InsertScan, Finding, InsertFinding, Report, InsertReport, ReconModule, InsertReconModule, ContinuousMonitoring, InsertContinuousMonitoring, UploadedScan, InsertUploadedScan, PostureSnapshot, InsertPostureSnapshot, Alert, InsertAlert, ScheduledScan, InsertScheduledScan, ScanProfile, InsertScanProfile } from "@shared/schema";
+import { workspaces, assets, scans, findings, reports, reconModules, continuousMonitoring, uploadedScans, postureSnapshots, alerts, scheduledScans, scanProfiles, workspaceMembers } from "@shared/schema";
+import type { Workspace, InsertWorkspace, Asset, InsertAsset, Scan, InsertScan, Finding, InsertFinding, Report, InsertReport, ReconModule, InsertReconModule, ContinuousMonitoring, InsertContinuousMonitoring, UploadedScan, InsertUploadedScan, PostureSnapshot, InsertPostureSnapshot, Alert, InsertAlert, ScheduledScan, InsertScheduledScan, ScanProfile, InsertScanProfile, WorkspaceMember } from "@shared/schema";
 
 export interface PaginationOpts {
   limit?: number;
@@ -68,7 +68,11 @@ export interface IStorage {
   createPostureSnapshot(snapshot: InsertPostureSnapshot): Promise<PostureSnapshot>;
   getStuckScans(maxAgeMs: number): Promise<Scan[]>;
 
+  // Workspace Members
+  getWorkspaceMember(workspaceId: string, userId: string): Promise<WorkspaceMember | undefined>;
+
   // Alerts
+  getAlert(id: string): Promise<Alert | undefined>;
   getAlerts(workspaceId: string, limit?: number): Promise<Alert[]>;
   getUnreadAlertCount(workspaceId: string): Promise<number>;
   createAlert(alert: InsertAlert): Promise<Alert>;
@@ -375,6 +379,20 @@ export class DatabaseStorage implements IStorage {
   }
 
   // ── Alerts ──
+
+  // ── Workspace Members ──
+
+  async getWorkspaceMember(workspaceId: string, userId: string): Promise<WorkspaceMember | undefined> {
+    const [member] = await db.select().from(workspaceMembers)
+      .where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.userId, userId)))
+      .limit(1);
+    return member;
+  }
+
+  async getAlert(id: string): Promise<Alert | undefined> {
+    const [alert] = await db.select().from(alerts).where(eq(alerts.id, id)).limit(1);
+    return alert;
+  }
 
   async getAlerts(workspaceId: string, limit = 50): Promise<Alert[]> {
     return db.select().from(alerts)

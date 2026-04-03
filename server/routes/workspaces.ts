@@ -36,6 +36,9 @@ workspacesRouter.get("/:id", async (req, res) => {
   try {
     const ws = await storage.getWorkspace(req.params.id);
     if (!ws) return res.status(404).json({ message: "Workspace not found" });
+    // Verify caller is a member of this workspace
+    const membership = await storage.getWorkspaceMember(ws.id, req.user!.id);
+    if (!membership) return res.status(404).json({ message: "Workspace not found" });
     res.json(ws);
   } catch (err) { res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" }); }
 });
@@ -60,6 +63,13 @@ workspacesRouter.post("/", async (req, res) => {
 
 workspacesRouter.patch("/:id", async (req, res) => {
   try {
+    const ws = await storage.getWorkspace(req.params.id);
+    if (!ws) return res.status(404).json({ message: "Workspace not found" });
+    // Only owner/admin can update workspace settings
+    const membership = await storage.getWorkspaceMember(ws.id, req.user!.id);
+    if (!membership || !["owner", "admin"].includes(membership.role)) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
     const parsed = updateWorkspaceSchema.parse(req.body);
     const updated = await storage.updateWorkspace(req.params.id, parsed);
     if (!updated) return res.status(404).json({ message: "Workspace not found" });
@@ -77,6 +87,11 @@ workspacesRouter.delete("/:id", async (req, res) => {
   try {
     const ws = await storage.getWorkspace(req.params.id);
     if (!ws) return res.status(404).json({ message: "Workspace not found" });
+    // Only owner can delete a workspace
+    const membership = await storage.getWorkspaceMember(ws.id, req.user!.id);
+    if (!membership || membership.role !== "owner") {
+      return res.status(403).json({ message: "Forbidden" });
+    }
     await storage.deleteWorkspace(req.params.id);
     res.status(204).send();
   } catch (err) {

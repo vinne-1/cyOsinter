@@ -77,6 +77,11 @@ scheduledScansRouter.patch("/scheduled-scans/:id", async (req, res) => {
     const parsed = updateScheduledScanSchema.parse(req.body);
     const existing = await storage.getScheduledScan(req.params.id);
     if (!existing) return res.status(404).json({ message: "Scheduled scan not found" });
+    // Verify caller has analyst+ role in the schedule's workspace
+    const membership = await storage.getWorkspaceMember(existing.workspaceId, req.user!.id);
+    if (!membership || !["owner", "admin", "analyst"].includes(membership.role)) {
+      return res.status(404).json({ message: "Scheduled scan not found" });
+    }
 
     const updateData: Record<string, unknown> = { ...parsed };
 
@@ -102,6 +107,11 @@ scheduledScansRouter.delete("/scheduled-scans/:id", async (req, res) => {
   try {
     const existing = await storage.getScheduledScan(req.params.id);
     if (!existing) return res.status(404).json({ message: "Scheduled scan not found" });
+    // Verify caller has analyst+ role in the schedule's workspace
+    const membership = await storage.getWorkspaceMember(existing.workspaceId, req.user!.id);
+    if (!membership || !["owner", "admin", "analyst"].includes(membership.role)) {
+      return res.status(404).json({ message: "Scheduled scan not found" });
+    }
     await storage.deleteScheduledScan(req.params.id);
     res.status(204).send();
   } catch (err) {

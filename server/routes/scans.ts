@@ -28,6 +28,9 @@ scansRouter.get("/scans/:id", async (req, res) => {
   try {
     const scan = await storage.getScan(req.params.id);
     if (!scan) return res.status(404).json({ message: "Scan not found" });
+    // Verify caller has access to the scan's workspace
+    const membership = await storage.getWorkspaceMember(scan.workspaceId, req.user!.id);
+    if (!membership) return res.status(404).json({ message: "Scan not found" });
     res.json(scan);
   } catch (err) { res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" }); }
 });
@@ -36,6 +39,11 @@ scansRouter.delete("/scans/:id", async (req, res) => {
   try {
     const scan = await storage.getScan(req.params.id);
     if (!scan) return res.status(404).json({ message: "Scan not found" });
+    // Verify caller has admin+ role in the scan's workspace
+    const membership = await storage.getWorkspaceMember(scan.workspaceId, req.user!.id);
+    if (!membership || !["owner", "admin", "analyst"].includes(membership.role)) {
+      return res.status(404).json({ message: "Scan not found" });
+    }
     await storage.deleteScan(req.params.id);
     res.status(204).send();
   } catch (err) { res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" }); }

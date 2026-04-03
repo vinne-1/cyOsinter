@@ -53,12 +53,20 @@ findingsRouter.get("/findings/:id", async (req, res) => {
   try {
     const finding = await storage.getFinding(req.params.id);
     if (!finding) return res.status(404).json({ message: "Finding not found" });
+    // Verify caller has access to the finding's workspace
+    const membership = await storage.getWorkspaceMember(finding.workspaceId, req.user!.id);
+    if (!membership) return res.status(404).json({ message: "Finding not found" });
     res.json(finding);
   } catch (err) { res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" }); }
 });
 
 findingsRouter.patch("/findings/:id", async (req, res) => {
   try {
+    const finding = await storage.getFinding(req.params.id);
+    if (!finding) return res.status(404).json({ message: "Finding not found" });
+    // Verify caller has access to the finding's workspace
+    const membership = await storage.getWorkspaceMember(finding.workspaceId, req.user!.id);
+    if (!membership) return res.status(404).json({ message: "Finding not found" });
     const parsed = updateFindingSchema.parse(req.body);
     const updated = await storage.updateFinding(req.params.id, parsed);
     if (!updated) return res.status(404).json({ message: "Finding not found" });
