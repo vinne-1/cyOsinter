@@ -236,20 +236,20 @@ export async function getServerLocation(ip: string): Promise<{ country?: string;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 5000);
   try {
-    const res = await fetch(`http://ip-api.com/json/${ip}?fields=country,regionName,city,org,lat,lon`, {
+    const res = await fetch(`https://ipapi.co/${ip}/json/`, {
       signal: controller.signal,
       headers: { "User-Agent": "Cyshield-Scanner/1.0" },
     });
     if (!res.ok) return null;
     const data = await res.json();
-    if (data.country === undefined && data.regionName === undefined) return null;
+    if (data.country_name === undefined && data.region === undefined) return null;
     return {
-      country: data.country,
-      region: data.regionName,
+      country: data.country_name,
+      region: data.region,
       city: data.city,
       org: data.org,
-      lat: data.lat,
-      lon: data.lon,
+      lat: data.latitude,
+      lon: data.longitude,
     };
   } catch {
     return null;

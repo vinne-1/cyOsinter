@@ -21,11 +21,11 @@ export function createAdminRouter(httpServer: Server): Router {
   const wsAuth = requireWorkspaceRole("owner", "admin", "analyst", "viewer");
   const wsOwnerAdmin = requireWorkspaceRole("owner", "admin");
 
-  adminRouter.get("/integrations/status", (_req, res) => {
+  adminRouter.get("/integrations/status", requireAdmin, (_req, res) => {
     res.json(getIntegrationsStatus());
   });
 
-  adminRouter.get("/ollama/status", async (_req, res) => {
+  adminRouter.get("/ollama/status", requireAdmin, async (_req, res) => {
     try {
       const status = await getOllamaStatus();
       res.json(status);
@@ -51,7 +51,7 @@ export function createAdminRouter(httpServer: Server): Router {
       res.json({ recovered: stuck.length, scanIds: stuck.map((s) => s.id) });
     } catch (err) {
       routeLog.error({ err }, "Recover stuck scans error");
-      res.status(500).json({ message: err instanceof Error ? err.message : "Failed to recover stuck scans" });
+      res.status(500).json({ message: "Failed to recover stuck scans" });
     }
   });
 
@@ -75,8 +75,7 @@ export function createAdminRouter(httpServer: Server): Router {
       if (error instanceof z.ZodError) {
         return res.status(400).json({ message: error.errors[0]?.message || "Validation error" });
       }
-      const message = error instanceof Error ? error.message : "Unknown error";
-      res.status(400).json({ message });
+      res.status(400).json({ message: "Bad request" });
     }
   });
 
@@ -89,8 +88,7 @@ export function createAdminRouter(httpServer: Server): Router {
       if (error instanceof z.ZodError) {
         return res.status(400).json({ message: error.errors[0]?.message || "Validation error" });
       }
-      const message = error instanceof Error ? error.message : "Unknown error";
-      res.status(400).json({ message });
+      res.status(400).json({ message: "Bad request" });
     }
   });
 
@@ -98,7 +96,7 @@ export function createAdminRouter(httpServer: Server): Router {
     try {
       const status = getMonitoringStatus(req.params.workspaceId as string);
       res.json(status);
-    } catch (err) { res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" }); }
+    } catch (err) { res.status(500).json({ message: "Internal server error" }); }
   });
 
   adminRouter.get("/workspaces/:workspaceId/recon-modules", wsAuth, async (req, res) => {
@@ -109,7 +107,7 @@ export function createAdminRouter(httpServer: Server): Router {
       res.json(result);
     } catch (err) {
       routeLog.error({ err }, "Get recon modules error");
-      res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+      res.status(500).json({ message: "Internal server error" });
     }
   });
 
@@ -117,8 +115,11 @@ export function createAdminRouter(httpServer: Server): Router {
     try {
       const mod = await storage.getReconModule(req.params.id);
       if (!mod) return res.status(404).json({ message: "Module not found" });
+      // Verify caller is a member of the module's workspace
+      const membership = await storage.getWorkspaceMember(mod.workspaceId, req.user!.id);
+      if (!membership) return res.status(404).json({ message: "Module not found" });
       res.json(mod);
-    } catch (err) { res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" }); }
+    } catch (err) { res.status(500).json({ message: "Internal server error" }); }
   });
 
   adminRouter.get("/workspaces/:workspaceId/posture-history", wsAuth, async (req, res) => {
@@ -126,7 +127,7 @@ export function createAdminRouter(httpServer: Server): Router {
       const limit = Math.min(parseInt(req.query.limit as string, 10) || 30, 100);
       const snapshots = await storage.getPostureHistory(req.params.workspaceId as string, limit);
       res.json(snapshots);
-    } catch (err) { res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" }); }
+    } catch (err) { res.status(500).json({ message: "Internal server error" }); }
   });
 
   adminRouter.post("/workspaces/:workspaceId/posture-history/backfill", wsAuth, async (req, res) => {
@@ -174,7 +175,7 @@ export function createAdminRouter(httpServer: Server): Router {
       res.json({ created, snapshots });
     } catch (err) {
       routeLog.error({ err }, "Posture history backfill error");
-      res.status(500).json({ message: err instanceof Error ? err.message : "Backfill failed" });
+      res.status(500).json({ message: "Backfill failed" });
     }
   });
 
@@ -192,7 +193,7 @@ export function createAdminRouter(httpServer: Server): Router {
       res.json(ipEnrichment);
     } catch (err) {
       routeLog.error({ err }, "IP enrichment error");
-      res.status(500).json({ message: err instanceof Error ? err.message : "IP enrichment failed" });
+      res.status(500).json({ message: "IP enrichment failed" });
     }
   });
 
@@ -212,7 +213,7 @@ export function createAdminRouter(httpServer: Server): Router {
       const resolvedFindings = s1Findings.filter((f) => !s2Keys.has(`${f.title}|${f.affectedAsset}|${f.category}`));
       const persistent = s2Findings.filter((f) => s1Keys.has(`${f.title}|${f.affectedAsset}|${f.category}`));
       res.json({ scan1: scan1, scan2: scan2, new: newFindings, resolved: resolvedFindings, persistent, summary: { newCount: newFindings.length, resolvedCount: resolvedFindings.length, persistentCount: persistent.length } });
-    } catch (err) { res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" }); }
+    } catch (err) { res.status(500).json({ message: "Internal server error" }); }
   });
 
   return adminRouter;

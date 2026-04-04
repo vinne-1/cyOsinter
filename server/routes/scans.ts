@@ -20,7 +20,7 @@ scansRouter.get("/workspaces/:workspaceId/scans", wsAuth, async (req, res) => {
     res.json(result);
   } catch (err) {
     routeLog.error({ err }, "Get scans error");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
@@ -32,7 +32,7 @@ scansRouter.get("/scans/:id", async (req, res) => {
     const membership = await storage.getWorkspaceMember(scan.workspaceId, req.user!.id);
     if (!membership) return res.status(404).json({ message: "Scan not found" });
     res.json(scan);
-  } catch (err) { res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" }); }
+  } catch (err) { res.status(500).json({ message: "Internal server error" }); }
 });
 
 scansRouter.delete("/scans/:id", async (req, res) => {
@@ -46,7 +46,7 @@ scansRouter.delete("/scans/:id", async (req, res) => {
     }
     await storage.deleteScan(req.params.id);
     res.status(204).send();
-  } catch (err) { res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" }); }
+  } catch (err) { res.status(500).json({ message: "Internal server error" }); }
 });
 
 scansRouter.post("/scans", async (req, res) => {
@@ -74,8 +74,16 @@ scansRouter.post("/scans", async (req, res) => {
       let ws = await storage.getWorkspaceByName(parsed.target);
       if (!ws) {
         ws = await storage.createWorkspace({ name: parsed.target, description: null, status: "active" });
+        // Auto-add the creating user as owner
+        await storage.addWorkspaceMember(ws.id, req.user!.id, "owner");
       }
       workspaceId = ws.id;
+    }
+
+    // Verify caller is a member of the target workspace (at least analyst)
+    const membership = await storage.getWorkspaceMember(workspaceId, req.user!.id);
+    if (!membership || !["owner", "admin", "analyst"].includes(membership.role)) {
+      return res.status(403).json({ message: "You do not have permission to scan this workspace" });
     }
 
     // Prevent duplicate concurrent scans for same target
@@ -96,7 +104,6 @@ scansRouter.post("/scans", async (req, res) => {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ message: error.errors[0]?.message || "Validation error" });
     }
-    const message = error instanceof Error ? error.message : "Unknown error";
-    res.status(400).json({ message });
+    res.status(400).json({ message: "Bad request" });
   }
 });

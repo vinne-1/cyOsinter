@@ -191,15 +191,20 @@ export async function fetchSitemapUrls(domain: string, limit: number): Promise<s
   }
   if (!res || res.status !== 200 || !res.body) return [];
   const body = res.body;
+  // Filter URLs to only those on the target domain (SSRF prevention)
+  const isOnDomain = (u: string) => {
+    try { return new URL(u).hostname === domain || new URL(u).hostname.endsWith(`.${domain}`); }
+    catch { return false; }
+  };
   if (/<sitemapindex/i.test(body)) {
-    const sitemapLocs = parseSitemapUrls(body, 20);
+    const sitemapLocs = parseSitemapUrls(body, 20).filter(isOnDomain);
     const all: string[] = [];
     for (const loc of sitemapLocs) {
       const sub = await httpGet(loc);
-      if (sub && sub.status === 200 && sub.body) all.push(...parseSitemapUrls(sub.body, Math.min(limit, 500)));
+      if (sub && sub.status === 200 && sub.body) all.push(...parseSitemapUrls(sub.body, Math.min(limit, 500)).filter(isOnDomain));
       if (all.length >= limit) break;
     }
     return all.slice(0, limit);
   }
-  return parseSitemapUrls(body, limit);
+  return parseSitemapUrls(body, limit).filter(isOnDomain);
 }

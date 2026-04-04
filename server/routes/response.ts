@@ -47,7 +47,6 @@ export function errorHandler(err: unknown, req: Request, res: Response, _next: N
     return;
   }
 
-  const message = err instanceof Error ? err.message : "Internal server error";
   log.error({ err, method: req.method, url: req.url }, "Unhandled API error");
-  sendError(res, 500, message);
+  sendError(res, 500, "Internal server error");
 }

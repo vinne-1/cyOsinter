@@ -9,13 +9,13 @@ const routeLog = createLogger("routes");
 
 export const workspacesRouter = Router();
 
-workspacesRouter.get("/", async (_req, res) => {
+workspacesRouter.get("/", async (req, res) => {
   try {
-    const ws = await storage.getWorkspaces();
+    const ws = await storage.getWorkspacesByUserId(req.user!.id);
     res.json(ws);
   } catch (err) {
     routeLog.error({ err }, "Get workspaces error");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
@@ -28,7 +28,7 @@ workspacesRouter.post("/:workspaceId/purge", requireWorkspaceRole("owner"), asyn
     res.status(200).set("Content-Type", "application/json").json({ purged: true, workspaceId });
   } catch (err) {
     routeLog.error({ err }, "Purge workspace error");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Failed to purge workspace" });
+    res.status(500).json({ message: "Failed to purge workspace" });
   }
 });
 
@@ -40,7 +40,7 @@ workspacesRouter.get("/:id", async (req, res) => {
     const membership = await storage.getWorkspaceMember(ws.id, req.user!.id);
     if (!membership) return res.status(404).json({ message: "Workspace not found" });
     res.json(ws);
-  } catch (err) { res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" }); }
+  } catch (err) { res.status(500).json({ message: "Internal server error" }); }
 });
 
 workspacesRouter.post("/", async (req, res) => {
@@ -56,8 +56,7 @@ workspacesRouter.post("/", async (req, res) => {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ message: error.errors[0]?.message || "Validation error" });
     }
-    const message = error instanceof Error ? error.message : "Unknown error";
-    res.status(400).json({ message });
+    res.status(400).json({ message: "Bad request" });
   }
 });
 
@@ -78,8 +77,7 @@ workspacesRouter.patch("/:id", async (req, res) => {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ message: error.errors[0]?.message || "Validation error" });
     }
-    const message = error instanceof Error ? error.message : "Unknown error";
-    res.status(400).json({ message });
+    res.status(400).json({ message: "Bad request" });
   }
 });
 
@@ -96,7 +94,7 @@ workspacesRouter.delete("/:id", async (req, res) => {
     res.status(204).send();
   } catch (err) {
     routeLog.error({ err }, "Delete workspace error");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
@@ -111,7 +109,7 @@ workspacesRouter.get("/:workspaceId/assets", wsAuth, async (req, res) => {
     res.json(result);
   } catch (err) {
     routeLog.error({ err }, "Get assets error");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
@@ -124,7 +122,6 @@ workspacesRouter.post("/:workspaceId/assets", wsWrite, async (req, res) => {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ message: error.errors[0]?.message || "Validation error" });
     }
-    const message = error instanceof Error ? error.message : "Unknown error";
-    res.status(400).json({ message });
+    res.status(400).json({ message: "Bad request" });
   }
 });

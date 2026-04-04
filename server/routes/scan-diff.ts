@@ -21,6 +21,6 @@ scanDiffRouter.get("/scans/:id1/diff/:id2", async (req, res) => {
     if (err instanceof Error && err.message.includes("not found")) {
       return sendNotFound(res, "Scan");
     }
-    sendError(res, 500, err instanceof Error ? err.message : "Internal error");
+    sendError(res, 500, "Internal server error");
   }
 });

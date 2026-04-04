@@ -33,7 +33,7 @@ importsRouter.get("/workspaces/:workspaceId/imports", wsWrite, async (req, res) 
     res.json(scans);
   } catch (err) {
     routeLog.error({ err }, "List imports error");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Failed to list imports" });
+    res.status(500).json({ message: "Failed to list imports" });
   }
 });
 
@@ -59,7 +59,7 @@ importsRouter.post("/workspaces/:workspaceId/imports", wsWrite, upload.single("f
     res.status(201).json(scan);
   } catch (err) {
     routeLog.error({ err }, "Upload import error");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Failed to upload" });
+    res.status(500).json({ message: "Failed to upload" });
   }
 });
 
@@ -104,7 +104,7 @@ importsRouter.post("/workspaces/:workspaceId/imports/:id/consolidate", wsWrite, 
     res.json({ newCount: result.newFindings.length, mergedCount: result.mergedUpdates.length });
   } catch (err) {
     routeLog.error({ err }, "Consolidate error");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Consolidation failed" });
+    res.status(500).json({ message: "Consolidation failed" });
   }
 });
 
@@ -118,6 +118,6 @@ importsRouter.delete("/workspaces/:workspaceId/imports/:id", wsWrite, async (req
     res.status(200).json({ deleted: true });
   } catch (err) {
     routeLog.error({ err }, "Delete import error");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Failed to delete" });
+    res.status(500).json({ message: "Failed to delete" });
   }
 });

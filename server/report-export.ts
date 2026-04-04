@@ -70,6 +70,16 @@ export function generateReportCsv(input: ReportExportInput): string {
   return lines.join("\n");
 }
 
+/** Sanitize a string for Excel to prevent formula injection */
+function escapeExcelCell(value: string): string {
+  const str = String(value ?? "");
+  const dangerous = ["=", "+", "-", "@", "\t", "\r"];
+  if (dangerous.some((c) => str.startsWith(c))) {
+    return `'${str}`;
+  }
+  return str;
+}
+
 export async function generateReportExcel(input: ReportExportInput): Promise<Buffer> {
   const wb = new ExcelJS.Workbook();
 
@@ -78,13 +88,13 @@ export async function generateReportExcel(input: ReportExportInput): Promise<Buf
   wsFindings.addRow(["ID", "Title", "Severity", "Status", "Category", "Affected Asset", "Description"]);
   for (const f of input.findings) {
     wsFindings.addRow([
-      f.id,
-      f.title,
-      f.severity,
-      f.status ?? "",
-      f.category ?? "",
-      f.affectedAsset ?? "",
-      (f.description ?? "").replace(/\n/g, " ").slice(0, 2000),
+      escapeExcelCell(f.id),
+      escapeExcelCell(f.title),
+      escapeExcelCell(f.severity),
+      escapeExcelCell(f.status ?? ""),
+      escapeExcelCell(f.category ?? ""),
+      escapeExcelCell(f.affectedAsset ?? ""),
+      escapeExcelCell((f.description ?? "").replace(/\n/g, " ").slice(0, 2000)),
     ]);
   }
 

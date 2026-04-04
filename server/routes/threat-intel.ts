@@ -25,7 +25,7 @@ threatIntelRouter.post("/threat-intel/lookup", async (req, res) => {
   } catch (err) {
     if (err instanceof z.ZodError) return sendValidationError(res, err.errors[0]?.message ?? "Validation error");
     log.error({ err }, "Threat intel lookup failed");
-    sendError(res, 500, err instanceof Error ? err.message : "Internal error");
+    sendError(res, 500, "Internal server error");
   }
 });
 
@@ -42,6 +42,6 @@ threatIntelRouter.post("/threat-intel/enrich", async (req, res) => {
     res.json({ success: true, enrichedCount });
   } catch (err) {
     log.error({ err }, "Threat intel enrichment failed");
-    sendError(res, 500, err instanceof Error ? err.message : "Internal error");
+    sendError(res, 500, "Internal server error");
   }
 });

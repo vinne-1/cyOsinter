@@ -24,7 +24,7 @@ assetRiskRouter.get("/asset-risk", requireAuth, requireWorkspaceRole("owner", "a
     res.json(scores);
   } catch (err) {
     log.error({ err }, "Asset risk calculation failed");
-    sendError(res, 500, err instanceof Error ? err.message : "Internal error");
+    sendError(res, 500, "Internal server error");
   }
 });
 
@@ -36,6 +36,6 @@ assetRiskRouter.get("/asset-risk/:assetId/history", requireAuth, async (req, res
     res.json(history);
   } catch (err) {
     log.error({ err }, "Asset risk history lookup failed");
-    sendError(res, 500, err instanceof Error ? err.message : "Internal error");
+    sendError(res, 500, "Internal server error");
   }
 });

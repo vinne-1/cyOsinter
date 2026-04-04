@@ -54,7 +54,7 @@ scanProfilesRouter.get("/scan-profiles", wsAuth, async (req, res) => {
     res.json(profiles);
   } catch (err) {
     log.error({ err }, "Failed to list scan profiles");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
@@ -63,10 +63,13 @@ scanProfilesRouter.get("/scan-profiles/:id", async (req, res) => {
   try {
     const profile = await storage.getScanProfile(req.params.id);
     if (!profile) return res.status(404).json({ message: "Profile not found" });
+    // Verify caller is a member of the profile's workspace
+    const membership = await storage.getWorkspaceMember(profile.workspaceId, req.user!.id);
+    if (!membership) return res.status(404).json({ message: "Profile not found" });
     res.json(profile);
   } catch (err) {
     log.error({ err }, "Failed to get scan profile");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
@@ -82,13 +85,20 @@ scanProfilesRouter.post("/scan-profiles", wsWrite, async (req, res) => {
   } catch (err) {
     if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0]?.message });
     log.error({ err }, "Failed to create scan profile");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
 // PATCH /api/scan-profiles/:id
-scanProfilesRouter.patch("/scan-profiles/:id", wsWrite, async (req, res) => {
+scanProfilesRouter.patch("/scan-profiles/:id", async (req, res) => {
   try {
+    const existing = await storage.getScanProfile(req.params.id);
+    if (!existing) return res.status(404).json({ message: "Profile not found" });
+    // Verify caller has write access in the profile's workspace
+    const membership = await storage.getWorkspaceMember(existing.workspaceId, req.user!.id);
+    if (!membership || !["owner", "admin", "analyst"].includes(membership.role)) {
+      return res.status(404).json({ message: "Profile not found" });
+    }
     const parsed = updateProfileSchema.parse(req.body);
     const updated = await storage.updateScanProfile(req.params.id as string, {
       ...parsed,
@@ -99,17 +109,24 @@ scanProfilesRouter.patch("/scan-profiles/:id", wsWrite, async (req, res) => {
   } catch (err) {
     if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0]?.message });
     log.error({ err }, "Failed to update scan profile");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
 // DELETE /api/scan-profiles/:id
-scanProfilesRouter.delete("/scan-profiles/:id", wsWrite, async (req, res) => {
+scanProfilesRouter.delete("/scan-profiles/:id", async (req, res) => {
   try {
+    const existing = await storage.getScanProfile(req.params.id);
+    if (!existing) return res.status(404).json({ message: "Profile not found" });
+    // Verify caller has write access in the profile's workspace
+    const membership = await storage.getWorkspaceMember(existing.workspaceId, req.user!.id);
+    if (!membership || !["owner", "admin", "analyst"].includes(membership.role)) {
+      return res.status(404).json({ message: "Profile not found" });
+    }
     await storage.deleteScanProfile(req.params.id as string);
     res.status(204).send();
   } catch (err) {
     log.error({ err }, "Failed to delete scan profile");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal server error" });
   }
 });

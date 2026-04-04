@@ -1,4 +1,4 @@
-import { eq, desc, and, sql, lt, asc, count } from "drizzle-orm";
+import { eq, desc, and, sql, lt, asc, count, inArray } from "drizzle-orm";
 import { db } from "./db";
 import { workspaces, assets, scans, findings, reports, reconModules, continuousMonitoring, uploadedScans, postureSnapshots, alerts, scheduledScans, scanProfiles, workspaceMembers } from "@shared/schema";
 import type { Workspace, InsertWorkspace, Asset, InsertAsset, Scan, InsertScan, Finding, InsertFinding, Report, InsertReport, ReconModule, InsertReconModule, ContinuousMonitoring, InsertContinuousMonitoring, UploadedScan, InsertUploadedScan, PostureSnapshot, InsertPostureSnapshot, Alert, InsertAlert, ScheduledScan, InsertScheduledScan, ScanProfile, InsertScanProfile, WorkspaceMember } from "@shared/schema";
@@ -70,6 +70,8 @@ export interface IStorage {
 
   // Workspace Members
   getWorkspaceMember(workspaceId: string, userId: string): Promise<WorkspaceMember | undefined>;
+  addWorkspaceMember(workspaceId: string, userId: string, role: string): Promise<WorkspaceMember>;
+  getWorkspacesByUserId(userId: string): Promise<Workspace[]>;
 
   // Alerts
   getAlert(id: string): Promise<Alert | undefined>;
@@ -387,6 +389,23 @@ export class DatabaseStorage implements IStorage {
       .where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.userId, userId)))
       .limit(1);
     return member;
+  }
+
+  async addWorkspaceMember(workspaceId: string, userId: string, role: string): Promise<WorkspaceMember> {
+    const [member] = await db.insert(workspaceMembers)
+      .values({ workspaceId, userId, role })
+      .returning();
+    return member;
+  }
+
+  async getWorkspacesByUserId(userId: string): Promise<Workspace[]> {
+    const members = await db.select({ workspaceId: workspaceMembers.workspaceId })
+      .from(workspaceMembers)
+      .where(eq(workspaceMembers.userId, userId));
+    if (members.length === 0) return [];
+    const wsIds = members.map(m => m.workspaceId);
+    return db.select().from(workspaces)
+      .where(inArray(workspaces.id, wsIds));
   }
 
   async getAlert(id: string): Promise<Alert | undefined> {

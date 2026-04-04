@@ -50,6 +50,8 @@ app.use(express.urlencoded({ extended: false }));
 
 // Rate limiting
 app.use("/api/", rateLimit({ windowMs: 60_000, max: 100, standardHeaders: true, legacyHeaders: false }));
+app.use("/api/auth/login", rateLimit({ windowMs: 60_000, max: 5, message: { message: "Too many login attempts, please try again later" } }));
+app.use("/api/auth/register", rateLimit({ windowMs: 60_000, max: 3, message: { message: "Too many registration attempts, please try again later" } }));
 app.use("/api/scans", rateLimit({ windowMs: 60_000, max: 5, message: { message: "Too many scan requests, please try again later" } }));
 
 // Stricter rate limits for AI/enrichment endpoints (expensive, long-running)

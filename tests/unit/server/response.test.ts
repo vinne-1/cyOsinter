@@ -130,11 +130,11 @@ describe("errorHandler", () => {
     expect(res.body.error).toBe("Field is required");
   });
 
-  it("handles generic Error with 500", () => {
+  it("handles generic Error with 500 and generic message (no leakage)", () => {
     const res = createMockRes();
     errorHandler(new Error("Something broke"), createMockReq(), res, vi.fn());
     expect(res.statusCode).toBe(500);
-    expect(res.body.error).toBe("Something broke");
+    expect(res.body.error).toBe("Internal server error");
   });
 
   it("handles non-Error unknown with 500 and generic message", () => {

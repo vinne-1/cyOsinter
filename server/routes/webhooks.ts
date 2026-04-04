@@ -237,6 +237,23 @@ webhooksRouter.post(
         return sendNotFound(res, "Webhook");
       }
 
+      // Verify caller has admin+ role in the webhook's workspace
+      const { workspaceMembers } = await import("@shared/schema");
+      const [member] = await db
+        .select()
+        .from(workspaceMembers)
+        .where(and(eq(workspaceMembers.workspaceId, webhook.workspaceId), eq(workspaceMembers.userId, req.user!.id)))
+        .limit(1);
+      if (!member || !["owner", "admin"].includes(member.role)) {
+        return sendError(res, 403, "Forbidden");
+      }
+
+      // SSRF re-check on stored URL before delivery
+      const webhookHost = new URL(webhook.url).hostname;
+      if (await isPrivateHost(webhookHost)) {
+        return sendError(res, 400, "Webhook URL targets a private network — update the URL");
+      }
+
       const testPayload = {
         event: "test",
         timestamp: new Date().toISOString(),
@@ -384,8 +401,7 @@ async function deliverWebhook(
     return { ok: response.ok, statusCode: response.status };
   } catch (err) {
     clearTimeout(timeout);
-    const message = err instanceof Error ? err.message : "Unknown error";
-    return { ok: false, error: message };
+    return { ok: false, error: "Delivery failed" };
   }
 }
 

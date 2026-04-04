@@ -20,7 +20,7 @@ scheduledScansRouter.get("/workspaces/:workspaceId/scheduled-scans", wsAuth, asy
     res.json(list);
   } catch (err) {
     log.error({ err }, "Get scheduled scans error");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
@@ -29,10 +29,13 @@ scheduledScansRouter.get("/scheduled-scans/:id", async (req, res) => {
   try {
     const scheduled = await storage.getScheduledScan(req.params.id);
     if (!scheduled) return res.status(404).json({ message: "Scheduled scan not found" });
+    // Verify caller is a member of the schedule's workspace
+    const membership = await storage.getWorkspaceMember(scheduled.workspaceId, req.user!.id);
+    if (!membership) return res.status(404).json({ message: "Scheduled scan not found" });
     res.json(scheduled);
   } catch (err) {
     log.error({ err }, "Get scheduled scan error");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
@@ -66,8 +69,7 @@ scheduledScansRouter.post("/workspaces/:workspaceId/scheduled-scans", wsWrite, a
       return res.status(400).json({ message: error.errors[0]?.message || "Validation error" });
     }
     log.error({ err: error }, "Create scheduled scan error");
-    const message = error instanceof Error ? error.message : "Unknown error";
-    res.status(500).json({ message });
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
@@ -97,8 +99,7 @@ scheduledScansRouter.patch("/scheduled-scans/:id", async (req, res) => {
       return res.status(400).json({ message: error.errors[0]?.message || "Validation error" });
     }
     log.error({ err: error }, "Update scheduled scan error");
-    const message = error instanceof Error ? error.message : "Unknown error";
-    res.status(500).json({ message });
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
@@ -116,6 +117,6 @@ scheduledScansRouter.delete("/scheduled-scans/:id", async (req, res) => {
     res.status(204).send();
   } catch (err) {
     log.error({ err }, "Delete scheduled scan error");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal server error" });
   }
 });

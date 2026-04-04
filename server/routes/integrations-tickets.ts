@@ -9,7 +9,28 @@ import { storage } from "../storage";
 import { createLogger } from "../logger";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
+import dns from "dns/promises";
 import { encryptObject, decryptObject } from "../crypto";
+
+/** Check if a hostname resolves to a private/loopback IP (SSRF prevention) */
+async function isPrivateHost(hostname: string): Promise<boolean> {
+  try {
+    const addrs = await dns.resolve4(hostname);
+    return addrs.some((ip) => {
+      const parts = ip.split(".").map(Number);
+      return (
+        parts[0] === 127 ||
+        parts[0] === 10 ||
+        (parts[0] === 172 && parts[1]! >= 16 && parts[1]! <= 31) ||
+        (parts[0] === 192 && parts[1] === 168) ||
+        (parts[0] === 169 && parts[1] === 254) ||
+        parts[0] === 0
+      );
+    });
+  } catch {
+    return true; // fail-closed
+  }
+}
 
 const log = createLogger("integrations-tickets");
 
@@ -126,16 +147,21 @@ integrationsTicketsRouter.get("/integrations/ticketing", (_req, res) => {
 });
 
 // PUT /api/integrations/ticketing/jira — save Jira config
-integrationsTicketsRouter.put("/integrations/ticketing/jira", (req, res) => {
+integrationsTicketsRouter.put("/integrations/ticketing/jira", async (req, res) => {
   try {
     const parsed = jiraConfigSchema.parse(req.body);
+    // SSRF protection: reject private/loopback Jira URLs
+    const jiraHost = new URL(parsed.baseUrl).hostname;
+    if (await isPrivateHost(jiraHost)) {
+      return res.status(400).json({ message: "Jira URL must not target private or internal networks" });
+    }
     const config = loadTicketingConfig();
     config.jira = parsed;
     saveTicketingConfig(config);
     res.json({ success: true });
   } catch (err) {
     if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0]?.message });
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
@@ -149,7 +175,7 @@ integrationsTicketsRouter.put("/integrations/ticketing/github", (req, res) => {
     res.json({ success: true });
   } catch (err) {
     if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0]?.message });
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
@@ -185,7 +211,7 @@ integrationsTicketsRouter.post("/integrations/ticketing/create", async (req, res
   } catch (err) {
     log.error({ err }, "Failed to create ticket");
     if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0]?.message });
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
@@ -225,14 +251,14 @@ integrationsTicketsRouter.post("/integrations/ticketing/bulk-create", async (req
         });
         results.push({ findingId, ticketUrl });
       } catch (err) {
-        results.push({ findingId, error: err instanceof Error ? err.message : "Failed" });
+        results.push({ findingId, error: "Failed" });
       }
     }
 
     res.json({ results });
   } catch (err) {
     if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0]?.message });
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
@@ -246,7 +272,7 @@ integrationsTicketsRouter.delete("/integrations/ticketing/jira", (_req, res) => 
     writeFileSync(INTEGRATIONS_CONFIG_PATH, encryptObject(config as unknown as Record<string, unknown>), "utf-8");
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
@@ -260,7 +286,7 @@ integrationsTicketsRouter.delete("/integrations/ticketing/github", (_req, res) =
     writeFileSync(INTEGRATIONS_CONFIG_PATH, encryptObject(config as unknown as Record<string, unknown>), "utf-8");
     res.json({ success: true });
   } catch (err) {
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
@@ -307,6 +333,11 @@ async function createJiraTicket(
   };
 
   const baseUrl = config.baseUrl.replace(/\/+$/, "");
+  // Re-validate SSRF at request time (URL may have been saved before check existed)
+  const jiraHost = new URL(baseUrl).hostname;
+  if (await isPrivateHost(jiraHost)) {
+    throw new Error("Jira URL targets a private network — update your Jira configuration");
+  }
   const res = await fetch(`${baseUrl}/rest/api/3/issue`, {
     method: "POST",
     headers: {

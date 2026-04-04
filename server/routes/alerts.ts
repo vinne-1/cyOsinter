@@ -18,7 +18,7 @@ alertsRouter.get("/workspaces/:workspaceId/alerts", wsAuth, async (req, res) => 
     res.json(alertsList);
   } catch (err) {
     log.error({ err }, "Get alerts error");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
@@ -29,7 +29,7 @@ alertsRouter.get("/workspaces/:workspaceId/alerts/unread-count", wsAuth, async (
     res.json({ count });
   } catch (err) {
     log.error({ err }, "Get unread alert count error");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
@@ -45,7 +45,7 @@ alertsRouter.patch("/alerts/:id/read", async (req, res) => {
     res.json(updated);
   } catch (err) {
     log.error({ err }, "Mark alert read error");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
@@ -56,7 +56,7 @@ alertsRouter.post("/workspaces/:workspaceId/alerts/mark-all-read", wsWrite, asyn
     res.json({ success: true });
   } catch (err) {
     log.error({ err }, "Mark all alerts read error");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
@@ -72,6 +72,6 @@ alertsRouter.delete("/alerts/:id", async (req, res) => {
     res.status(204).send();
   } catch (err) {
     log.error({ err }, "Delete alert error");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal server error" });
   }
 });

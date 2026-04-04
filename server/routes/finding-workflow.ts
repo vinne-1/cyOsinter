@@ -41,7 +41,7 @@ findingWorkflowRouter.patch("/findings/:id/workflow", async (req, res) => {
     res.json({ success: true, state: parsed.state });
   } catch (err) {
     if (err instanceof z.ZodError) return sendValidationError(res, err.errors[0]?.message ?? "Validation error");
-    sendError(res, 500, err instanceof Error ? err.message : "Internal error");
+    sendError(res, 500, "Internal server error");
   }
 });
 
@@ -76,14 +76,14 @@ findingWorkflowRouter.patch("/findings/bulk/workflow", async (req, res) => {
         await storage.updateFinding(id, updates);
         results.push({ id, success: true });
       } catch (err) {
-        results.push({ id, success: false, error: err instanceof Error ? err.message : "Failed" });
+        results.push({ id, success: false, error: "Failed" });
       }
     }
 
     res.json({ results });
   } catch (err) {
     if (err instanceof z.ZodError) return sendValidationError(res, err.errors[0]?.message ?? "Validation error");
-    sendError(res, 500, err instanceof Error ? err.message : "Internal error");
+    sendError(res, 500, "Internal server error");
   }
 });
 
@@ -98,7 +98,7 @@ findingWorkflowRouter.get("/workspaces/:workspaceId/finding-groups", wsAuth, asy
     const groups = await getFindingGroups(req.params.workspaceId as string);
     res.json(groups);
   } catch (err) {
-    sendError(res, 500, err instanceof Error ? err.message : "Internal error");
+    sendError(res, 500, "Internal server error");
   }
 });
 
@@ -109,6 +109,6 @@ findingWorkflowRouter.post("/workspaces/:workspaceId/finding-groups/compute", re
     const groupCount = await groupFindings(req.params.workspaceId as string);
     res.json({ success: true, groupCount });
   } catch (err) {
-    sendError(res, 500, err instanceof Error ? err.message : "Internal error");
+    sendError(res, 500, "Internal server error");
   }
 });

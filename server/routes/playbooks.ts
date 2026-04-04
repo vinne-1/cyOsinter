@@ -17,7 +17,7 @@ playbooksRouter.get("/playbooks", async (_req, res) => {
     const { getPlaybooks } = await import("../attack-simulation");
     res.json(getPlaybooks());
   } catch (err) {
-    sendError(res, 500, err instanceof Error ? err.message : "Internal error");
+    sendError(res, 500, "Internal server error");
   }
 });
 
@@ -29,7 +29,7 @@ playbooksRouter.get("/playbooks/:id", async (req, res) => {
     if (!playbook) return sendNotFound(res, "Playbook");
     res.json(playbook);
   } catch (err) {
-    sendError(res, 500, err instanceof Error ? err.message : "Internal error");
+    sendError(res, 500, "Internal server error");
   }
 });
 
@@ -51,6 +51,6 @@ playbooksRouter.post("/playbooks/:id/simulate", wsAuth, async (req, res) => {
     if (err instanceof Error && err.message.includes("not found")) {
       return sendNotFound(res, "Playbook");
     }
-    sendError(res, 500, err instanceof Error ? err.message : "Internal error");
+    sendError(res, 500, "Internal server error");
   }
 });

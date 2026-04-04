@@ -19,15 +19,18 @@ reportsRouter.get("/workspaces/:workspaceId/reports", wsAuth, async (req, res) =
     const offset = Math.max(parseInt(String(req.query.offset ?? "0"), 10) || 0, 0);
     const result = await storage.getReports(req.params.workspaceId as string, { limit, offset });
     res.json(result);
-  } catch (err) { res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" }); }
+  } catch (err) { res.status(500).json({ message: "Internal server error" }); }
 });
 
 reportsRouter.get("/reports/:id", async (req, res) => {
   try {
     const report = await storage.getReport(req.params.id);
     if (!report) return res.status(404).json({ message: "Report not found" });
+    // Verify caller is a member of the report's workspace
+    const membership = await storage.getWorkspaceMember(report.workspaceId, req.user!.id);
+    if (!membership) return res.status(404).json({ message: "Report not found" });
     res.json(report);
-  } catch (err) { res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" }); }
+  } catch (err) { res.status(500).json({ message: "Internal server error" }); }
 });
 
 reportsRouter.post("/workspaces/:workspaceId/reports", wsWrite, async (req, res) => {
@@ -57,8 +60,7 @@ reportsRouter.post("/workspaces/:workspaceId/reports", wsWrite, async (req, res)
     if (error instanceof z.ZodError) {
       return res.status(400).json({ message: error.errors[0]?.message || "Validation error" });
     }
-    const message = error instanceof Error ? error.message : "Unknown error";
-    res.status(400).json({ message });
+    res.status(400).json({ message: "Bad request" });
   }
 });
 
@@ -123,7 +125,7 @@ reportsRouter.get("/workspaces/:workspaceId/reports/:reportId/export", wsAuth, a
     res.send(pdfBuffer);
   } catch (err) {
     routeLog.error({ err }, "Report export error");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Export failed" });
+    res.status(500).json({ message: "Export failed" });
   }
 });
 
@@ -138,6 +140,6 @@ reportsRouter.delete("/workspaces/:workspaceId/reports/:reportId", wsWrite, asyn
     res.status(204).send();
   } catch (err) {
     routeLog.error({ err }, "Delete report error");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Failed to delete report" });
+    res.status(500).json({ message: "Failed to delete report" });
   }
 });

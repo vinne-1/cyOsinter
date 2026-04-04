@@ -20,7 +20,7 @@ analyticsRouter.get("/workspaces/:workspaceId/compliance", wsAuth, async (req, r
     res.json(reports);
   } catch (err) {
     log.error({ err }, "Compliance report error");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
@@ -36,7 +36,7 @@ analyticsRouter.get("/workspaces/:workspaceId/compliance/:framework", wsAuth, as
     res.json(report);
   } catch (err) {
     log.error({ err }, "Compliance report error");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
@@ -64,7 +64,7 @@ analyticsRouter.get("/workspaces/:workspaceId/trends/severity", wsAuth, async (r
     res.json(trend);
   } catch (err) {
     log.error({ err }, "Severity trend error");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
@@ -95,7 +95,7 @@ analyticsRouter.get("/workspaces/:workspaceId/trends/findings", wsAuth, async (r
     res.json(trend);
   } catch (err) {
     log.error({ err }, "Findings trend error");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
@@ -123,7 +123,7 @@ analyticsRouter.get("/workspaces/:workspaceId/trends/categories", wsAuth, async 
     res.json(categories);
   } catch (err) {
     log.error({ err }, "Category trend error");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
@@ -158,6 +158,6 @@ analyticsRouter.get("/workspaces/:workspaceId/trends/mttr", wsAuth, async (req, 
     });
   } catch (err) {
     log.error({ err }, "MTTR trend error");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal server error" });
   }
 });

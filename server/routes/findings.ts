@@ -46,7 +46,7 @@ findingsRouter.get("/workspaces/:workspaceId/findings", wsAuth, async (req, res)
 
     const data = filtered.slice((pg - 1) * ps, pg * ps);
     res.json({ data, total, page: pg, pageSize: ps, totalPages: Math.ceil(total / ps) });
-  } catch (err) { res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" }); }
+  } catch (err) { res.status(500).json({ message: "Internal server error" }); }
 });
 
 findingsRouter.get("/findings/:id", async (req, res) => {
@@ -57,7 +57,7 @@ findingsRouter.get("/findings/:id", async (req, res) => {
     const membership = await storage.getWorkspaceMember(finding.workspaceId, req.user!.id);
     if (!membership) return res.status(404).json({ message: "Finding not found" });
     res.json(finding);
-  } catch (err) { res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" }); }
+  } catch (err) { res.status(500).json({ message: "Internal server error" }); }
 });
 
 findingsRouter.patch("/findings/:id", async (req, res) => {
@@ -75,7 +75,7 @@ findingsRouter.patch("/findings/:id", async (req, res) => {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ message: error.errors[0]?.message || "Validation error" });
     }
-    const message = error instanceof Error ? error.message : "Unknown error";
+    const message = "Bad request";
     res.status(400).json({ message });
   }
 });
@@ -130,7 +130,7 @@ findingsRouter.get("/workspaces/:workspaceId/ai-insights", wsAuth, async (req, r
     res.json({ findings: findingsResult.data, modules: modulesResult.data, workspaceName: ws.name });
   } catch (err) {
     routeLog.error({ err }, "AI insights error");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Failed to load" });
+    res.status(500).json({ message: "Failed to load" });
   }
 });
 
@@ -156,9 +156,8 @@ findingsRouter.post("/workspaces/:workspaceId/ai-insights/summary", wsAuth, asyn
     });
     res.json(result);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : "AI summary failed";
-    const fallbackErrorDetail = msg.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, "").slice(0, 500);
-    routeLog.warn({ msg }, "AI insights error, returning fallback");
+    const errMsg = err instanceof Error ? err.message : "AI summary failed";
+    routeLog.warn({ err }, "AI insights error, returning fallback");
     try {
       const workspaceId = req.params.workspaceId as string;
       const ws = await storage.getWorkspace(workspaceId);
@@ -169,12 +168,12 @@ findingsRouter.post("/workspaces/:workspaceId/ai-insights/summary", wsAuth, asyn
         ]);
         const fallback = buildFallbackInsights(fRes.data, mRes.data, ws.name);
         const reason =
-          msg === "Ollama AI is disabled"
+          errMsg === "Ollama AI is disabled"
             ? "ollama_disabled"
-            : msg.includes("aborted") || msg.includes("timed out")
+            : errMsg.includes("aborted") || errMsg.includes("timed out")
               ? "ollama_timeout"
               : "ollama_error";
-        return res.json({ ...fallback, fallbackReason: reason, fallbackErrorDetail });
+        return res.json({ ...fallback, fallbackReason: reason });
       }
     } catch (innerErr) {
       routeLog.error({ err: innerErr }, "AI insights fallback failed");
@@ -185,7 +184,6 @@ findingsRouter.post("/workspaces/:workspaceId/ai-insights/summary", wsAuth, asyn
       threatLandscape: "",
       isAIGenerated: false,
       fallbackReason: "ollama_error",
-      fallbackErrorDetail,
     });
   }
 });
@@ -234,7 +232,7 @@ findingsRouter.post("/workspaces/:workspaceId/findings/:id/cve-lookup", wsAuth, 
     res.json({ cveRecords, kevMatches, finding: updated });
   } catch (err) {
     routeLog.error({ err }, "CVE lookup error");
-    res.status(500).json({ message: err instanceof Error ? err.message : "CVE lookup failed" });
+    res.status(500).json({ message: "CVE lookup failed" });
   }
 });
 

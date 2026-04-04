@@ -71,15 +71,25 @@ export async function registerRoutes(
     try {
       const asset = await storage.getAsset(req.params.id);
       if (!asset) return res.status(404).json({ message: "Asset not found" });
+      // Verify caller is a member of the asset's workspace
+      const membership = await storage.getWorkspaceMember(asset.workspaceId, req.user!.id);
+      if (!membership) return res.status(404).json({ message: "Asset not found" });
       res.json(asset);
-    } catch (err) { res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" }); }
+    } catch (err) { res.status(500).json({ message: "Internal server error" }); }
   });
 
   app.delete("/api/assets/:id", async (req, res) => {
     try {
+      const asset = await storage.getAsset(req.params.id);
+      if (!asset) return res.status(404).json({ message: "Asset not found" });
+      // Verify caller has write access in the asset's workspace
+      const membership = await storage.getWorkspaceMember(asset.workspaceId, req.user!.id);
+      if (!membership || !["owner", "admin", "analyst"].includes(membership.role)) {
+        return res.status(404).json({ message: "Asset not found" });
+      }
       await storage.deleteAsset(req.params.id);
       res.status(204).send();
-    } catch (err) { res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" }); }
+    } catch (err) { res.status(500).json({ message: "Internal server error" }); }
   });
 
   // Centralized error handler — must be registered after all routes
