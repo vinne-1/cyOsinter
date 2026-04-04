@@ -96,7 +96,12 @@ export async function requireAuth(
     next();
   } catch (err) {
     log.error({ err }, "Auth middleware error");
-    sendError(res, 500, "Authentication error");
+    // Distinguish database/infrastructure errors from authentication failures
+    // so callers get an accurate signal about what went wrong.
+    const isDbError = err instanceof Error &&
+      (err.message.includes("relation") || err.message.includes("column") ||
+       err.message.includes("ECONNREFUSED") || err.message.includes("connect"));
+    sendError(res, 500, isDbError ? "Internal server error" : "Authentication error");
   }
 }
 

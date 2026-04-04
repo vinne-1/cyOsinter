@@ -69,7 +69,7 @@ export function createAdminRouter(httpServer: Server): Router {
   adminRouter.post("/continuous-monitoring/start", wsOwnerAdmin, async (req, res) => {
     try {
       const parsed = startContinuousMonitoringSchema.parse(req.body);
-      const result = await startMonitoring(parsed.target, parsed.workspaceId);
+      const result = await startMonitoring(parsed.target, parsed.workspaceId, req.user!.id);
       res.status(201).json(result);
     } catch (error: unknown) {
       if (error instanceof z.ZodError) {

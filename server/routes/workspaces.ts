@@ -11,7 +11,10 @@ export const workspacesRouter = Router();
 
 workspacesRouter.get("/", async (req, res) => {
   try {
-    const ws = await storage.getWorkspacesByUserId(req.user!.id);
+    // Superadmins can see all workspaces; regular users only see their own
+    const ws = req.user!.role === "superadmin"
+      ? await storage.getWorkspaces()
+      : await storage.getWorkspacesByUserId(req.user!.id);
     res.json(ws);
   } catch (err) {
     routeLog.error({ err }, "Get workspaces error");
@@ -48,15 +51,18 @@ workspacesRouter.post("/", async (req, res) => {
     const parsed = createWorkspaceSchema.parse(req.body);
     const existing = await storage.getWorkspaceByName(parsed.name);
     if (existing) {
-      return res.status(409).json({ message: "A workspace with this domain already exists", workspace: existing });
+      return res.status(409).json({ message: "A workspace with this domain already exists" });
     }
     const ws = await storage.createWorkspace({ name: parsed.name, description: parsed.description || null, status: "active" });
+    // Add the creating user as the workspace owner
+    await storage.addWorkspaceMember(ws.id, req.user!.id, "owner");
     res.status(201).json(ws);
   } catch (error: unknown) {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ message: error.errors[0]?.message || "Validation error" });
     }
-    res.status(400).json({ message: "Bad request" });
+    routeLog.error({ error }, "Create workspace error");
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 
@@ -77,7 +83,8 @@ workspacesRouter.patch("/:id", async (req, res) => {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ message: error.errors[0]?.message || "Validation error" });
     }
-    res.status(400).json({ message: "Bad request" });
+    routeLog.error({ error }, "Update workspace error");
+    res.status(500).json({ message: "Internal server error" });
   }
 });
 

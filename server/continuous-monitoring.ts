@@ -70,12 +70,16 @@ export function stopMonitoring(workspaceId: string): boolean {
   return true;
 }
 
-export async function startMonitoring(target: string, workspaceId?: string): Promise<{ workspaceId: string; continuousMonitoringId: string }> {
+export async function startMonitoring(target: string, workspaceId?: string, userId?: string): Promise<{ workspaceId: string; continuousMonitoringId: string }> {
   let wsId = workspaceId;
   if (!wsId) {
     let ws = await storage.getWorkspaceByName(target);
     if (!ws) {
       ws = await storage.createWorkspace({ name: target, description: null, status: "active" });
+      // Add the initiating user as owner so the workspace is visible
+      if (userId) {
+        await storage.addWorkspaceMember(ws.id, userId, "owner");
+      }
     }
     wsId = ws.id;
   }
