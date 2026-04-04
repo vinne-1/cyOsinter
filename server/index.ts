@@ -8,8 +8,10 @@ import { serveStatic } from "./static";
 import { createServer } from "http";
 import { seedDatabase } from "./seed";
 import { initNotifications } from "./notifications";
-import { startScheduler, registerScanTrigger } from "./scan-scheduler";
+import { startScheduler, registerScanTrigger, stopScheduler } from "./scan-scheduler";
 import { triggerScan } from "./scan-trigger";
+import { stopQueuePoller } from "./scan-queue";
+import { pool } from "./db";
 
 const app = express();
 const httpServer = createServer(app);
@@ -128,5 +130,37 @@ app.use((req, res, next) => {
       httpLog.error({ err }, "Server listen error");
     }
     process.exit(1);
+  });
+
+  // ── Graceful shutdown ──
+  let shuttingDown = false;
+  async function shutdown(signal: string) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    httpLog.info({ signal }, "Shutting down gracefully…");
+
+    const timeout = setTimeout(() => {
+      httpLog.error("Shutdown timed out after 10s, forcing exit");
+      process.exit(1);
+    }, 10_000);
+
+    try {
+      stopScheduler();
+      stopQueuePoller();
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+      await pool.end();
+      httpLog.info("Shutdown complete");
+    } catch (err) {
+      httpLog.error({ err }, "Error during shutdown");
+    } finally {
+      clearTimeout(timeout);
+      process.exit(0);
+    }
+  }
+
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("unhandledRejection", (reason) => {
+    httpLog.error({ err: reason }, "Unhandled promise rejection");
   });
 })();

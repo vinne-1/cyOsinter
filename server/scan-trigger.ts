@@ -119,10 +119,8 @@ function buildNucleiUrls(
 async function persistAssets(workspaceId: string, allAssets: RawAsset[]): Promise<void> {
   for (const asset of allAssets) {
     try {
-      const exists = await storage.assetExists(workspaceId, asset.type, asset.value);
-      if (!exists) {
-        await storage.createAsset({ workspaceId, type: asset.type, value: asset.value, status: "active", tags: asset.tags });
-      }
+      // createAsset uses onConflictDoNothing — no need for a separate existence check
+      await storage.createAsset({ workspaceId, type: asset.type, value: asset.value, status: "active", tags: asset.tags });
     } catch (err) {
       log.warn({ err }, "Failed to create asset");
     }

@@ -11,8 +11,10 @@
     "db:push": "drizzle-kit push",
     "test:nuclei": "tsx script/test-nuclei.ts",
     "test": "node node_modules/vitest/vitest.mjs run",
+    "test:unit": "node node_modules/vitest/vitest.mjs run tests/unit/",
     "test:watch": "node node_modules/vitest/vitest.mjs",
-    "test:coverage": "node node_modules/vitest/vitest.mjs run --coverage"
+    "test:coverage": "node node_modules/vitest/vitest.mjs run --coverage",
+    "lint": "tsc --noEmit"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.10.0",

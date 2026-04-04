@@ -79,6 +79,10 @@ export const findings = pgTable("findings", {
 }, (t) => [
   index("findings_workspace_id_idx").on(t.workspaceId),
   index("findings_scan_id_idx").on(t.scanId),
+  index("findings_workspace_severity_idx").on(t.workspaceId, t.severity),
+  index("findings_workspace_status_idx").on(t.workspaceId, t.status),
+  index("findings_workspace_category_idx").on(t.workspaceId, t.category),
+  index("findings_group_id_idx").on(t.groupId),
   foreignKey({ columns: [t.workspaceId], foreignColumns: [workspaces.id], name: "findings_workspace_fk" }).onDelete("cascade"),
   foreignKey({ columns: [t.scanId], foreignColumns: [scans.id], name: "findings_scan_fk" }).onDelete("set null"),
 ]);
@@ -190,7 +194,7 @@ export const alerts = pgTable("alerts", {
   createdAt: timestamp("created_at").defaultNow(),
 }, (t) => [
   index("alerts_workspace_id_idx").on(t.workspaceId),
-  index("alerts_read_idx").on(t.read),
+  index("alerts_workspace_read_idx").on(t.workspaceId, t.read),
   foreignKey({ columns: [t.workspaceId], foreignColumns: [workspaces.id], name: "alerts_workspace_fk" }).onDelete("cascade"),
   foreignKey({ columns: [t.scanId], foreignColumns: [scans.id], name: "alerts_scan_fk" }).onDelete("set null"),
   foreignKey({ columns: [t.findingId], foreignColumns: [findings.id], name: "alerts_finding_fk" }).onDelete("set null"),
@@ -211,6 +215,7 @@ export const scheduledScans = pgTable("scheduled_scans", {
 }, (t) => [
   index("scheduled_scans_workspace_id_idx").on(t.workspaceId),
   index("scheduled_scans_enabled_idx").on(t.enabled),
+  index("scheduled_scans_next_run_at_idx").on(t.nextRunAt),
   foreignKey({ columns: [t.workspaceId], foreignColumns: [workspaces.id], name: "scheduled_scans_workspace_fk" }).onDelete("cascade"),
   foreignKey({ columns: [t.lastScanId], foreignColumns: [scans.id], name: "scheduled_scans_last_scan_fk" }).onDelete("set null"),
 ]);
