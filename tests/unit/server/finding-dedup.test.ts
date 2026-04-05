@@ -116,13 +116,31 @@ describe("computeSimilarity", () => {
     expect(score).toBeGreaterThanOrEqual(0.3);
   });
 
-  it("handles empty title strings", () => {
-    // Use the raw interface directly to avoid makeFinding's null-coalescing defaults
+  it("handles empty title strings (both empty → jaccard = 0)", () => {
+    // Two empty titles tokenize to empty sets → jaccardSimilarity returns 0 for two empty inputs
     const a = { title: "", category: "a", remediation: null, affectedAsset: null };
     const b = { title: "", category: "a", remediation: null, affectedAsset: null };
     const score = computeSimilarity(a, b);
     // Empty titles → jaccard = 0 (title 0.4*0), category match = 0.3, no remed = 0, no asset = 0
     expect(score).toBeCloseTo(0.3, 1);
+  });
+
+  it("handles invalid URL as affectedAsset (extractDomain falls back to raw string)", () => {
+    // Triggers the catch block in extractDomain (line 44)
+    const a = makeFinding({ affectedAsset: "not a valid url!!!" });
+    const b = makeFinding({ affectedAsset: "not a valid url!!!" });
+    const score = computeSimilarity(a, b);
+    // Same invalid asset string → domains match (equal strings) → asset score = 0.1
+    expect(score).toBeGreaterThanOrEqual(0.8);
+  });
+
+  it("handles single identical token (union size = 1, intersection = 1 → jaccard = 1)", () => {
+    // Tests the unionSize = a.size + b.size - intersectionSize = 1+1-1 = 1 path
+    const a = { title: "xss", category: "xss", remediation: null, affectedAsset: null };
+    const b = { title: "xss", category: "xss", remediation: null, affectedAsset: null };
+    const score = computeSimilarity(a, b);
+    // title: 1.0, category: 1.0, remediation: 0, asset: 0 → 0.4 + 0.3 = 0.7
+    expect(score).toBeCloseTo(0.7, 1);
   });
 
   it("handles very long titles by capping tokenization", () => {
