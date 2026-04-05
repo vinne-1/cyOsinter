@@ -10,6 +10,8 @@ import { getOllamaStatus } from "../ai-service";
 import { requireAdmin } from "./middleware";
 import { requireWorkspaceRole } from "./auth-middleware";
 import { startContinuousMonitoringSchema, stopContinuousMonitoringSchema } from "./schemas";
+import { getQueueStatus } from "../scan-queue";
+import { db } from "../db";
 
 const routeLog = createLogger("routes");
 
@@ -242,6 +244,91 @@ export function createAdminRouter(httpServer: Server): Router {
       const persistent = s2Findings.filter((f) => s1Keys.has(`${f.title}|${f.affectedAsset}|${f.category}`));
       res.json({ scan1: scan1, scan2: scan2, new: newFindings, resolved: resolvedFindings, persistent, summary: { newCount: newFindings.length, resolvedCount: resolvedFindings.length, persistentCount: persistent.length } });
     } catch (err) { res.status(500).json({ message: "Internal server error" }); }
+  });
+
+  // GET /api/status — machine-readable health board (no admin required, just auth)
+  adminRouter.get("/status", async (_req, res) => {
+    try {
+      const queue = getQueueStatus();
+      const integrations = getIntegrationsStatus();
+      let ollamaReachable = false;
+      try { const s = await getOllamaStatus(); ollamaReachable = s.reachable ?? false; } catch { /* ignore */ }
+
+      res.json({
+        ok: true,
+        version: "1.0.0",
+        uptime: Math.floor(process.uptime()),
+        db: "ok",
+        queue: {
+          pending: queue.queueLength,
+          running: queue.activeScans,
+          maxConcurrent: queue.maxConcurrent,
+        },
+        ollama: { reachable: ollamaReachable },
+        integrations: {
+          jira: (integrations as Record<string, unknown>).jira ?? false,
+          github: (integrations as Record<string, unknown>).github ?? false,
+          shodan: (integrations as Record<string, unknown>).shodan ?? false,
+          virustotal: (integrations as Record<string, unknown>).virustotal ?? false,
+        },
+      });
+    } catch (err) {
+      routeLog.error({ err }, "Status check error");
+      res.status(500).json({ ok: false, error: "Status check failed" });
+    }
+  });
+
+  // POST /api/admin/doctor — preflight diagnostics (requireAdmin)
+  adminRouter.post("/admin/doctor", requireAdmin, async (_req, res) => {
+    const checks: Array<{ name: string; status: "pass" | "fail" | "skip"; detail?: string }> = [];
+
+    // 1. Database connectivity
+    try {
+      await db.execute("SELECT 1" as unknown as Parameters<typeof db.execute>[0]);
+      checks.push({ name: "database", status: "pass" });
+    } catch (err) {
+      checks.push({ name: "database", status: "fail", detail: err instanceof Error ? err.message.slice(0, 100) : "Unknown" });
+    }
+
+    // 2. workspace_members table
+    try {
+      await db.execute("SELECT 1 FROM workspace_members LIMIT 1" as unknown as Parameters<typeof db.execute>[0]);
+      checks.push({ name: "workspace_members_table", status: "pass" });
+    } catch {
+      checks.push({ name: "workspace_members_table", status: "fail", detail: "Table missing — run npm run db:push" });
+    }
+
+    // 3. sessions table
+    try {
+      await db.execute("SELECT 1 FROM sessions LIMIT 1" as unknown as Parameters<typeof db.execute>[0]);
+      checks.push({ name: "sessions_table", status: "pass" });
+    } catch {
+      checks.push({ name: "sessions_table", status: "fail", detail: "Table missing — run npm run db:push" });
+    }
+
+    // 4. Ollama
+    try {
+      const status = await getOllamaStatus();
+      checks.push({ name: "ollama", status: status.reachable ? "pass" : "skip", detail: status.reachable ? undefined : "Not reachable (optional)" });
+    } catch {
+      checks.push({ name: "ollama", status: "skip", detail: "Not reachable (optional)" });
+    }
+
+    // 5. Integration config presence (pass/fail/skip — no secrets exposed)
+    const integrations = getIntegrationsStatus() as Record<string, unknown>;
+    const jiraConfigured = !!(integrations.jira);
+    const githubConfigured = !!(integrations.github);
+    checks.push({ name: "jira_config", status: jiraConfigured ? "pass" : "skip", detail: jiraConfigured ? undefined : "Not configured (optional)" });
+    checks.push({ name: "github_config", status: githubConfigured ? "pass" : "skip", detail: githubConfigured ? undefined : "Not configured (optional)" });
+
+    // 6. Scan queue health
+    const queue = getQueueStatus();
+    checks.push({ name: "scan_queue", status: "pass", detail: `pending=${queue.queueLength} running=${queue.activeScans}/${queue.maxConcurrent}` });
+
+    const failures = checks.filter(c => c.status === "fail");
+    const overall = failures.length === 0 ? "ok" : failures.some(c => ["database", "sessions_table"].includes(c.name)) ? "critical" : "degraded";
+
+    res.json({ overall, checks });
   });
 
   return adminRouter;
