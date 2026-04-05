@@ -19,7 +19,12 @@ vi.mock("../../../server/notifications", () => ({
   emitScheduledScanTriggered: vi.fn(),
 }));
 
-import { getNextCronRun } from "../../../server/scan-scheduler";
+import {
+  getNextCronRun,
+  startScheduler,
+  stopScheduler,
+  registerScanTrigger,
+} from "../../../server/scan-scheduler";
 
 // ---------------------------------------------------------------------------
 // getNextCronRun
@@ -120,5 +125,42 @@ describe("getNextCronRun", () => {
     const next = getNextCronRun("  0   2   *   *   *  ", ref);
     expect(next.getHours()).toBe(2);
     expect(next.getMinutes()).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// registerScanTrigger
+// ---------------------------------------------------------------------------
+describe("registerScanTrigger", () => {
+  it("accepts a function without throwing", () => {
+    const fn = vi.fn().mockResolvedValue("scan-123");
+    expect(() => registerScanTrigger(fn)).not.toThrow();
+  });
+
+  it("accepts null to clear the trigger function", () => {
+    expect(() => registerScanTrigger(null)).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// startScheduler / stopScheduler
+// ---------------------------------------------------------------------------
+describe("scheduler lifecycle", () => {
+  it("starts and stops without throwing", () => {
+    expect(() => startScheduler()).not.toThrow();
+    expect(() => stopScheduler()).not.toThrow();
+  });
+
+  it("calling stopScheduler when not running is a no-op", () => {
+    stopScheduler(); // ensure stopped
+    expect(() => stopScheduler()).not.toThrow();
+  });
+
+  it("calling startScheduler twice is idempotent", () => {
+    expect(() => {
+      startScheduler();
+      startScheduler(); // second call should be no-op (intervalId already set)
+      stopScheduler();
+    }).not.toThrow();
   });
 });
