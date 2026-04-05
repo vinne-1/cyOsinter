@@ -36,6 +36,7 @@ import {
   emitScanCompleted,
   emitScanFailed,
   emitNewCriticalFinding,
+  emitScheduledScanTriggered,
 } from "../../../server/notifications";
 
 beforeEach(() => {
@@ -158,6 +159,21 @@ describe("emitNewCriticalFinding", () => {
     expect(args.type).toBe("new_high_finding");
   });
 
+  it("truncates description to 300 chars", async () => {
+    const finding = {
+      id: "f-long",
+      workspaceId: "ws-1",
+      title: "Issue",
+      description: "D".repeat(500),
+      severity: "critical",
+      category: "misc",
+      affectedAsset: null,
+    } as any;
+    await emitNewCriticalFinding(finding);
+    const args = mockCreateAlert.mock.calls[0][0];
+    expect(args.message.length).toBe(300);
+  });
+
   it("does NOT create alert for medium/low/info findings", async () => {
     for (const severity of ["medium", "low", "info"]) {
       mockCreateAlert.mockClear();
@@ -174,5 +190,21 @@ describe("emitNewCriticalFinding", () => {
       await emitNewCriticalFinding(finding);
       expect(mockCreateAlert).not.toHaveBeenCalled();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// emitScheduledScanTriggered
+// ---------------------------------------------------------------------------
+describe("emitScheduledScanTriggered", () => {
+  it("creates alert with scheduled_scan_triggered type and info severity", async () => {
+    await emitScheduledScanTriggered("ws-sched", "sched.com", "scan-99");
+    expect(mockCreateAlert).toHaveBeenCalledOnce();
+    const args = mockCreateAlert.mock.calls[0][0];
+    expect(args.type).toBe("scheduled_scan_triggered");
+    expect(args.severity).toBe("info");
+    expect(args.workspaceId).toBe("ws-sched");
+    expect(args.scanId).toBe("scan-99");
+    expect(args.message).toContain("sched.com");
   });
 });
