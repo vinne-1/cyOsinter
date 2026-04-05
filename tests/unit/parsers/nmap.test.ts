@@ -53,6 +53,12 @@ PORT   STATE SERVICE
   });
 });
 
+describe("parseNmap — oversized file", () => {
+  it("throws for files over 10 MB", () => {
+    expect(() => parseNmap("x".repeat(10 * 1024 * 1024 + 1), "nmap")).toThrow("too large");
+  });
+});
+
 describe("parseNmap — XML format", () => {
   it("parses nmap XML output", () => {
     const xml = `<?xml version="1.0"?>
@@ -84,6 +90,14 @@ describe("parseNmap — XML format", () => {
 
   it("handles malformed XML gracefully", () => {
     const result = parseNmap("<not valid xml!!!", "nmap");
+    expect(result.hosts).toEqual([]);
+  });
+
+  it("skips XML host element with no address, hostname, or ports (line 122 false branch)", () => {
+    // A host element present but with no useful data — should be filtered out
+    const xml = `<?xml version="1.0"?><nmaprun><host></host></nmaprun>`;
+    const result = parseNmap(xml, "nmap");
+    // Host has no address, no hostname, no ports — filtered from results
     expect(result.hosts).toEqual([]);
   });
 });
@@ -127,5 +141,15 @@ describe("nmapToTextSummary", () => {
     };
     const text = nmapToTextSummary(parsed);
     expect(text).toContain("Host: 10.0.0.1 (10.0.0.1)");
+  });
+
+  it("includes rawSummary section when present", () => {
+    const parsed = {
+      hosts: [],
+      rawSummary: "Nikto raw scan output here",
+    };
+    const text = nmapToTextSummary(parsed);
+    expect(text).toContain("--- Raw content ---");
+    expect(text).toContain("Nikto raw scan output here");
   });
 });
