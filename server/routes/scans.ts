@@ -73,9 +73,17 @@ scansRouter.post("/scans", async (req, res) => {
     if (!workspaceId) {
       let ws = await storage.getWorkspaceByName(parsed.target);
       if (!ws) {
-        ws = await storage.createWorkspace({ name: parsed.target, description: null, status: "active" });
-        // Auto-add the creating user as owner
-        await storage.addWorkspaceMember(ws.id, req.user!.id, "owner");
+        try {
+          ws = await storage.createWorkspace({ name: parsed.target, description: null, status: "active" });
+          // Auto-add the creating user as owner
+          await storage.addWorkspaceMember(ws.id, req.user!.id, "owner");
+        } catch {
+          // Another concurrent request created the workspace — fetch it
+          ws = await storage.getWorkspaceByName(parsed.target);
+          if (!ws) {
+            return res.status(500).json({ message: "Internal server error" });
+          }
+        }
       }
       workspaceId = ws.id;
     }
