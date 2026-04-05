@@ -2,10 +2,26 @@ import { QueryClient, QueryFunction } from "@tanstack/react-query";
 
 const API_BASE = (typeof import.meta !== "undefined" && import.meta.env?.VITE_API_BASE) || "";
 
+/** Extract a human-readable message from an API error response.
+ * Handles both { error: "..." } and { message: "..." } JSON envelopes.
+ */
+export function parseApiError(status: number, text: string): string {
+  try {
+    const json = JSON.parse(text);
+    if (json && typeof json === "object") {
+      const msg = (json as Record<string, unknown>).error ?? (json as Record<string, unknown>).message;
+      if (typeof msg === "string" && msg.length > 0) return msg;
+    }
+  } catch {
+    // not JSON — use raw text
+  }
+  return text || `Request failed (${status})`;
+}
+
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;
-    throw new Error(`${res.status}: ${text}`);
+    throw new Error(parseApiError(res.status, text));
   }
 }
 
