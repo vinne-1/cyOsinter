@@ -266,6 +266,65 @@ describe("createReportSchema", () => {
 });
 
 // ---------------------------------------------------------------------------
+// startContinuousMonitoringSchema
+// ---------------------------------------------------------------------------
+import { startContinuousMonitoringSchema, stopContinuousMonitoringSchema, updateScheduledScanSchema } from "../../../server/routes/schemas";
+
+describe("startContinuousMonitoringSchema", () => {
+  it("accepts valid domain target", () => {
+    expect(startContinuousMonitoringSchema.safeParse({ target: "example.com" }).success).toBe(true);
+  });
+
+  it("accepts optional workspaceId", () => {
+    expect(startContinuousMonitoringSchema.safeParse({ target: "example.com", workspaceId: "ws-1" }).success).toBe(true);
+  });
+
+  it("rejects invalid domain", () => {
+    expect(startContinuousMonitoringSchema.safeParse({ target: "not a domain" }).success).toBe(false);
+  });
+
+  it("rejects empty target", () => {
+    expect(startContinuousMonitoringSchema.safeParse({ target: "" }).success).toBe(false);
+  });
+});
+
+describe("stopContinuousMonitoringSchema", () => {
+  it("accepts valid workspaceId", () => {
+    expect(stopContinuousMonitoringSchema.safeParse({ workspaceId: "ws-123" }).success).toBe(true);
+  });
+
+  it("rejects empty workspaceId", () => {
+    expect(stopContinuousMonitoringSchema.safeParse({ workspaceId: "" }).success).toBe(false);
+  });
+
+  it("rejects missing workspaceId", () => {
+    expect(stopContinuousMonitoringSchema.safeParse({}).success).toBe(false);
+  });
+});
+
+describe("updateScheduledScanSchema", () => {
+  it("accepts empty object (all optional)", () => {
+    expect(updateScheduledScanSchema.safeParse({}).success).toBe(true);
+  });
+
+  it("accepts valid cron update", () => {
+    expect(updateScheduledScanSchema.safeParse({ cronExpression: "0 3 * * *" }).success).toBe(true);
+  });
+
+  it("rejects invalid cron (4 fields)", () => {
+    expect(updateScheduledScanSchema.safeParse({ cronExpression: "0 3 * *" }).success).toBe(false);
+  });
+
+  it("accepts valid scanType update", () => {
+    expect(updateScheduledScanSchema.safeParse({ scanType: "osint" }).success).toBe(true);
+  });
+
+  it("accepts enabled toggle", () => {
+    expect(updateScheduledScanSchema.safeParse({ enabled: false }).success).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 describe("constants", () => {
