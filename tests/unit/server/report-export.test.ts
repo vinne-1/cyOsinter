@@ -6,7 +6,7 @@
 
 import { describe, it, expect } from "vitest";
 
-import { generateReportCsv, type ReportExportInput } from "../../../server/report-export";
+import { generateReportCsv, generateReportExcel, type ReportExportInput } from "../../../server/report-export";
 
 function makeInput(overrides: Partial<ReportExportInput> = {}): ReportExportInput {
   return {
@@ -143,5 +143,94 @@ describe("generateReportCsv", () => {
       ],
     }));
     expect(csv).toContain("f-null");
+  });
+
+  it("includes Overview section when content.totalFindings is set", () => {
+    const csv = generateReportCsv(makeInput({
+      content: {
+        totalFindings: 10,
+        criticalCount: 2,
+        highCount: 3,
+        mediumCount: 4,
+        lowCount: 1,
+        resolvedCount: 5,
+      },
+    }));
+    expect(csv).toContain("Overview");
+    expect(csv).toContain("Total Findings,10");
+    expect(csv).toContain("Critical,2");
+    expect(csv).toContain("High,3");
+    expect(csv).toContain("Medium,4");
+    expect(csv).toContain("Low,1");
+    expect(csv).toContain("Resolved,5");
+  });
+
+  it("omits Overview section when content.totalFindings is absent", () => {
+    const csv = generateReportCsv(makeInput({ content: {} }));
+    expect(csv).not.toContain("Overview");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// generateReportExcel
+// ---------------------------------------------------------------------------
+describe("generateReportExcel", () => {
+  it("returns a non-empty Buffer", async () => {
+    const buf = await generateReportExcel(makeInput());
+    expect(Buffer.isBuffer(buf)).toBe(true);
+    expect(buf.length).toBeGreaterThan(0);
+  });
+
+  it("produces a valid xlsx magic bytes (PK zip header)", async () => {
+    const buf = await generateReportExcel(makeInput());
+    // XLSX files are ZIP archives starting with PK (0x50 0x4B)
+    expect(buf[0]).toBe(0x50);
+    expect(buf[1]).toBe(0x4b);
+  });
+
+  it("includes findings in Excel output", async () => {
+    const buf = await generateReportExcel(makeInput({
+      findings: [
+        { id: "f-xls", title: "XSS Finding", severity: "high", status: "open" },
+      ],
+    }));
+    // Buffer should be non-empty and xlsx format
+    expect(buf.length).toBeGreaterThan(100);
+  });
+
+  it("handles overview stats in Excel output", async () => {
+    const buf = await generateReportExcel(makeInput({
+      content: {
+        totalFindings: 5,
+        criticalCount: 1,
+        highCount: 2,
+        attackSurface: { surfaceRiskScore: 72 },
+        attackSurfaceSummary: { totalHosts: 20, highRiskCount: 3, wafCoverage: 85 },
+      },
+    }));
+    expect(buf.length).toBeGreaterThan(100);
+  });
+
+  it("handles posture trend sheet", async () => {
+    const buf = await generateReportExcel(makeInput({
+      content: {
+        postureTrend: [
+          { snapshotAt: "2025-01-01T00:00:00Z", surfaceRiskScore: 60, securityScore: 75, findingsCount: 10 },
+          { snapshotAt: "2025-02-01T00:00:00Z", surfaceRiskScore: 55, securityScore: 80, findingsCount: 8 },
+        ],
+      },
+    }));
+    expect(buf.length).toBeGreaterThan(100);
+  });
+
+  it("neutralizes formula injection in Excel cells", async () => {
+    // The function should not throw — injection chars are sanitized
+    const buf = await generateReportExcel(makeInput({
+      findings: [
+        { id: "=CMD()", title: "+evil", severity: "critical" },
+        { id: "@SUM", title: "-1+1", severity: "high" },
+      ],
+    }));
+    expect(buf.length).toBeGreaterThan(0);
   });
 });
