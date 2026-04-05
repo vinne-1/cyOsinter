@@ -1,7 +1,6 @@
 import { Router } from "express";
 import { z } from "zod";
 import crypto from "crypto";
-import dns from "dns/promises";
 import { eq, and } from "drizzle-orm";
 import { db } from "../db";
 import { webhookEndpoints } from "@shared/schema";
@@ -9,26 +8,7 @@ import { requireAuth, requireWorkspaceRole } from "./auth-middleware";
 import { sendError, sendValidationError, sendNotFound } from "./response";
 import { encrypt, decrypt } from "../crypto";
 import { createLogger } from "../logger";
-
-/** Check if a hostname resolves to a private/loopback IP (SSRF prevention) */
-async function isPrivateHost(hostname: string): Promise<boolean> {
-  try {
-    const addrs = await dns.resolve4(hostname);
-    return addrs.some((ip) => {
-      const parts = ip.split(".").map(Number);
-      return (
-        parts[0] === 127 ||
-        parts[0] === 10 ||
-        (parts[0] === 172 && parts[1]! >= 16 && parts[1]! <= 31) ||
-        (parts[0] === 192 && parts[1] === 168) ||
-        (parts[0] === 169 && parts[1] === 254) ||
-        parts[0] === 0
-      );
-    });
-  } catch {
-    return true; // fail-closed: if DNS resolution fails, treat as private
-  }
-}
+import { isPrivateHost } from "../utils/ssrf.js";
 
 /** Omit the secret from a webhook row for API responses */
 function sanitizeWebhook(row: typeof webhookEndpoints.$inferSelect) {

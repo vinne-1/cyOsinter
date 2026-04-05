@@ -9,28 +9,8 @@ import { storage } from "../storage";
 import { createLogger } from "../logger";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
-import dns from "dns/promises";
 import { encryptObject, decryptObject } from "../crypto";
-
-/** Check if a hostname resolves to a private/loopback IP (SSRF prevention) */
-async function isPrivateHost(hostname: string): Promise<boolean> {
-  try {
-    const addrs = await dns.resolve4(hostname);
-    return addrs.some((ip) => {
-      const parts = ip.split(".").map(Number);
-      return (
-        parts[0] === 127 ||
-        parts[0] === 10 ||
-        (parts[0] === 172 && parts[1]! >= 16 && parts[1]! <= 31) ||
-        (parts[0] === 192 && parts[1] === 168) ||
-        (parts[0] === 169 && parts[1] === 254) ||
-        parts[0] === 0
-      );
-    });
-  } catch {
-    return true; // fail-closed
-  }
-}
+import { isPrivateHost } from "../utils/ssrf.js";
 
 const log = createLogger("integrations-tickets");
 

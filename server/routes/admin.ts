@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import type { Server } from "http";
+import { eq } from "drizzle-orm";
 import { storage } from "../storage";
 import { createLogger } from "../logger";
 import { computeSecurityScore } from "@shared/scoring";
@@ -12,6 +13,7 @@ import { requireWorkspaceRole } from "./auth-middleware";
 import { startContinuousMonitoringSchema, stopContinuousMonitoringSchema } from "./schemas";
 import { getQueueStatus } from "../scan-queue";
 import { db } from "../db";
+import { workspaceMembers } from "@shared/schema";
 
 const routeLog = createLogger("routes");
 
@@ -47,10 +49,7 @@ export function createAdminRouter(httpServer: Server): Router {
         const existing = await storage.getWorkspaceMember(ws.id, req.user!.id);
         if (!existing) {
           // Check if workspace has ANY members first
-          const { workspaceMembers: wm } = await import("@shared/schema");
-          const { eq } = await import("drizzle-orm");
-          const { db } = await import("../db");
-          const members = await db.select().from(wm).where(eq(wm.workspaceId, ws.id)).limit(1);
+          const members = await db.select().from(workspaceMembers).where(eq(workspaceMembers.workspaceId, ws.id)).limit(1);
           if (members.length === 0) {
             await storage.addWorkspaceMember(ws.id, req.user!.id, "owner");
             claimed.push(ws.id);
