@@ -1,0 +1,17 @@
+{
+  "users": {
+    "auth-shared@e2e.local": {
+      "token": "9b25b39e22f9bf45cd93c2f843bac51f158857bdf01052afb4ce2e28fedbf546",
+      "refreshToken": "dcdd81d1372edfdfcfb0ae5bd0b7ba3079abc0e3dca199e925239cee556587f1"
+    },
+    "ws-user-a@e2e.local": {
+      "token": "2e9fea59e324aad2476fc538b6833b23437f8dc3ba3ad2f4a5751695edb4a44c",
+      "refreshToken": "4dc0a7b5820df2c2979408e565bce59bec3abb447deb0ddeba58325850de76c0"
+    },
+    "ws-user-b@e2e.local": {
+      "token": "fc8f810f22da0219d98919c116365ac8a2601d71d5b8aac326232864534298dd",
+      "refreshToken": "5e0ffcd360b1fa72359ed89da602341950153b146b91df366e1fe75d0b1f62e6"
+    }
+  },
+  "_createdAt": 1775371294133
+}
