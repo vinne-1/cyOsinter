@@ -34,6 +34,34 @@ export function createAdminRouter(httpServer: Server): Router {
     }
   });
 
+  // POST /api/admin/claim-orphan-workspaces
+  // Assigns all workspaces with no members to the calling superadmin user.
+  // Use this once after upgrading from a version that didn't track workspace membership.
+  adminRouter.post("/admin/claim-orphan-workspaces", requireAdmin, async (req, res) => {
+    try {
+      const allWorkspaces = await storage.getWorkspaces();
+      const claimed: string[] = [];
+      for (const ws of allWorkspaces) {
+        const existing = await storage.getWorkspaceMember(ws.id, req.user!.id);
+        if (!existing) {
+          // Check if workspace has ANY members first
+          const { workspaceMembers: wm } = await import("@shared/schema");
+          const { eq } = await import("drizzle-orm");
+          const { db } = await import("../db");
+          const members = await db.select().from(wm).where(eq(wm.workspaceId, ws.id)).limit(1);
+          if (members.length === 0) {
+            await storage.addWorkspaceMember(ws.id, req.user!.id, "owner");
+            claimed.push(ws.id);
+          }
+        }
+      }
+      res.json({ claimed: claimed.length, workspaceIds: claimed });
+    } catch (err) {
+      routeLog.error({ err }, "Claim orphan workspaces error");
+      res.status(500).json({ message: "Failed to claim orphan workspaces" });
+    }
+  });
+
   adminRouter.post("/admin/recover-stuck-scans", requireAdmin, async (_req, res) => {
     try {
       const stuck = await storage.getStuckScans(STUCK_SCAN_AGE_MS);
