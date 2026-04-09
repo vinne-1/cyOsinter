@@ -1,7 +1,54 @@
-import { eq, desc, and, sql, lt, asc, count, inArray } from "drizzle-orm";
+import { eq, desc, and, sql, lt, asc, count } from "drizzle-orm";
 import { db } from "./db";
-import { workspaces, assets, scans, findings, reports, reconModules, continuousMonitoring, uploadedScans, postureSnapshots, alerts, scheduledScans, scanProfiles, workspaceMembers } from "@shared/schema";
-import type { Workspace, InsertWorkspace, Asset, InsertAsset, Scan, InsertScan, Finding, InsertFinding, Report, InsertReport, ReconModule, InsertReconModule, ContinuousMonitoring, InsertContinuousMonitoring, UploadedScan, InsertUploadedScan, PostureSnapshot, InsertPostureSnapshot, Alert, InsertAlert, ScheduledScan, InsertScheduledScan, ScanProfile, InsertScanProfile, WorkspaceMember } from "@shared/schema";
+import {
+  workspaces,
+  assets,
+  scans,
+  findings,
+  reports,
+  reconModules,
+  continuousMonitoring,
+  uploadedScans,
+  postureSnapshots,
+  alerts,
+  scheduledScans,
+  scanProfiles,
+  riskItems,
+  policyDocuments,
+  questionnaireRuns,
+} from "@shared/schema";
+import type {
+  Workspace,
+  InsertWorkspace,
+  Asset,
+  InsertAsset,
+  Scan,
+  InsertScan,
+  Finding,
+  InsertFinding,
+  Report,
+  InsertReport,
+  ReconModule,
+  InsertReconModule,
+  ContinuousMonitoring,
+  InsertContinuousMonitoring,
+  UploadedScan,
+  InsertUploadedScan,
+  PostureSnapshot,
+  InsertPostureSnapshot,
+  Alert,
+  InsertAlert,
+  ScheduledScan,
+  InsertScheduledScan,
+  ScanProfile,
+  InsertScanProfile,
+  RiskItem,
+  InsertRiskItem,
+  PolicyDocument,
+  InsertPolicyDocument,
+  QuestionnaireRun,
+  InsertQuestionnaireRun,
+} from "@shared/schema";
 
 export interface PaginationOpts {
   limit?: number;
@@ -68,13 +115,7 @@ export interface IStorage {
   createPostureSnapshot(snapshot: InsertPostureSnapshot): Promise<PostureSnapshot>;
   getStuckScans(maxAgeMs: number): Promise<Scan[]>;
 
-  // Workspace Members
-  getWorkspaceMember(workspaceId: string, userId: string): Promise<WorkspaceMember | undefined>;
-  addWorkspaceMember(workspaceId: string, userId: string, role: string): Promise<WorkspaceMember>;
-  getWorkspacesByUserId(userId: string): Promise<Workspace[]>;
-
   // Alerts
-  getAlert(id: string): Promise<Alert | undefined>;
   getAlerts(workspaceId: string, limit?: number): Promise<Alert[]>;
   getUnreadAlertCount(workspaceId: string): Promise<number>;
   createAlert(alert: InsertAlert): Promise<Alert>;
@@ -96,6 +137,27 @@ export interface IStorage {
   createScanProfile(profile: InsertScanProfile): Promise<ScanProfile>;
   updateScanProfile(id: string, data: Partial<ScanProfile>): Promise<ScanProfile | undefined>;
   deleteScanProfile(id: string): Promise<void>;
+
+  // Risk register
+  getRiskItems(workspaceId: string): Promise<RiskItem[]>;
+  getRiskItem(id: string): Promise<RiskItem | undefined>;
+  getRiskItemByFingerprint(workspaceId: string, fingerprint: string): Promise<RiskItem | undefined>;
+  createRiskItem(item: InsertRiskItem): Promise<RiskItem>;
+  updateRiskItem(id: string, data: Partial<RiskItem>): Promise<RiskItem | undefined>;
+  deleteRiskItem(id: string): Promise<void>;
+
+  // Policies
+  getPolicyDocuments(workspaceId: string): Promise<PolicyDocument[]>;
+  getPolicyDocument(id: string): Promise<PolicyDocument | undefined>;
+  getPolicyDocumentByType(workspaceId: string, policyType: string): Promise<PolicyDocument | undefined>;
+  createPolicyDocument(doc: InsertPolicyDocument): Promise<PolicyDocument>;
+  updatePolicyDocument(id: string, data: Partial<PolicyDocument>): Promise<PolicyDocument | undefined>;
+  deletePolicyDocument(id: string): Promise<void>;
+
+  // Questionnaires
+  getQuestionnaireRuns(workspaceId: string): Promise<QuestionnaireRun[]>;
+  getQuestionnaireRun(id: string): Promise<QuestionnaireRun | undefined>;
+  createQuestionnaireRun(run: InsertQuestionnaireRun): Promise<QuestionnaireRun>;
 }
 
 const DEFAULT_LIMIT = 500;
@@ -135,7 +197,7 @@ export class DatabaseStorage implements IStorage {
     const childTables = [
       scanProfiles, alerts, scheduledScans, reconModules,
       postureSnapshots, findings, assets, reports,
-      continuousMonitoring, uploadedScans,
+      continuousMonitoring, uploadedScans, riskItems, policyDocuments, questionnaireRuns,
     ] as const;
     for (const table of childTables) {
       await db.delete(table).where(eq(table.workspaceId, id));
@@ -382,37 +444,6 @@ export class DatabaseStorage implements IStorage {
 
   // ── Alerts ──
 
-  // ── Workspace Members ──
-
-  async getWorkspaceMember(workspaceId: string, userId: string): Promise<WorkspaceMember | undefined> {
-    const [member] = await db.select().from(workspaceMembers)
-      .where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.userId, userId)))
-      .limit(1);
-    return member;
-  }
-
-  async addWorkspaceMember(workspaceId: string, userId: string, role: string): Promise<WorkspaceMember> {
-    const [member] = await db.insert(workspaceMembers)
-      .values({ workspaceId, userId, role })
-      .returning();
-    return member;
-  }
-
-  async getWorkspacesByUserId(userId: string): Promise<Workspace[]> {
-    const members = await db.select({ workspaceId: workspaceMembers.workspaceId })
-      .from(workspaceMembers)
-      .where(eq(workspaceMembers.userId, userId));
-    if (members.length === 0) return [];
-    const wsIds = members.map(m => m.workspaceId);
-    return db.select().from(workspaces)
-      .where(inArray(workspaces.id, wsIds));
-  }
-
-  async getAlert(id: string): Promise<Alert | undefined> {
-    const [alert] = await db.select().from(alerts).where(eq(alerts.id, id)).limit(1);
-    return alert;
-  }
-
   async getAlerts(workspaceId: string, limit = 50): Promise<Alert[]> {
     return db.select().from(alerts)
       .where(eq(alerts.workspaceId, workspaceId))
@@ -509,6 +540,96 @@ export class DatabaseStorage implements IStorage {
 
   async deleteScanProfile(id: string): Promise<void> {
     await db.delete(scanProfiles).where(eq(scanProfiles.id, id));
+  }
+
+  // ── Risk Register ──
+
+  async getRiskItems(workspaceId: string): Promise<RiskItem[]> {
+    return db.select().from(riskItems)
+      .where(eq(riskItems.workspaceId, workspaceId))
+      .orderBy(desc(riskItems.riskScore), desc(riskItems.createdAt));
+  }
+
+  async getRiskItem(id: string): Promise<RiskItem | undefined> {
+    const [row] = await db.select().from(riskItems).where(eq(riskItems.id, id));
+    return row;
+  }
+
+  async getRiskItemByFingerprint(workspaceId: string, fingerprint: string): Promise<RiskItem | undefined> {
+    const [row] = await db.select().from(riskItems)
+      .where(and(eq(riskItems.workspaceId, workspaceId), eq(riskItems.fingerprint, fingerprint)));
+    return row;
+  }
+
+  async createRiskItem(item: InsertRiskItem): Promise<RiskItem> {
+    const [created] = await db.insert(riskItems).values(item).returning();
+    return created;
+  }
+
+  async updateRiskItem(id: string, data: Partial<RiskItem>): Promise<RiskItem | undefined> {
+    const [updated] = await db.update(riskItems)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(riskItems.id, id))
+      .returning();
+    return updated;
+  }
+
+  async deleteRiskItem(id: string): Promise<void> {
+    await db.delete(riskItems).where(eq(riskItems.id, id));
+  }
+
+  // ── Policy Documents ──
+
+  async getPolicyDocuments(workspaceId: string): Promise<PolicyDocument[]> {
+    return db.select().from(policyDocuments)
+      .where(eq(policyDocuments.workspaceId, workspaceId))
+      .orderBy(asc(policyDocuments.policyType));
+  }
+
+  async getPolicyDocument(id: string): Promise<PolicyDocument | undefined> {
+    const [row] = await db.select().from(policyDocuments).where(eq(policyDocuments.id, id));
+    return row;
+  }
+
+  async getPolicyDocumentByType(workspaceId: string, policyType: string): Promise<PolicyDocument | undefined> {
+    const [row] = await db.select().from(policyDocuments)
+      .where(and(eq(policyDocuments.workspaceId, workspaceId), eq(policyDocuments.policyType, policyType)));
+    return row;
+  }
+
+  async createPolicyDocument(doc: InsertPolicyDocument): Promise<PolicyDocument> {
+    const [created] = await db.insert(policyDocuments).values(doc).returning();
+    return created;
+  }
+
+  async updatePolicyDocument(id: string, data: Partial<PolicyDocument>): Promise<PolicyDocument | undefined> {
+    const [updated] = await db.update(policyDocuments)
+      .set({ ...data, updatedAt: new Date() })
+      .where(eq(policyDocuments.id, id))
+      .returning();
+    return updated;
+  }
+
+  async deletePolicyDocument(id: string): Promise<void> {
+    await db.delete(policyDocuments).where(eq(policyDocuments.id, id));
+  }
+
+  // ── Questionnaire Runs ──
+
+  async getQuestionnaireRuns(workspaceId: string): Promise<QuestionnaireRun[]> {
+    return db.select().from(questionnaireRuns)
+      .where(eq(questionnaireRuns.workspaceId, workspaceId))
+      .orderBy(desc(questionnaireRuns.createdAt));
+  }
+
+  async getQuestionnaireRun(id: string): Promise<QuestionnaireRun | undefined> {
+    const [row] = await db.select().from(questionnaireRuns).where(eq(questionnaireRuns.id, id));
+    return row;
+  }
+
+  async createQuestionnaireRun(run: InsertQuestionnaireRun): Promise<QuestionnaireRun> {
+    const [created] = await db.insert(questionnaireRuns).values(run).returning();
+    return created;
   }
 }
 

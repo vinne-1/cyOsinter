@@ -1,7 +1,7 @@
 import React, { Suspense } from "react";
 import { Switch, Route, Redirect, useLocation } from "wouter";
 import { queryClient } from "./lib/queryClient";
-import { QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
@@ -11,6 +11,7 @@ import { DomainProvider } from "@/lib/domain-context";
 import { DomainSelector } from "@/components/domain-selector";
 import { NotificationBell } from "@/components/notification-bell";
 import { useAuth } from "@/pages/auth";
+import { getQueryFn } from "@/lib/queryClient";
 import { Loader2, AlertTriangle, RefreshCw } from "lucide-react";
 
 class ErrorBoundary extends React.Component<
@@ -80,6 +81,10 @@ const ThreatIntelPage = React.lazy(() => import("@/pages/threat-intel"));
 const RetentionConfigPage = React.lazy(() => import("@/pages/retention-config"));
 const PlaybooksPage = React.lazy(() => import("@/pages/playbooks"));
 const AssetRiskPage = React.lazy(() => import("@/pages/asset-risk"));
+const RiskRegisterPage = React.lazy(() => import("@/pages/risk-register"));
+const ComplianceDriftPage = React.lazy(() => import("@/pages/compliance-drift"));
+const QuestionnairesPage = React.lazy(() => import("@/pages/questionnaires"));
+const PoliciesPage = React.lazy(() => import("@/pages/policies"));
 
 function Router() {
   return (
@@ -110,6 +115,10 @@ function Router() {
         <Route path="/retention" component={RetentionConfigPage} />
         <Route path="/playbooks" component={PlaybooksPage} />
         <Route path="/asset-risk" component={AssetRiskPage} />
+        <Route path="/risk-register" component={RiskRegisterPage} />
+        <Route path="/compliance-drift" component={ComplianceDriftPage} />
+        <Route path="/questionnaires" component={QuestionnairesPage} />
+        <Route path="/policies" component={PoliciesPage} />
         <Route component={NotFound} />
       </Switch>
     </Suspense>
@@ -117,8 +126,21 @@ function Router() {
 }
 
 function AuthenticatedApp() {
-  const { isAuthenticated } = useAuth();
+  const { token } = useAuth();
   const [location] = useLocation();
+  const { data: currentUser, isLoading } = useQuery({
+    queryKey: ["/api/auth/me"],
+    queryFn: getQueryFn({ on401: "returnNull" }),
+    enabled: !!token,
+    retry: false,
+    staleTime: 0,
+  });
+
+  const isAuthenticated = !!token && !!currentUser;
+
+  if (token && isLoading && location !== "/auth") {
+    return <div className="flex items-center justify-center h-screen"><Loader2 className="w-8 h-8 animate-spin" /></div>;
+  }
 
   if (!isAuthenticated && location !== "/auth") {
     return <Redirect to="/auth" />;
@@ -158,7 +180,6 @@ function AuthenticatedApp() {
           </div>
         </div>
       </SidebarProvider>
-      <Toaster />
     </DomainProvider>
   );
 }
@@ -169,6 +190,7 @@ function App() {
       <ThemeProvider>
         <TooltipProvider>
           <AuthenticatedApp />
+          <Toaster />
         </TooltipProvider>
       </ThemeProvider>
     </QueryClientProvider>

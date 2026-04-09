@@ -11,6 +11,7 @@ export const workspaces = pgTable("workspaces", {
   name: text("name").notNull().unique(),
   description: text("description"),
   status: text("status").notNull().default("active"),
+  scanProfilesBootstrapped: boolean("scan_profiles_bootstrapped").notNull().default(false),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -60,6 +61,11 @@ export const findings = pgTable("findings", {
   severity: text("severity").notNull(),
   status: text("status").notNull().default("open"),
   category: text("category").notNull(),
+  checkId: text("check_id"),
+  resourceType: text("resource_type"),
+  resourceId: text("resource_id"),
+  provider: text("provider"),
+  complianceTags: text("compliance_tags").array().default(sql`'{}'::text[]`),
   affectedAsset: text("affected_asset"),
   evidence: jsonb("evidence").$type<Record<string, unknown>[]>(),
   cvssScore: text("cvss_score"),
@@ -79,10 +85,6 @@ export const findings = pgTable("findings", {
 }, (t) => [
   index("findings_workspace_id_idx").on(t.workspaceId),
   index("findings_scan_id_idx").on(t.scanId),
-  index("findings_workspace_severity_idx").on(t.workspaceId, t.severity),
-  index("findings_workspace_status_idx").on(t.workspaceId, t.status),
-  index("findings_workspace_category_idx").on(t.workspaceId, t.category),
-  index("findings_group_id_idx").on(t.groupId),
   foreignKey({ columns: [t.workspaceId], foreignColumns: [workspaces.id], name: "findings_workspace_fk" }).onDelete("cascade"),
   foreignKey({ columns: [t.scanId], foreignColumns: [scans.id], name: "findings_scan_fk" }).onDelete("set null"),
 ]);
@@ -194,7 +196,7 @@ export const alerts = pgTable("alerts", {
   createdAt: timestamp("created_at").defaultNow(),
 }, (t) => [
   index("alerts_workspace_id_idx").on(t.workspaceId),
-  index("alerts_workspace_read_idx").on(t.workspaceId, t.read),
+  index("alerts_read_idx").on(t.read),
   foreignKey({ columns: [t.workspaceId], foreignColumns: [workspaces.id], name: "alerts_workspace_fk" }).onDelete("cascade"),
   foreignKey({ columns: [t.scanId], foreignColumns: [scans.id], name: "alerts_scan_fk" }).onDelete("set null"),
   foreignKey({ columns: [t.findingId], foreignColumns: [findings.id], name: "alerts_finding_fk" }).onDelete("set null"),
@@ -215,7 +217,6 @@ export const scheduledScans = pgTable("scheduled_scans", {
 }, (t) => [
   index("scheduled_scans_workspace_id_idx").on(t.workspaceId),
   index("scheduled_scans_enabled_idx").on(t.enabled),
-  index("scheduled_scans_next_run_at_idx").on(t.nextRunAt),
   foreignKey({ columns: [t.workspaceId], foreignColumns: [workspaces.id], name: "scheduled_scans_workspace_fk" }).onDelete("cascade"),
   foreignKey({ columns: [t.lastScanId], foreignColumns: [scans.id], name: "scheduled_scans_last_scan_fk" }).onDelete("set null"),
 ]);
@@ -387,18 +388,82 @@ export const retentionPolicies = pgTable("retention_policies", {
   foreignKey({ columns: [t.workspaceId], foreignColumns: [workspaces.id], name: "retention_policies_workspace_fk" }).onDelete("cascade"),
 ]);
 
+// ── Phase 6: Compliance Workflows ──
+
+export const riskItems = pgTable("risk_items", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  workspaceId: varchar("workspace_id").notNull(),
+  relatedFindingId: varchar("related_finding_id"),
+  fingerprint: text("fingerprint").notNull(),
+  title: text("title").notNull(),
+  description: text("description").notNull(),
+  category: text("category").notNull().default("technical"),
+  likelihood: text("likelihood").notNull().default("medium"), // low, medium, high
+  impact: text("impact").notNull().default("medium"), // low, medium, high
+  riskScore: integer("risk_score").notNull().default(4),
+  riskLevel: text("risk_level").notNull().default("medium"), // low, medium, high
+  owner: text("owner"),
+  treatment: text("treatment").notNull().default("mitigate"), // mitigate, accept, transfer, avoid
+  treatmentPlan: text("treatment_plan"),
+  status: text("status").notNull().default("open"), // open, in_progress, accepted, resolved
+  reviewCadenceDays: integer("review_cadence_days").notNull().default(90),
+  reviewNotes: text("review_notes"),
+  lastReviewedAt: timestamp("last_reviewed_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (t) => [
+  index("risk_items_workspace_id_idx").on(t.workspaceId),
+  unique("risk_items_workspace_fingerprint_unique").on(t.workspaceId, t.fingerprint),
+  foreignKey({ columns: [t.workspaceId], foreignColumns: [workspaces.id], name: "risk_items_workspace_fk" }).onDelete("cascade"),
+  foreignKey({ columns: [t.relatedFindingId], foreignColumns: [findings.id], name: "risk_items_finding_fk" }).onDelete("set null"),
+]);
+
+export const policyDocuments = pgTable("policy_documents", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  workspaceId: varchar("workspace_id").notNull(),
+  policyType: text("policy_type").notNull(),
+  title: text("title").notNull(),
+  version: text("version").notNull().default("1.0"),
+  effectiveDate: timestamp("effective_date").notNull().defaultNow(),
+  content: text("content").notNull(),
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (t) => [
+  index("policy_documents_workspace_id_idx").on(t.workspaceId),
+  unique("policy_documents_workspace_type_unique").on(t.workspaceId, t.policyType),
+  foreignKey({ columns: [t.workspaceId], foreignColumns: [workspaces.id], name: "policy_documents_workspace_fk" }).onDelete("cascade"),
+  foreignKey({ columns: [t.createdBy], foreignColumns: [users.id], name: "policy_documents_created_by_fk" }).onDelete("set null"),
+]);
+
+export const questionnaireRuns = pgTable("questionnaire_runs", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  workspaceId: varchar("workspace_id").notNull(),
+  questionnaireType: text("questionnaire_type").notNull().default("security_baseline"),
+  totalQuestions: integer("total_questions").notNull().default(0),
+  autoAnswered: integer("auto_answered").notNull().default(0),
+  manualRequired: integer("manual_required").notNull().default(0),
+  coveragePct: integer("coverage_pct").notNull().default(0),
+  answers: jsonb("answers").$type<Array<Record<string, unknown>>>().notNull().default(sql`'[]'::jsonb`),
+  createdBy: varchar("created_by"),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (t) => [
+  index("questionnaire_runs_workspace_id_idx").on(t.workspaceId),
+  foreignKey({ columns: [t.workspaceId], foreignColumns: [workspaces.id], name: "questionnaire_runs_workspace_fk" }).onDelete("cascade"),
+  foreignKey({ columns: [t.createdBy], foreignColumns: [users.id], name: "questionnaire_runs_created_by_fk" }).onDelete("set null"),
+]);
+
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true, updatedAt: true, lastLoginAt: true });
 export const insertSessionSchema = createInsertSchema(sessions).omit({ id: true, createdAt: true });
 export const insertWorkspaceMemberSchema = createInsertSchema(workspaceMembers).omit({ id: true, joinedAt: true });
 export const insertAuditLogSchema = createInsertSchema(auditLogs).omit({ id: true, timestamp: true });
 export const insertFindingGroupSchema = createInsertSchema(findingGroups).omit({ id: true, createdAt: true, updatedAt: true });
-export const insertWebhookEndpointSchema = createInsertSchema(webhookEndpoints).omit({ id: true, createdAt: true, lastTriggeredAt: true, failCount: true }).extend({
-  url: z.string().url().refine((u) => {
-    try { return ["http:", "https:"].includes(new URL(u).protocol); } catch { return false; }
-  }, "Webhook URL must use http or https"),
-});
+export const insertWebhookEndpointSchema = createInsertSchema(webhookEndpoints).omit({ id: true, createdAt: true, lastTriggeredAt: true, failCount: true });
 export const insertApiKeySchema = createInsertSchema(apiKeys).omit({ id: true, createdAt: true, lastUsedAt: true, revokedAt: true });
 export const insertRetentionPolicySchema = createInsertSchema(retentionPolicies).omit({ id: true, createdAt: true, updatedAt: true, lastCleanupAt: true });
+export const insertRiskItemSchema = createInsertSchema(riskItems).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertPolicyDocumentSchema = createInsertSchema(policyDocuments).omit({ id: true, createdAt: true, updatedAt: true });
+export const insertQuestionnaireRunSchema = createInsertSchema(questionnaireRuns).omit({ id: true, createdAt: true });
 
 export type Workspace = typeof workspaces.$inferSelect;
 export type InsertWorkspace = z.infer<typeof insertWorkspaceSchema>;
@@ -440,3 +505,9 @@ export type ApiKey = typeof apiKeys.$inferSelect;
 export type InsertApiKey = z.infer<typeof insertApiKeySchema>;
 export type RetentionPolicy = typeof retentionPolicies.$inferSelect;
 export type InsertRetentionPolicy = z.infer<typeof insertRetentionPolicySchema>;
+export type RiskItem = typeof riskItems.$inferSelect;
+export type InsertRiskItem = z.infer<typeof insertRiskItemSchema>;
+export type PolicyDocument = typeof policyDocuments.$inferSelect;
+export type InsertPolicyDocument = z.infer<typeof insertPolicyDocumentSchema>;
+export type QuestionnaireRun = typeof questionnaireRuns.$inferSelect;
+export type InsertQuestionnaireRun = z.infer<typeof insertQuestionnaireRunSchema>;

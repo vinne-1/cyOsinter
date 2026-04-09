@@ -1,5 +1,7 @@
 import type { Express } from "express";
 import type { Server } from "http";
+import { sql } from "drizzle-orm";
+import { db } from "../db";
 import { storage } from "../storage";
 import { createLogger } from "../logger";
 import { workspacesRouter } from "./workspaces";
@@ -23,6 +25,10 @@ import { scanDiffRouter } from "./scan-diff";
 import { playbooksRouter } from "./playbooks";
 import { assetRiskRouter } from "./asset-risk";
 import { threatIntelRouter } from "./threat-intel";
+import { riskRegisterRouter } from "./risk-register";
+import { complianceDriftRouter } from "./compliance-drift";
+import { questionnairesRouter } from "./questionnaires";
+import { policiesRouter } from "./policies";
 import { requireAuth } from "./auth-middleware";
 import { errorHandler } from "./response";
 
@@ -39,6 +45,22 @@ export async function registerRoutes(
   // Auth router is mounted first so /auth/login, /auth/register, /auth/refresh
   // respond before the global requireAuth middleware runs.
   app.use("/api", authRouter);
+  app.get("/api/system/status", async (_req, res) => {
+    let database: "up" | "down" = "up";
+
+    try {
+      await db.execute(sql`SELECT 1`);
+    } catch (err) {
+      database = "down";
+      routeLog.warn({ err }, "System status database check failed");
+    }
+
+    res.json({
+      backend: "up" as const,
+      database,
+      checkedAt: new Date().toISOString(),
+    });
+  });
 
   // ── Global authentication gate ──
   // Every /api route registered AFTER this line requires a valid session or API key.
@@ -65,31 +87,25 @@ export async function registerRoutes(
   app.use("/api", playbooksRouter);
   app.use("/api", assetRiskRouter);
   app.use("/api", threatIntelRouter);
+  app.use("/api", riskRegisterRouter);
+  app.use("/api", complianceDriftRouter);
+  app.use("/api", questionnairesRouter);
+  app.use("/api", policiesRouter);
 
   // Standalone asset routes that don't fit under /api/workspaces
   app.get("/api/assets/:id", async (req, res) => {
     try {
       const asset = await storage.getAsset(req.params.id);
       if (!asset) return res.status(404).json({ message: "Asset not found" });
-      // Verify caller is a member of the asset's workspace
-      const membership = await storage.getWorkspaceMember(asset.workspaceId, req.user!.id);
-      if (!membership) return res.status(404).json({ message: "Asset not found" });
       res.json(asset);
-    } catch (err) { res.status(500).json({ message: "Internal server error" }); }
+    } catch (err) { res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" }); }
   });
 
   app.delete("/api/assets/:id", async (req, res) => {
     try {
-      const asset = await storage.getAsset(req.params.id);
-      if (!asset) return res.status(404).json({ message: "Asset not found" });
-      // Verify caller has write access in the asset's workspace
-      const membership = await storage.getWorkspaceMember(asset.workspaceId, req.user!.id);
-      if (!membership || !["owner", "admin", "analyst"].includes(membership.role)) {
-        return res.status(404).json({ message: "Asset not found" });
-      }
       await storage.deleteAsset(req.params.id);
       res.status(204).send();
-    } catch (err) { res.status(500).json({ message: "Internal server error" }); }
+    } catch (err) { res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" }); }
   });
 
   // Centralized error handler — must be registered after all routes

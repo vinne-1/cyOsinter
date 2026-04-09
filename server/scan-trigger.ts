@@ -5,6 +5,9 @@ import { computeSecurityScore } from "@shared/scoring";
 import { fetchBGPViewForIPs } from "./api-integrations";
 import { enrichFinding } from "./ai-service";
 import { emitScanCompleted, emitScanFailed, emitNewCriticalFinding } from "./notifications";
+import { generateAllComplianceReports } from "./compliance-mapper";
+import { autoSeedRiskRegister } from "./compliance-workflows";
+import type { ScanProfileConfig } from "@shared/schema";
 
 const log = createLogger("scan-trigger");
 
@@ -30,6 +33,11 @@ interface RawFinding {
   cvssScore?: string;
   evidence?: Record<string, unknown>[];
   tags?: string[];
+  checkId?: string;
+  resourceType?: string;
+  resourceId?: string;
+  provider?: string;
+  complianceTags?: string[];
 }
 
 interface RawAsset {
@@ -45,6 +53,8 @@ async function runScanners(
   type: string,
   mode: ScanMode,
   onProgress: ProgressFn,
+  profileConfig: ScanProfileConfig | undefined,
+  signal: AbortSignal | undefined,
 ): Promise<ScanResults> {
   const results: ScanResults = {
     easmResults: null,
@@ -52,7 +62,7 @@ async function runScanners(
     nucleiResults: null,
     dastResults: null,
   };
-  const scanOptions = { signal: undefined as AbortSignal | undefined, mode };
+  const scanOptions = { signal, mode, ...profileConfig };
   const gold = mode === "gold";
 
   if (type === "full") {
@@ -67,13 +77,23 @@ async function runScanners(
     const nucleiUrls = buildNucleiUrls(target, results.easmResults, gold);
     const nucleiProgress: ProgressFn = (m, p, s, e) =>
       onProgress(`[Nuclei] ${m}`, Math.round(75 + (p * 15) / 100), `nuclei_${s}`, e ? Math.ceil(e * 0.15) : undefined);
-    try {
-      results.nucleiResults = await runNucleiScan(target, nucleiUrls, nucleiProgress, { mode });
-    } catch (nucleiErr) {
-      log.warn({ err: nucleiErr }, "Nuclei scan unavailable (non-fatal) — install nuclei for full vulnerability scanning");
-      results.nucleiResults = { findings: [], nucleiResults: [], skipped: true, reason: String(nucleiErr instanceof Error ? nucleiErr.message : nucleiErr) };
+    if (profileConfig?.enableNuclei === false) {
+      results.nucleiResults = {
+        findings: [],
+        nucleiResults: [],
+        skipped: true,
+        reason: "Disabled by selected scan profile",
+      };
+    } else {
+      try {
+        results.nucleiResults = await runNucleiScan(target, nucleiUrls, nucleiProgress, { mode, signal, ...profileConfig });
+      } catch (nucleiErr) {
+        log.warn({ err: nucleiErr }, "Nuclei scan unavailable (non-fatal) — install nuclei for full vulnerability scanning");
+        results.nucleiResults = { findings: [], nucleiResults: [], skipped: true, reason: String(nucleiErr instanceof Error ? nucleiErr.message : nucleiErr) };
+      }
     }
 
+    if (signal?.aborted) throw new Error("Scan aborted");
     await onProgress("[DAST] Running active security tests...", 92, "dast_start");
     try {
       results.dastResults = await runDASTScan(target);
@@ -84,6 +104,7 @@ async function runScanners(
   } else if (type === "easm") {
     results.easmResults = await runEASMScan(target, onProgress, scanOptions);
   } else if (type === "dast") {
+    if (signal?.aborted) throw new Error("Scan aborted");
     await onProgress("[DAST] Running active security tests...", 10, "dast_start");
     try {
       results.dastResults = await runDASTScan(target);
@@ -119,8 +140,10 @@ function buildNucleiUrls(
 async function persistAssets(workspaceId: string, allAssets: RawAsset[]): Promise<void> {
   for (const asset of allAssets) {
     try {
-      // createAsset uses onConflictDoNothing — no need for a separate existence check
-      await storage.createAsset({ workspaceId, type: asset.type, value: asset.value, status: "active", tags: asset.tags });
+      const exists = await storage.assetExists(workspaceId, asset.type, asset.value);
+      if (!exists) {
+        await storage.createAsset({ workspaceId, type: asset.type, value: asset.value, status: "active", tags: asset.tags });
+      }
     } catch (err) {
       log.warn({ err }, "Failed to create asset");
     }
@@ -139,7 +162,19 @@ async function persistFindings(
     try {
       const exists = await storage.findingExists(workspaceId, f.title, f.affectedAsset, f.category);
       if (exists) continue;
-      const created = await storage.createFinding({ ...f, workspaceId, scanId, status: "open" });
+      const checkIdFromTags = f.tags?.find((tag) => tag.startsWith("check:"))?.slice("check:".length);
+      const created = await storage.createFinding({
+        ...f,
+        workspaceId,
+        scanId,
+        status: "open",
+        evidence: f.evidence ?? [],
+        checkId: f.checkId ?? checkIdFromTags ?? f.category ?? null,
+        resourceType: f.resourceType ?? null,
+        resourceId: f.resourceId ?? f.affectedAsset ?? null,
+        provider: f.provider ?? null,
+        complianceTags: f.complianceTags ?? [],
+      });
       createdIds.push(created.id);
       if (created.severity === "critical" || created.severity === "high") {
         emitNewCriticalFinding(created).catch((err) => log.warn({ err }, "Failed to emit finding alert"));
@@ -299,6 +334,30 @@ async function createPostureSnapshot(
   }
 }
 
+async function buildComplianceSummary(workspaceId: string): Promise<Record<string, unknown> | null> {
+  try {
+    const { data: findings } = await storage.getFindings(workspaceId);
+    const reports = generateAllComplianceReports(findings);
+    return {
+      updatedAt: new Date().toISOString(),
+      frameworks: Object.fromEntries(
+        Object.entries(reports).map(([framework, report]) => [
+          framework,
+          {
+            score: report.score,
+            assessedControls: report.assessedControls,
+            totalControls: report.totalControls,
+            hasAssessmentData: report.hasAssessmentData,
+          },
+        ]),
+      ),
+    };
+  } catch (err) {
+    log.warn({ err }, "Failed to build compliance summary for scan");
+    return null;
+  }
+}
+
 // ── Background Enrichment ──
 
 async function runBackgroundEnrichment(workspaceId: string): Promise<void> {
@@ -330,27 +389,15 @@ async function runBackgroundEnrichment(workspaceId: string): Promise<void> {
  * Programmatically trigger a scan. Returns the scan ID.
  * Used by both the POST /api/scans route and the scan scheduler.
  */
-const DOMAIN_REGEX = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
-const VALID_SCAN_TYPES = ["full", "easm", "osint", "dast"];
-const VALID_SCAN_MODES: ScanMode[] = ["standard", "gold"];
-
 export async function triggerScan(
   target: string,
   type: string,
   workspaceId: string,
   mode: string,
+  profileConfig?: ScanProfileConfig,
 ): Promise<string> {
-  // Defensive validation — route layer validates too, but this is also called by the scheduler
-  const normalizedTarget = target.trim().toLowerCase().replace(/[./]+$/, "");
-  if (!DOMAIN_REGEX.test(normalizedTarget)) {
-    throw new Error("Invalid scan target domain");
-  }
-  if (!VALID_SCAN_TYPES.includes(type)) {
-    throw new Error(`Invalid scan type: ${type}`);
-  }
-
   const scan = await storage.createScan({
-    workspaceId, target: normalizedTarget, type, status: "pending",
+    workspaceId, target, type, status: "pending",
   });
 
   await storage.updateScan(scan.id, { status: "running", startedAt: new Date() });
@@ -366,9 +413,15 @@ export async function triggerScan(
 
   // Fire-and-forget the actual scan work
   (async () => {
+    const timeoutMinutes = profileConfig?.timeoutMinutes;
+    const timeoutMs = timeoutMinutes && timeoutMinutes > 0 ? timeoutMinutes * 60_000 : null;
+    const abortController = new AbortController();
+    const timeoutHandle = timeoutMs
+      ? setTimeout(() => abortController.abort(), timeoutMs)
+      : null;
     try {
-      const scanMode: ScanMode = VALID_SCAN_MODES.includes(mode as ScanMode) ? (mode as ScanMode) : "standard";
-      const results = await runScanners(target, type, scanMode, onProgress);
+      const scanMode = mode as ScanMode;
+      const results = await runScanners(target, type, scanMode, onProgress, profileConfig, abortController.signal);
 
       const allFindings: RawFinding[] = [
         ...(results.easmResults?.findings ?? []),
@@ -388,6 +441,7 @@ export async function triggerScan(
       await persistAssets(workspaceId, allAssets);
       const createdFindingIds = await persistFindings(workspaceId, scan.id, allFindings);
       await storeReconModules(workspaceId, scan.id, target, results, type);
+      const complianceSummary = await buildComplianceSummary(workspaceId);
 
       await storage.updateScan(scan.id, {
         status: "completed",
@@ -405,10 +459,13 @@ export async function triggerScan(
           subdomainsFound: mergedSubdomains.length,
           verifiedOnly: true,
           mode: scanMode,
+          compliance: complianceSummary,
         },
       });
 
       await createPostureSnapshot(workspaceId, scan.id, target, scanMode, allFindings);
+      autoSeedRiskRegister(workspaceId).catch((err) =>
+        log.warn({ err }, "Risk register auto-seed failed after scan"));
 
       const updatedScan = await storage.getScan(scan.id);
       if (updatedScan) {
@@ -419,12 +476,18 @@ export async function triggerScan(
       runBackgroundEnrichment(workspaceId).catch((err) =>
         log.warn({ err }, "Background enrichment failed"));
     } catch (err) {
+      const abortedByTimeout = abortController.signal.aborted;
+      const timeoutMessage = timeoutMinutes
+        ? `Scan timed out after ${timeoutMinutes} minute(s) per selected scan profile`
+        : "Scan aborted";
       log.error({ err }, "Scan processing error");
       try {
         await storage.updateScan(scan.id, {
           status: "failed",
           completedAt: new Date(),
-          errorMessage: (err instanceof Error ? err.message : String(err)).slice(0, 1000),
+          errorMessage: abortedByTimeout
+            ? timeoutMessage
+            : (err instanceof Error ? err.message : String(err)),
           progressMessage: null,
           progressPercent: null,
           currentStep: null,
@@ -433,12 +496,19 @@ export async function triggerScan(
 
         const failedScan = await storage.getScan(scan.id);
         if (failedScan) {
-          emitScanFailed(failedScan, err instanceof Error ? err.message : String(err))
+          emitScanFailed(
+            failedScan,
+            abortedByTimeout
+              ? timeoutMessage
+              : (err instanceof Error ? err.message : String(err)),
+          )
             .catch((alertErr) => log.warn({ err: alertErr }, "Failed to emit scan failed alert"));
         }
       } catch (updateErr) {
         log.error({ err: updateErr }, "CRITICAL: Failed to mark scan as failed");
       }
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
     }
   })().catch((err) => {
     log.error({ err }, "Unhandled scan error");

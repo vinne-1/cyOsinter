@@ -135,6 +135,11 @@ export interface VerifiedFinding {
   cvssScore: string;
   remediation: string;
   evidence: EvidenceItem[];
+  checkId?: string;
+  resourceType?: string;
+  resourceId?: string;
+  provider?: string;
+  complianceTags?: string[];
 }
 
 export interface ScanResults {
@@ -149,6 +154,17 @@ export type ScanProgressCallback = (msg: string, percent: number, step: string, 
 export interface ScanOptions {
   signal?: AbortSignal;
   mode?: "standard" | "gold";
+  enableTakeoverCheck?: boolean;
+  enableApiDiscovery?: boolean;
+  enableSecretScan?: boolean;
+  enableNuclei?: boolean;
+  subdomainWordlistCap?: number;
+  directoryWordlistCap?: number;
+  portScanEnabled?: boolean;
+  customPorts?: number[];
+  excludePaths?: string[];
+  maxConcurrency?: number;
+  timeoutMinutes?: number;
 }
 
 export interface NucleiHit {

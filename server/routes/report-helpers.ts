@@ -2,6 +2,7 @@ import { storage } from "../storage";
 import { enrichIPs } from "../api-integrations";
 import { getOllamaConfig } from "../api-integrations";
 import { generateReportSummary } from "../ai-service";
+import { getComplianceDrift } from "../compliance-workflows";
 import { isSafeExternalUrl } from "./middleware";
 import { createLogger } from "../logger";
 
@@ -158,6 +159,12 @@ export async function buildReportContent(
       summary: { total: osintFindings.length, byCategory },
     },
   };
+
+  try {
+    content.complianceDrift = await getComplianceDrift(workspaceId);
+  } catch (err) {
+    routeLog.warn({ err }, "Unable to attach compliance drift to report content");
+  }
 
   if (reportType === "evidence_pack") {
     const verifiedFindings = includedFindings.filter((f) => {

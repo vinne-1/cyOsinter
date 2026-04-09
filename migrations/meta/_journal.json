@@ -8,6 +8,20 @@
       "when": 1774906507846,
       "tag": "0000_light_goliath",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1775661600000,
+      "tag": "0001_scan_profiles_bootstrap_flag",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1775685000000,
+      "tag": "0002_compliance_workflows",
+      "breakpoints": true
     }
   ]
 }

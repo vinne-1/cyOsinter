@@ -6,47 +6,47 @@ import { requireWorkspaceRole } from "./auth-middleware";
 
 const log = createLogger("routes:analytics");
 
-const wsAuth = requireWorkspaceRole("owner", "admin", "analyst", "viewer");
-
 export const analyticsRouter = Router();
 
 // ── Compliance Mapping ──
 
 // GET /api/workspaces/:workspaceId/compliance
-analyticsRouter.get("/workspaces/:workspaceId/compliance", wsAuth, async (req, res) => {
+analyticsRouter.get("/workspaces/:workspaceId/compliance", requireWorkspaceRole("owner", "admin", "analyst", "viewer"), async (req, res) => {
   try {
-    const { data: findings } = await storage.getFindings(req.params.workspaceId as string);
+    const workspaceId = String(req.params.workspaceId);
+    const { data: findings } = await storage.getFindings(workspaceId);
     const reports = generateAllComplianceReports(findings);
     res.json(reports);
   } catch (err) {
     log.error({ err }, "Compliance report error");
-    res.status(500).json({ message: "Internal server error" });
+    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
   }
 });
 
 // GET /api/workspaces/:workspaceId/compliance/:framework
-analyticsRouter.get("/workspaces/:workspaceId/compliance/:framework", wsAuth, async (req, res) => {
+analyticsRouter.get("/workspaces/:workspaceId/compliance/:framework", requireWorkspaceRole("owner", "admin", "analyst", "viewer"), async (req, res) => {
   try {
-    const framework = req.params.framework as "owasp" | "cis" | "nist";
-    if (!["owasp", "cis", "nist"].includes(framework)) {
-      return res.status(400).json({ message: "Invalid framework. Use: owasp, cis, nist" });
+    const workspaceId = String(req.params.workspaceId);
+    const framework = req.params.framework as "owasp" | "cis" | "nist" | "soc2" | "iso27001" | "hipaa";
+    if (!["owasp", "cis", "nist", "soc2", "iso27001", "hipaa"].includes(framework)) {
+      return res.status(400).json({ message: "Invalid framework. Use: owasp, cis, nist, soc2, iso27001, hipaa" });
     }
-    const { data: findings } = await storage.getFindings(req.params.workspaceId as string);
+    const { data: findings } = await storage.getFindings(workspaceId);
     const report = generateComplianceReport(findings, framework);
     res.json(report);
   } catch (err) {
     log.error({ err }, "Compliance report error");
-    res.status(500).json({ message: "Internal server error" });
+    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
   }
 });
 
 // ── Vulnerability Trend Analytics ──
 
 // GET /api/workspaces/:workspaceId/trends/severity
-analyticsRouter.get("/workspaces/:workspaceId/trends/severity", wsAuth, async (req, res) => {
+analyticsRouter.get("/workspaces/:workspaceId/trends/severity", async (req, res) => {
   try {
     const limit = Math.min(parseInt(String(req.query.limit) || "30", 10) || 30, 100);
-    const snapshots = await storage.getPostureHistory(req.params.workspaceId as string, limit);
+    const snapshots = await storage.getPostureHistory(req.params.workspaceId, limit);
 
     // Return chronological order (oldest first for charts)
     const trend = snapshots.reverse().map((s) => ({
@@ -64,14 +64,14 @@ analyticsRouter.get("/workspaces/:workspaceId/trends/severity", wsAuth, async (r
     res.json(trend);
   } catch (err) {
     log.error({ err }, "Severity trend error");
-    res.status(500).json({ message: "Internal server error" });
+    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
   }
 });
 
 // GET /api/workspaces/:workspaceId/trends/findings
-analyticsRouter.get("/workspaces/:workspaceId/trends/findings", wsAuth, async (req, res) => {
+analyticsRouter.get("/workspaces/:workspaceId/trends/findings", async (req, res) => {
   try {
-    const { data: findings } = await storage.getFindings(req.params.workspaceId as string);
+    const { data: findings } = await storage.getFindings(req.params.workspaceId);
 
     // Group findings by discovery date (day resolution)
     const byDay = new Map<string, { total: number; critical: number; high: number; medium: number; low: number; info: number }>();
@@ -95,14 +95,14 @@ analyticsRouter.get("/workspaces/:workspaceId/trends/findings", wsAuth, async (r
     res.json(trend);
   } catch (err) {
     log.error({ err }, "Findings trend error");
-    res.status(500).json({ message: "Internal server error" });
+    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
   }
 });
 
 // GET /api/workspaces/:workspaceId/trends/categories
-analyticsRouter.get("/workspaces/:workspaceId/trends/categories", wsAuth, async (req, res) => {
+analyticsRouter.get("/workspaces/:workspaceId/trends/categories", async (req, res) => {
   try {
-    const { data: findings } = await storage.getFindings(req.params.workspaceId as string);
+    const { data: findings } = await storage.getFindings(req.params.workspaceId);
 
     const byCategory = new Map<string, { total: number; open: number; resolved: number; critical: number; high: number }>();
     for (const f of findings) {
@@ -123,14 +123,14 @@ analyticsRouter.get("/workspaces/:workspaceId/trends/categories", wsAuth, async 
     res.json(categories);
   } catch (err) {
     log.error({ err }, "Category trend error");
-    res.status(500).json({ message: "Internal server error" });
+    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
   }
 });
 
 // GET /api/workspaces/:workspaceId/trends/mttr  (Mean Time to Resolve)
-analyticsRouter.get("/workspaces/:workspaceId/trends/mttr", wsAuth, async (req, res) => {
+analyticsRouter.get("/workspaces/:workspaceId/trends/mttr", async (req, res) => {
   try {
-    const { data: findings } = await storage.getFindings(req.params.workspaceId as string);
+    const { data: findings } = await storage.getFindings(req.params.workspaceId);
     const resolved = findings.filter((f) => f.status === "resolved" && f.resolvedAt && f.discoveredAt);
 
     const bySeverity: Record<string, { count: number; totalHours: number }> = {};
@@ -158,6 +158,6 @@ analyticsRouter.get("/workspaces/:workspaceId/trends/mttr", wsAuth, async (req, 
     });
   } catch (err) {
     log.error({ err }, "MTTR trend error");
-    res.status(500).json({ message: "Internal server error" });
+    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
   }
 });
