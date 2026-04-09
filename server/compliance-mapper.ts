@@ -63,7 +63,7 @@ export interface ComplianceReport {
   failCount: number;
   partialCount: number;
   unknownCount: number;
-  score: number | null;
+  score: number;
   mappings: ComplianceMapping[];
   generatedAt: string;
 }
@@ -83,14 +83,20 @@ const OWASP_CONTROLS: ComplianceControl[] = [
 
 const CIS_CONTROLS: ComplianceControl[] = [
   { id: "CIS-01", title: "Inventory and Control of Enterprise Assets", description: "Actively manage all assets connected to the infrastructure.", framework: "cis" },
+  { id: "CIS-02", title: "Inventory and Control of Software Assets", description: "Actively manage all software on the network.", framework: "cis" },
   { id: "CIS-03", title: "Data Protection", description: "Identify, classify, and protect data.", framework: "cis" },
   { id: "CIS-04", title: "Secure Configuration of Enterprise Assets", description: "Establish and maintain secure configurations.", framework: "cis" },
   { id: "CIS-05", title: "Account Management", description: "Use processes and tools to assign and manage credentials.", framework: "cis" },
   { id: "CIS-06", title: "Access Control Management", description: "Create, assign, manage, and revoke access credentials.", framework: "cis" },
   { id: "CIS-07", title: "Continuous Vulnerability Management", description: "Continuously assess and remediate vulnerabilities.", framework: "cis" },
   { id: "CIS-08", title: "Audit Log Management", description: "Collect, review, and retain audit logs.", framework: "cis" },
+  { id: "CIS-09", title: "Email and Web Browser Protections", description: "Improve protections for email and web browsers.", framework: "cis" },
+  { id: "CIS-10", title: "Malware Defenses", description: "Control installation and execution of malicious code.", framework: "cis" },
+  { id: "CIS-11", title: "Data Recovery", description: "Establish and maintain data recovery practices.", framework: "cis" },
   { id: "CIS-12", title: "Network Infrastructure Management", description: "Establish and maintain secure network infrastructure.", framework: "cis" },
   { id: "CIS-13", title: "Network Monitoring and Defense", description: "Maintain comprehensive network monitoring.", framework: "cis" },
+  { id: "CIS-14", title: "Security Awareness and Skills Training", description: "Establish and maintain security awareness program.", framework: "cis" },
+  { id: "CIS-15", title: "Service Provider Management", description: "Develop a process to evaluate service providers.", framework: "cis" },
   { id: "CIS-16", title: "Application Software Security", description: "Manage software security throughout the lifecycle.", framework: "cis" },
   { id: "CIS-17", title: "Incident Response Management", description: "Maintain incident response capability.", framework: "cis" },
   { id: "CIS-18", title: "Penetration Testing", description: "Test resiliency of enterprise assets.", framework: "cis" },
@@ -159,9 +165,9 @@ const CATEGORY_MAP: Record<string, Partial<Record<FrameworkKey, string[]>>> = {
   subdomain_takeover: { owasp: ["A05"], cis: ["CIS-12"], nist: ["PR.PS"], soc2: ["CC6.1"], iso27001: ["A.8.20"], hipaa: ["164.312(a)(1)"] },
   ssl_issue: { owasp: ["A02"], cis: ["CIS-03"], nist: ["PR.DS"], soc2: ["CC6.1"], iso27001: ["A.8.24"], hipaa: ["164.312(e)(1)"] },
   security_headers: { owasp: ["A05"], cis: ["CIS-04"], nist: ["PR.PS"], soc2: ["CC8.1"], iso27001: ["A.8.28"] },
-  threat_intelligence: { owasp: ["A09"], cis: ["CIS-13"], nist: ["DE.CM"], soc2: ["CC7.1"], iso27001: ["A.8.16"], hipaa: ["164.308(a)(1)(ii)(D)"] },
+  threat_intelligence: { owasp: ["A09"], cis: ["CIS-13"], nist: ["DE.CM", "DE.AE"], soc2: ["CC7.1"], iso27001: ["A.8.16"], hipaa: ["164.308(a)(1)(ii)(D)"] },
   dns_misconfiguration: { owasp: ["A05"], cis: ["CIS-12"], nist: ["PR.IR"], soc2: ["CC6.1"], iso27001: ["A.8.20"] },
-  exposed_credentials: { owasp: ["A07"], cis: ["CIS-05"], nist: ["PR.AA"], soc2: ["CC6.1", "CC6.2"], iso27001: ["A.5.15", "A.5.16"], hipaa: ["164.308(a)(4)", "164.312(a)(1)"] },
+  exposed_credentials: { owasp: ["A07"], cis: ["CIS-03", "CIS-05"], nist: ["PR.AA"], soc2: ["CC6.1", "CC6.2"], iso27001: ["A.5.15", "A.5.16"], hipaa: ["164.308(a)(4)", "164.312(a)(1)"] },
   infrastructure_disclosure: { owasp: ["A05"], cis: ["CIS-04"], nist: ["PR.PS"], soc2: ["CC8.1"], iso27001: ["A.8.20"] },
   api_exposure: { owasp: ["A01", "A05"], cis: ["CIS-06", "CIS-16"], nist: ["PR.AA", "PR.PS"], soc2: ["CC6.2", "CC8.1"], iso27001: ["A.5.15", "A.8.28"], hipaa: ["164.308(a)(4)", "164.312(a)(1)"] },
   secret_exposure: { owasp: ["A02", "A07"], cis: ["CIS-03", "CIS-05"], nist: ["PR.AA", "PR.DS"], soc2: ["CC6.1", "CC6.3"], iso27001: ["A.5.16", "A.8.24"], hipaa: ["164.312(c)(1)", "164.312(e)(1)"] },
@@ -304,9 +310,9 @@ function mapFindingsToControls(
   });
 }
 
-function computeScore(mappings: ComplianceMapping[]): number | null {
+function computeScore(mappings: ComplianceMapping[]): number {
   const assessed = mappings.filter((m) => m.overallStatus !== "unknown");
-  if (assessed.length === 0) return null;
+  if (assessed.length === 0) return 0;
   const passing = assessed.filter((m) => m.overallStatus === "pass").length;
   const partial = assessed.filter((m) => m.overallStatus === "partial").length;
   return Math.round(((passing + partial * 0.5) / assessed.length) * 100);

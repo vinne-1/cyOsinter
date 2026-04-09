@@ -28,6 +28,7 @@ import {
   Unplug,
   KeyRound,
   ScanLine,
+  ShieldQuestion,
 } from "lucide-react";
 import type { ReconModule, Scan } from "@shared/schema";
 
@@ -49,8 +50,10 @@ import { TakeoverPanel } from "./takeover-panel";
 import { ApiDiscoveryPanel } from "./api-discovery-panel";
 import { SecretExposurePanel } from "./secret-exposure-panel";
 import { DASTPanel } from "./dast-panel";
+import { LeakCheckPanel } from "./leak-check-panel";
 
 const IPReputationPanelWrapper: React.FC<{ mod: ReconModule }> = () => <IPReputationPanel />;
+const LeakCheckPanelWrapper: React.FC<{ mod: ReconModule }> = () => <LeakCheckPanel />;
 
 const moduleTypeToPanel: Record<string, { component: React.FC<{ mod: ReconModule }>; label: string; icon: React.ElementType }> = {
   org_identity: { component: OrgIdentityPanel, label: "Org Profile", icon: Building2 },
@@ -76,6 +79,7 @@ const moduleTypeToPanel: Record<string, { component: React.FC<{ mod: ReconModule
   api_discovery: { component: ApiDiscoveryPanel, label: "API Security", icon: Unplug },
   secret_exposure: { component: SecretExposurePanel, label: "Secrets", icon: KeyRound },
   dast_lite: { component: DASTPanel, label: "DAST", icon: ScanLine },
+  leak_check: { component: LeakCheckPanelWrapper, label: "Leak Check", icon: ShieldQuestion },
 };
 
 const moduleOrder = [
@@ -84,7 +88,7 @@ const moduleOrder = [
   "dns_overview", "redirect_chain", "domain_info", "website_overview",
   "linkedin_company", "linkedin_people", "linkedin_hiring",
   "subdomain_takeover", "api_discovery", "secret_exposure", "dast_lite",
-  "code_footprint", "third_party_surface",
+  "code_footprint", "third_party_surface", "leak_check",
 ];
 
 export default function Intelligence() {
@@ -128,7 +132,8 @@ export default function Intelligence() {
   }
 
   const hasAnyModules = Object.keys(modulesByType).length > 0;
-  const availableModules = moduleOrder.filter((t) => (t === "ip_reputation" ? hasAnyModules : modulesByType[t]));
+  const alwaysVisible = new Set(["ip_reputation", "leak_check"]);
+  const availableModules = moduleOrder.filter((t) => (alwaysVisible.has(t) ? hasAnyModules : modulesByType[t]));
   const defaultTab = availableModules[0] || "org_identity";
 
   return (

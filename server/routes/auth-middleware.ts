@@ -186,7 +186,11 @@ export function requireWorkspaceRole(...roles: string[]) {
         )
         .limit(1);
 
-      if (!member || !roles.includes(member.role)) {
+      if (!member) {
+        sendError(res, 404, "Workspace not found");
+        return;
+      }
+      if (!roles.includes(member.role)) {
         sendError(res, 403, "Insufficient workspace permissions");
         return;
       }

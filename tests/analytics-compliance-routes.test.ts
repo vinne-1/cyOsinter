@@ -112,7 +112,7 @@ describe("analytics compliance routes", () => {
 
     expect(response.status).toBe(200);
     expect(mockGetFindings).toHaveBeenCalledWith("workspace-1");
-    expect(body.owasp.score).toBeNull();
+    expect(body.owasp.score).toBe(0);
     expect(body.owasp.assessedControls).toBe(0);
     expect(body.owasp.hasAssessmentData).toBe(false);
   });

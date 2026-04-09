@@ -1,4 +1,4 @@
-import { eq, desc, and, sql, lt, asc, count } from "drizzle-orm";
+import { eq, desc, and, sql, lt, asc, count, inArray } from "drizzle-orm";
 import { db } from "./db";
 import {
   workspaces,
@@ -16,10 +16,12 @@ import {
   riskItems,
   policyDocuments,
   questionnaireRuns,
+  workspaceMembers,
 } from "@shared/schema";
 import type {
   Workspace,
   InsertWorkspace,
+  WorkspaceMember,
   Asset,
   InsertAsset,
   Scan,
@@ -115,7 +117,13 @@ export interface IStorage {
   createPostureSnapshot(snapshot: InsertPostureSnapshot): Promise<PostureSnapshot>;
   getStuckScans(maxAgeMs: number): Promise<Scan[]>;
 
+  // Workspace Members
+  getWorkspaceMember(workspaceId: string, userId: string): Promise<WorkspaceMember | undefined>;
+  addWorkspaceMember(workspaceId: string, userId: string, role: string): Promise<WorkspaceMember>;
+  getWorkspacesByUserId(userId: string): Promise<Workspace[]>;
+
   // Alerts
+  getAlert(id: string): Promise<Alert | undefined>;
   getAlerts(workspaceId: string, limit?: number): Promise<Alert[]>;
   getUnreadAlertCount(workspaceId: string): Promise<number>;
   createAlert(alert: InsertAlert): Promise<Alert>;
@@ -442,7 +450,37 @@ export class DatabaseStorage implements IStorage {
     await db.delete(uploadedScans).where(eq(uploadedScans.id, id));
   }
 
+  // ── Workspace Members ──
+
+  async getWorkspaceMember(workspaceId: string, userId: string): Promise<WorkspaceMember | undefined> {
+    const [member] = await db.select().from(workspaceMembers)
+      .where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.userId, userId)))
+      .limit(1);
+    return member;
+  }
+
+  async addWorkspaceMember(workspaceId: string, userId: string, role: string): Promise<WorkspaceMember> {
+    const [member] = await db.insert(workspaceMembers)
+      .values({ workspaceId, userId, role })
+      .returning();
+    return member;
+  }
+
+  async getWorkspacesByUserId(userId: string): Promise<Workspace[]> {
+    const members = await db.select({ workspaceId: workspaceMembers.workspaceId })
+      .from(workspaceMembers)
+      .where(eq(workspaceMembers.userId, userId));
+    if (members.length === 0) return [];
+    const wsIds = members.map(m => m.workspaceId);
+    return db.select().from(workspaces).where(inArray(workspaces.id, wsIds));
+  }
+
   // ── Alerts ──
+
+  async getAlert(id: string): Promise<Alert | undefined> {
+    const [alert] = await db.select().from(alerts).where(eq(alerts.id, id)).limit(1);
+    return alert;
+  }
 
   async getAlerts(workspaceId: string, limit = 50): Promise<Alert[]> {
     return db.select().from(alerts)

@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from "react";
+import { LeakCheckLauncher } from "@/components/leak-check-launcher";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useDomain } from "@/lib/domain-context";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -316,7 +317,10 @@ function FindingDetail({
           {finding.affectedAsset && (
             <div>
               <h4 className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-2">Affected Asset</h4>
-              <p className="text-sm font-mono bg-muted/50 px-3 py-2 rounded-md">{finding.affectedAsset}</p>
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-mono bg-muted/50 px-3 py-2 rounded-md flex-1">{finding.affectedAsset}</p>
+                <LeakCheckLauncher value={finding.affectedAsset} />
+              </div>
             </div>
           )}
 

@@ -38,10 +38,10 @@ function makeFinding(overrides: Partial<Finding> = {}): Finding {
 }
 
 describe("compliance-mapper", () => {
-  it("returns null score and no assessment data when findings are empty", () => {
+  it("returns zero score and no assessment data when findings are empty", () => {
     const report = generateComplianceReport([], "owasp");
 
-    expect(report.score).toBeNull();
+    expect(report.score).toBe(0);
     expect(report.assessedControls).toBe(0);
     expect(report.hasAssessmentData).toBe(false);
     expect(report.unknownCount).toBe(report.totalControls);

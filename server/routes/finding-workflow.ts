@@ -13,39 +13,7 @@ const log = createLogger("finding-workflow-routes");
 
 export const findingWorkflowRouter = Router();
 
-// ── Workflow state transitions ──
-
-const transitionSchema = z.object({
-  state: z.enum(["open", "in_progress", "resolved", "false_positive", "accepted_risk"]),
-  assigneeId: z.string().optional(),
-  priority: z.enum(["critical", "high", "medium", "low"]).optional(),
-  dueDate: z.string().datetime().optional(),
-});
-
-findingWorkflowRouter.patch("/findings/:id/workflow", async (req, res) => {
-  try {
-    const finding = await storage.getFinding(req.params.id);
-    if (!finding) return sendNotFound(res, "Finding");
-    // Verify caller has access to the finding's workspace
-    const membership = await storage.getWorkspaceMember(finding.workspaceId, req.user!.id);
-    if (!membership) return sendNotFound(res, "Finding");
-
-    const parsed = transitionSchema.parse(req.body);
-    const updates: Record<string, unknown> = { workflowState: parsed.state };
-    if (parsed.assigneeId !== undefined) updates.assigneeId = parsed.assigneeId;
-    if (parsed.priority !== undefined) updates.priority = parsed.priority;
-    if (parsed.dueDate !== undefined) updates.dueDate = new Date(parsed.dueDate);
-
-    await storage.updateFinding(finding.id, updates);
-    log.info({ findingId: finding.id, newState: parsed.state }, "Finding workflow updated");
-    res.json({ success: true, state: parsed.state });
-  } catch (err) {
-    if (err instanceof z.ZodError) return sendValidationError(res, err.errors[0]?.message ?? "Validation error");
-    sendError(res, 500, "Internal server error");
-  }
-});
-
-// ── Bulk workflow update ──
+// ── Bulk workflow update (must be registered BEFORE /:id to avoid route shadowing) ──
 
 const bulkTransitionSchema = z.object({
   findingIds: z.array(z.string().min(1)).min(1).max(100),
@@ -81,6 +49,38 @@ findingWorkflowRouter.patch("/findings/bulk/workflow", async (req, res) => {
     }
 
     res.json({ results });
+  } catch (err) {
+    if (err instanceof z.ZodError) return sendValidationError(res, err.errors[0]?.message ?? "Validation error");
+    sendError(res, 500, "Internal server error");
+  }
+});
+
+// ── Single finding workflow transition ──
+
+const transitionSchema = z.object({
+  state: z.enum(["open", "in_progress", "resolved", "false_positive", "accepted_risk"]),
+  assigneeId: z.string().optional(),
+  priority: z.enum(["critical", "high", "medium", "low"]).optional(),
+  dueDate: z.string().datetime().optional(),
+});
+
+findingWorkflowRouter.patch("/findings/:id/workflow", async (req, res) => {
+  try {
+    const finding = await storage.getFinding(req.params.id);
+    if (!finding) return sendNotFound(res, "Finding");
+    // Verify caller has access to the finding's workspace
+    const membership = await storage.getWorkspaceMember(finding.workspaceId, req.user!.id);
+    if (!membership) return sendNotFound(res, "Finding");
+
+    const parsed = transitionSchema.parse(req.body);
+    const updates: Record<string, unknown> = { workflowState: parsed.state };
+    if (parsed.assigneeId !== undefined) updates.assigneeId = parsed.assigneeId;
+    if (parsed.priority !== undefined) updates.priority = parsed.priority;
+    if (parsed.dueDate !== undefined) updates.dueDate = new Date(parsed.dueDate);
+
+    await storage.updateFinding(finding.id, updates);
+    log.info({ findingId: finding.id, newState: parsed.state }, "Finding workflow updated");
+    res.json({ success: true, state: parsed.state });
   } catch (err) {
     if (err instanceof z.ZodError) return sendValidationError(res, err.errors[0]?.message ?? "Validation error");
     sendError(res, 500, "Internal server error");
