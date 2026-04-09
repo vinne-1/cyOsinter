@@ -45,7 +45,8 @@ policiesRouter.post(
     try {
       const workspaceId = String(req.params.workspaceId);
       const parsed = generatePolicySchema.parse(req.body);
-      await upsertPolicyDocument(workspaceId, parsed.policyType, req.user?.id);
+      const { data: findings } = await storage.getFindings(workspaceId, { limit: 500, offset: 0 });
+      await upsertPolicyDocument(workspaceId, parsed.policyType, req.user?.id, findings);
       const updated = await storage.getPolicyDocumentByType(workspaceId, parsed.policyType);
       res.status(201).json(updated);
     } catch (err) {
