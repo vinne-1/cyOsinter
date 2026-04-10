@@ -1,3 +1,4 @@
+import DOMPurify from "dompurify";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useDomain } from "@/lib/domain-context";
 import { apiRequest } from "@/lib/queryClient";
@@ -33,14 +34,16 @@ function downloadMarkdown(filename: string, content: string) {
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
+  document.body.appendChild(a);
   a.click();
+  document.body.removeChild(a);
   URL.revokeObjectURL(url);
 }
 
 function renderMarkdown(content: string): string {
   return content
     .replace(/^# (.+)$/gm, '<h1 class="text-xl font-bold mt-4 mb-2">$1</h1>')
-    .replace(/^## (.+)$/gm, '<h2 class="text-base font-semibold mt-5 mb-2 border-b pb-1">$2</h2>'.replace("$2", "$1"))
+    .replace(/^## (.+)$/gm, '<h2 class="text-base font-semibold mt-5 mb-2 border-b pb-1">$1</h2>')
     .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
     .replace(/^(\|.+\|)$/gm, (line) => {
       if (/^\|[-| ]+\|$/.test(line)) return "";
@@ -86,7 +89,7 @@ export default function PoliciesPage() {
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
-      await apiRequest("DELETE", `/api/policies/${id}?workspaceId=${selectedWorkspaceId}`);
+      await apiRequest("DELETE", `/api/workspaces/${selectedWorkspaceId}/policies/${id}`);
     },
     onSuccess: () => {
       toast({ title: "Policy deleted" });
@@ -207,6 +210,7 @@ export default function PoliciesPage() {
                           size="icon"
                           variant="ghost"
                           title="Download as Markdown"
+                          aria-label="Download as Markdown"
                           onClick={() =>
                             downloadMarkdown(
                               `${policy.policyType}-v${policy.version}.md`,
@@ -221,6 +225,7 @@ export default function PoliciesPage() {
                           variant="ghost"
                           className="text-destructive hover:text-destructive"
                           title="Delete policy"
+                          aria-label="Delete policy"
                           disabled={deleteMutation.isPending}
                           onClick={() => deleteMutation.mutate(policy.id)}
                         >
@@ -232,7 +237,9 @@ export default function PoliciesPage() {
                   <CardContent>
                     <div
                       className="max-h-96 overflow-auto rounded-md border bg-muted/10 p-4 text-sm leading-relaxed"
-                      dangerouslySetInnerHTML={{ __html: renderMarkdown(policy.content) }}
+                      dangerouslySetInnerHTML={{
+                        __html: DOMPurify.sanitize(renderMarkdown(policy.content)),
+                      }}
                     />
                   </CardContent>
                 </Card>

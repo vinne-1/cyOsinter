@@ -33,7 +33,7 @@ policiesRouter.get(
       res.json(rows);
     } catch (err) {
       log.error({ err }, "List policies failed");
-      res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+      res.status(500).json({ message: "Internal error" });
     }
   },
 );
@@ -54,27 +54,27 @@ policiesRouter.post(
         return res.status(400).json({ message: err.errors[0]?.message ?? "Validation error" });
       }
       log.error({ err }, "Generate policy failed");
-      res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+      res.status(500).json({ message: "Internal error" });
     }
   },
 );
 
 policiesRouter.delete(
-  "/policies/:id",
+  "/workspaces/:workspaceId/policies/:id",
   requireWorkspaceRole("owner", "admin"),
   async (req, res) => {
     try {
+      const workspaceId = String(req.params.workspaceId);
       const row = await storage.getPolicyDocument(String(req.params.id));
       if (!row) return res.status(404).json({ message: "Policy not found" });
-      const workspaceId = String(req.query.workspaceId ?? "");
-      if (!workspaceId || row.workspaceId !== workspaceId) {
-        return res.status(403).json({ message: "Workspace mismatch for policy delete" });
+      if (row.workspaceId !== workspaceId) {
+        return res.status(404).json({ message: "Policy not found" });
       }
       await storage.deletePolicyDocument(row.id);
       res.status(204).send();
     } catch (err) {
       log.error({ err }, "Delete policy failed");
-      res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+      res.status(500).json({ message: "Internal error" });
     }
   },
 );
@@ -96,7 +96,7 @@ policiesRouter.get(
       })));
     } catch (err) {
       log.error({ err }, "Export policies failed");
-      res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+      res.status(500).json({ message: "Internal error" });
     }
   },
 );
