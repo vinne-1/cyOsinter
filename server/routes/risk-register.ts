@@ -36,7 +36,7 @@ riskRegisterRouter.get(
       res.json(items);
     } catch (err) {
       log.error({ err }, "Get risk register failed");
-      res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+      res.status(500).json({ message: "Internal error" });
     }
   },
 );
@@ -52,7 +52,7 @@ riskRegisterRouter.post(
       res.json({ ...result, total: items.length, items });
     } catch (err) {
       log.error({ err }, "Auto-seed risk register failed");
-      res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+      res.status(500).json({ message: "Internal error" });
     }
   },
 );
@@ -94,7 +94,7 @@ riskRegisterRouter.post(
         return res.status(400).json({ message: err.errors[0]?.message ?? "Validation error" });
       }
       log.error({ err }, "Create risk item failed");
-      res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+      res.status(500).json({ message: "Internal error" });
     }
   },
 );
@@ -124,7 +124,7 @@ riskRegisterRouter.patch(
         return res.status(400).json({ message: err.errors[0]?.message ?? "Validation error" });
       }
       log.error({ err }, "Update risk item failed");
-      res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+      res.status(500).json({ message: "Internal error" });
     }
   },
 );
@@ -144,7 +144,7 @@ riskRegisterRouter.delete(
       res.status(204).send();
     } catch (err) {
       log.error({ err }, "Delete risk item failed");
-      res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+      res.status(500).json({ message: "Internal error" });
     }
   },
 );
@@ -179,7 +179,7 @@ riskRegisterRouter.get(
       res.json(items);
     } catch (err) {
       log.error({ err }, "Export risk register failed");
-      res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+      res.status(500).json({ message: "Internal error" });
     }
   },
 );

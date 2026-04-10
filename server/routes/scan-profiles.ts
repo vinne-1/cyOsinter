@@ -4,6 +4,7 @@ import { storage } from "../storage";
 import { createLogger } from "../logger";
 import type { ScanProfileConfig } from "@shared/schema";
 import { requireWorkspaceRole } from "./auth-middleware";
+import { ensurePrebuiltScanProfiles } from "../scan-profile-defaults";
 
 const log = createLogger("scan-profiles");
 
@@ -50,6 +51,7 @@ scanProfilesRouter.get("/scan-profiles", wsAuth, async (req, res) => {
   try {
     const workspaceId = req.query.workspaceId as string;
     if (!workspaceId) return res.status(400).json({ message: "workspaceId required" });
+    await ensurePrebuiltScanProfiles(workspaceId);
     const profiles = await storage.getScanProfiles(workspaceId);
     res.json(profiles);
   } catch (err) {

@@ -22,7 +22,7 @@ questionnairesRouter.get(
       res.json(runs);
     } catch (err) {
       log.error({ err }, "List questionnaires failed");
-      res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+      res.status(500).json({ message: "Internal error" });
     }
   },
 );
@@ -41,7 +41,7 @@ questionnairesRouter.get(
       res.json(run);
     } catch (err) {
       log.error({ err }, "Get questionnaire run failed");
-      res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+      res.status(500).json({ message: "Internal error" });
     }
   },
 );
@@ -64,7 +64,7 @@ questionnairesRouter.post(
         return res.status(400).json({ message: err.errors[0]?.message ?? "Validation error" });
       }
       log.error({ err }, "Run questionnaire failed");
-      res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+      res.status(500).json({ message: "Internal error" });
     }
   },
 );

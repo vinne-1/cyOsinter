@@ -17,7 +17,7 @@ complianceDriftRouter.get(
       res.json(report);
     } catch (err) {
       log.error({ err }, "Compliance drift fetch failed");
-      res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+      res.status(500).json({ message: "Internal error" });
     }
   },
 );

@@ -19,7 +19,7 @@ analyticsRouter.get("/workspaces/:workspaceId/compliance", requireWorkspaceRole(
     res.json(reports);
   } catch (err) {
     log.error({ err }, "Compliance report error");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal error" });
   }
 });
 
@@ -36,7 +36,7 @@ analyticsRouter.get("/workspaces/:workspaceId/compliance/:framework", requireWor
     res.json(report);
   } catch (err) {
     log.error({ err }, "Compliance report error");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal error" });
   }
 });
 
@@ -64,7 +64,7 @@ analyticsRouter.get("/workspaces/:workspaceId/trends/severity", async (req, res)
     res.json(trend);
   } catch (err) {
     log.error({ err }, "Severity trend error");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal error" });
   }
 });
 
@@ -95,7 +95,7 @@ analyticsRouter.get("/workspaces/:workspaceId/trends/findings", async (req, res)
     res.json(trend);
   } catch (err) {
     log.error({ err }, "Findings trend error");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal error" });
   }
 });
 
@@ -123,7 +123,7 @@ analyticsRouter.get("/workspaces/:workspaceId/trends/categories", async (req, re
     res.json(categories);
   } catch (err) {
     log.error({ err }, "Category trend error");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal error" });
   }
 });
 
@@ -158,6 +158,6 @@ analyticsRouter.get("/workspaces/:workspaceId/trends/mttr", async (req, res) => 
     });
   } catch (err) {
     log.error({ err }, "MTTR trend error");
-    res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" });
+    res.status(500).json({ message: "Internal error" });
   }
 });

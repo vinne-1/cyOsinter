@@ -48,7 +48,7 @@ export default defineConfig({
     },
     proxy: {
       "/api": {
-        target: "http://localhost:5000",
+        target: "http://localhost:5050",
         changeOrigin: true,
         proxyTimeout: 600000, // 10 min for long AI insights requests (CVE + Tavily + Ollama)
       },

@@ -98,14 +98,14 @@ export async function registerRoutes(
       const asset = await storage.getAsset(req.params.id);
       if (!asset) return res.status(404).json({ message: "Asset not found" });
       res.json(asset);
-    } catch (err) { res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" }); }
+    } catch (err) { res.status(500).json({ message: "Internal error" }); }
   });
 
   app.delete("/api/assets/:id", async (req, res) => {
     try {
       await storage.deleteAsset(req.params.id);
       res.status(204).send();
-    } catch (err) { res.status(500).json({ message: err instanceof Error ? err.message : "Internal error" }); }
+    } catch (err) { res.status(500).json({ message: "Internal error" }); }
   });
 
   // Centralized error handler — must be registered after all routes
