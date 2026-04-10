@@ -185,7 +185,7 @@ describe("updateFindingSchema", () => {
 // ---------------------------------------------------------------------------
 describe("createWorkspaceSchema", () => {
   it("accepts valid workspace", () => {
-    const result = createWorkspaceSchema.safeParse({ name: "My Workspace" });
+    const result = createWorkspaceSchema.safeParse({ name: "example.com" });
     expect(result.success).toBe(true);
   });
 
@@ -194,9 +194,14 @@ describe("createWorkspaceSchema", () => {
     expect(result.success).toBe(false);
   });
 
+  it("rejects non-domain name", () => {
+    const result = createWorkspaceSchema.safeParse({ name: "My Workspace" });
+    expect(result.success).toBe(false);
+  });
+
   it("accepts optional description", () => {
     const result = createWorkspaceSchema.safeParse({
-      name: "Test",
+      name: "test.example.com",
       description: "A workspace for testing",
     });
     expect(result.success).toBe(true);
@@ -208,9 +213,13 @@ describe("createWorkspaceSchema", () => {
 // ---------------------------------------------------------------------------
 describe("updateWorkspaceSchema", () => {
   it("accepts partial updates", () => {
-    expect(updateWorkspaceSchema.safeParse({ name: "New name" }).success).toBe(true);
+    expect(updateWorkspaceSchema.safeParse({ name: "updated.example.com" }).success).toBe(true);
     expect(updateWorkspaceSchema.safeParse({ status: "inactive" }).success).toBe(true);
     expect(updateWorkspaceSchema.safeParse({ description: null }).success).toBe(true);
+  });
+
+  it("rejects non-domain name update", () => {
+    expect(updateWorkspaceSchema.safeParse({ name: "New name" }).success).toBe(false);
   });
 
   it("rejects invalid status", () => {

@@ -159,10 +159,11 @@ function NewScanDialog() {
             {profiles.length > 0 && (
               <div className="space-y-2">
                 <FormLabel>Scan Profile</FormLabel>
-                <Select value={selectedProfileId} onValueChange={(v) => {
-                  setSelectedProfileId(v);
-                  if (v) {
-                    const p = profiles.find((pr) => pr.id === v);
+                <Select value={selectedProfileId || "__none__"} onValueChange={(v) => {
+                  const profileId = v === "__none__" ? "" : v;
+                  setSelectedProfileId(profileId);
+                  if (profileId) {
+                    const p = profiles.find((pr) => pr.id === profileId);
                     if (p) {
                       setScanType(p.scanType as "easm" | "full" | "dast");
                       setScanMode(p.mode as "standard" | "gold");
@@ -173,7 +174,7 @@ function NewScanDialog() {
                     <SelectValue placeholder="None (manual config)" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">None (manual config)</SelectItem>
+                    <SelectItem value="__none__">None (manual config)</SelectItem>
                     {profiles.map((p) => (
                       <SelectItem key={p.id} value={p.id}>{p.name} ({p.scanType}, {p.mode})</SelectItem>
                     ))}

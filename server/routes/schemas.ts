@@ -37,12 +37,18 @@ export const createReportSchema = z.object({
 });
 
 export const createWorkspaceSchema = z.object({
-  name: z.string().min(1, "Domain name is required"),
+  name: z.string().min(1, "Domain name is required").refine(
+    (val) => DOMAIN_REGEX.test(val.trim()),
+    { message: "Workspace name must be a valid domain (e.g. example.com)" }
+  ),
   description: z.string().optional(),
 });
 
 export const updateWorkspaceSchema = z.object({
-  name: z.string().min(1).optional(),
+  name: z.string().min(1).refine(
+    (val) => DOMAIN_REGEX.test(val.trim()),
+    { message: "Workspace name must be a valid domain (e.g. example.com)" }
+  ).optional(),
   description: z.string().nullable().optional(),
   status: z.enum(["active", "inactive"]).optional(),
 });

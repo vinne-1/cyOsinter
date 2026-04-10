@@ -73,9 +73,10 @@ findingWorkflowRouter.patch("/findings/:id/workflow", async (req, res) => {
     if (!membership) return sendNotFound(res, "Finding");
 
     const parsed = transitionSchema.parse(req.body);
+    const priorityMap: Record<string, number> = { critical: 1, high: 2, medium: 3, low: 4 };
     const updates: Record<string, unknown> = { workflowState: parsed.state };
     if (parsed.assigneeId !== undefined) updates.assigneeId = parsed.assigneeId;
-    if (parsed.priority !== undefined) updates.priority = parsed.priority;
+    if (parsed.priority !== undefined) updates.priority = priorityMap[parsed.priority];
     if (parsed.dueDate !== undefined) updates.dueDate = new Date(parsed.dueDate);
 
     await storage.updateFinding(finding.id, updates);
