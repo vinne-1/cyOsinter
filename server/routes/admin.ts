@@ -6,7 +6,7 @@ import { storage } from "../storage";
 import { createLogger } from "../logger";
 import { computeSecurityScore } from "@shared/scoring";
 import { startMonitoring, stopMonitoring, getMonitoringStatus } from "../continuous-monitoring";
-import { enrichIPs, getIntegrationsStatus } from "../api-integrations";
+import { enrichIPs, getIntegrationsStatus, setApiKey, setOllamaConfig } from "../api-integrations";
 import { getOllamaStatus } from "../ai-service";
 import { requireAdmin } from "./middleware";
 import { requireWorkspaceRole } from "./auth-middleware";
@@ -27,6 +27,35 @@ export function createAdminRouter(httpServer: Server): Router {
 
   adminRouter.get("/integrations/status", requireAdmin, (_req, res) => {
     res.json(getIntegrationsStatus());
+  });
+
+  // POST /api/integrations — update API keys and Ollama config
+  const updateIntegrationsSchema = z.object({
+    abuseipdb: z.string().optional(),
+    virustotal: z.string().optional(),
+    tavily: z.string().optional(),
+    ollamaBaseUrl: z.string().optional(),
+    ollamaModel: z.string().optional(),
+    ollamaEnabled: z.boolean().optional(),
+  });
+  adminRouter.post("/integrations", requireAdmin, (req, res) => {
+    try {
+      const parsed = updateIntegrationsSchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ message: parsed.error.errors[0]?.message ?? "Validation error" });
+      }
+      const { abuseipdb, virustotal, tavily, ollamaBaseUrl, ollamaModel, ollamaEnabled } = parsed.data;
+      if (abuseipdb !== undefined) setApiKey("abuseipdb", abuseipdb);
+      if (virustotal !== undefined) setApiKey("virustotal", virustotal);
+      if (tavily !== undefined) setApiKey("tavily", tavily);
+      if (ollamaBaseUrl !== undefined || ollamaModel !== undefined || ollamaEnabled !== undefined) {
+        setOllamaConfig({ baseUrl: ollamaBaseUrl, model: ollamaModel, enabled: ollamaEnabled });
+      }
+      res.json(getIntegrationsStatus());
+    } catch (err) {
+      routeLog.error({ err }, "Update integrations error");
+      res.status(500).json({ message: "Internal server error" });
+    }
   });
 
   adminRouter.get("/ollama/status", requireAdmin, async (_req, res) => {

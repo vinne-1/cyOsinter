@@ -15,7 +15,10 @@ export const apiKeysRouter = Router();
 const createKeySchema = z.object({
   name: z.string().min(1, "Name is required"),
   scope: z.enum(["read", "scan", "full"]).default("read"),
-  expiresAt: z.coerce.date().optional(),
+  expiresAt: z.preprocess(
+    (val) => (val === null || val === "" ? undefined : val),
+    z.coerce.date().optional()
+  ),
 });
 
 function generateApiKey(): string {
