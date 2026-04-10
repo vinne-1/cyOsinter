@@ -87,7 +87,7 @@ interface ScanProfile {
 function NewScheduledScanDialog() {
   const [open, setOpen] = useState(false);
   const [usePreset, setUsePreset] = useState(true);
-  const [selectedProfileId, setSelectedProfileId] = useState<string>("");
+  const [selectedProfileId, setSelectedProfileId] = useState<string>("__none__");
   const { toast } = useToast();
   const { selectedWorkspaceId, selectedWorkspace } = useDomain();
 
@@ -161,7 +161,7 @@ function NewScheduledScanDialog() {
                 <FormLabel>Scan Profile</FormLabel>
                 <Select value={selectedProfileId} onValueChange={(v) => {
                   setSelectedProfileId(v);
-                  if (v) {
+                  if (v && v !== "__none__") {
                     const p = profiles.find((pr) => pr.id === v);
                     if (p) {
                       form.setValue("scanType", p.scanType as "easm" | "osint" | "full" | "dast");
@@ -173,7 +173,7 @@ function NewScheduledScanDialog() {
                     <SelectValue placeholder="None (manual config)" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="">None (manual config)</SelectItem>
+                    <SelectItem value="__none__">None (manual config)</SelectItem>
                     {profiles.map((p) => (
                       <SelectItem key={p.id} value={p.id}>{p.name} ({p.scanType}, {p.mode})</SelectItem>
                     ))}

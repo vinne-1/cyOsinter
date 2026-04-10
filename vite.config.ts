@@ -52,6 +52,11 @@ export default defineConfig({
         changeOrigin: true,
         proxyTimeout: 600000, // 10 min for long AI insights requests (CVE + Tavily + Ollama)
       },
+      "/ws": {
+        target: "ws://localhost:5050",
+        ws: true,
+        changeOrigin: true,
+      },
     },
   },
 });
