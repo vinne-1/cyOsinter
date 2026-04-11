@@ -177,6 +177,9 @@ export async function buildReconModules(
           perAssetHeaders: perAssetHeaders || {},
           perAssetLeaks: perAssetLeaks || {},
           assetInventory,
+          // Raw flat header maps for tech-inventory/Wappalyzer (distinct from grading-wrapper perAssetHeaders)
+          rawHeadersByHost: easmResults.reconData.rawHeadersByHost ?? {},
+          htmlByHost: easmResults.reconData.htmlByHost ?? {},
           verifiedAt: new Date().toISOString(),
         },
       });
@@ -201,6 +204,8 @@ export async function buildReconModules(
           wafDetection: { detected: false, provider: "" },
           cdnDetection: "None",
           dns: { ns: dnsRecon?.ns || [], ips },
+          rawHeadersByHost: easmResults.reconData.rawHeadersByHost ?? {},
+          htmlByHost: easmResults.reconData.htmlByHost ?? {},
           verifiedAt: new Date().toISOString(),
         },
       });

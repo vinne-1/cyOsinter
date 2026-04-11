@@ -14,6 +14,7 @@ import { getCertificateInfo } from "./tls.js";
 import { scanOpenPorts, checkSecurityHeaders, detectServerInfo, detectWAF, detectCDN } from "./detection.js";
 import { runWithConcurrency } from "./utils.js";
 import { scanSubdomainTakeover } from "./takeover.js";
+import { extractPageMeta } from "../enrichment/page-meta.js";
 
 const log = createLogger("scanner");
 
@@ -305,30 +306,47 @@ export async function runEASMScan(domain: string, onProgress?: ScanProgressCallb
   }
 
   checkAborted(signal);
+  // Initialize perAssetTls in standard mode so cert-inventory can process all hosts
+  if (!results.reconData.perAssetTls) results.reconData.perAssetTls = {};
+
   const certCheckSubs = certCheckLimit <= 0 ? liveSubdomains : liveSubdomains.slice(0, certCheckLimit);
   for (const live of certCheckSubs) {
     const subCert = await getCertificateInfo(live.subdomain);
-    if (subCert && (subCert.daysRemaining <= 30 || subCert.daysRemaining <= 0)) {
-      results.findings.push({
-        title: `SSL Certificate Issue on ${live.subdomain}`,
-        description: subCert.daysRemaining <= 0
-          ? `The SSL certificate for ${live.subdomain} has expired.`
-          : `The SSL certificate for ${live.subdomain} expires in ${subCert.daysRemaining} days.`,
-        severity: subCert.daysRemaining <= 0 ? "critical" : subCert.daysRemaining <= 7 ? "high" : "medium",
-        category: "ssl_issue",
-        affectedAsset: live.subdomain,
-        cvssScore: subCert.daysRemaining <= 0 ? "9.1" : subCert.daysRemaining <= 7 ? "8.1" : "5.3",
-        remediation: "Renew the SSL certificate for this subdomain.",
-        evidence: [
-          {
-            type: "certificate_info",
-            description: "TLS certificate inspection",
-            snippet: `Subject: ${subCert.subject}\nIssuer: ${subCert.issuer}\nDays Remaining: ${subCert.daysRemaining}`,
-            source: `TLS connection to ${live.subdomain}:443`,
-            verifiedAt: now,
-          },
-        ],
-      });
+    if (subCert) {
+      // Always store cert data — cert-inventory reads this, not just expiry findings
+      results.reconData.perAssetTls[live.subdomain] = {
+        subject: subCert.subject,
+        issuer: subCert.issuer,
+        serial: subCert.serialNumber,
+        validFrom: subCert.validFrom,
+        validTo: subCert.validTo,
+        daysRemaining: subCert.daysRemaining,
+        protocol: subCert.protocol,
+        altNames: subCert.altNames,
+      };
+
+      if (subCert.daysRemaining <= 30 || subCert.daysRemaining <= 0) {
+        results.findings.push({
+          title: `SSL Certificate Issue on ${live.subdomain}`,
+          description: subCert.daysRemaining <= 0
+            ? `The SSL certificate for ${live.subdomain} has expired.`
+            : `The SSL certificate for ${live.subdomain} expires in ${subCert.daysRemaining} days.`,
+          severity: subCert.daysRemaining <= 0 ? "critical" : subCert.daysRemaining <= 7 ? "high" : "medium",
+          category: "ssl_issue",
+          affectedAsset: live.subdomain,
+          cvssScore: subCert.daysRemaining <= 0 ? "9.1" : subCert.daysRemaining <= 7 ? "8.1" : "5.3",
+          remediation: "Renew the SSL certificate for this subdomain.",
+          evidence: [
+            {
+              type: "certificate_info",
+              description: "TLS certificate inspection",
+              snippet: `Subject: ${subCert.subject}\nIssuer: ${subCert.issuer}\nDays Remaining: ${subCert.daysRemaining}`,
+              source: `TLS connection to ${live.subdomain}:443`,
+              verifiedAt: now,
+            },
+          ],
+        });
+      }
     }
   }
 
@@ -413,6 +431,37 @@ export async function runEASMScan(domain: string, onProgress?: ScanProgressCallb
       headerChecks.map(h => [h.header, { present: h.present, value: h.value || null, grade: h.grade }])
     );
     results.reconData.serverInfo = { leaks: serverLeaks, allHeaders: mainHttps.headers };
+
+    // Raw headers for tech-inventory/Wappalyzer (flat string map, not grading wrappers)
+    results.reconData.rawHeadersByHost = { [domain]: mainHttps.headers };
+    results.reconData.htmlByHost = { [domain]: mainHttps.body };
+
+    // Extract favicon hash + page meta (title, generator, canonical)
+    results.reconData.pageMeta = {
+      [domain]: extractPageMeta(mainHttps.body, mainHttps.headers),
+    };
+  }
+
+  // Probe top 20 live subdomains for raw headers + HTML (for SBOM enrichment)
+  {
+    const subBatch = liveSubdomains.slice(0, 20);
+    const subFetches = await runWithConcurrency(
+      subBatch,
+      10,
+      async (live) => {
+        const resp = await httpGet(`https://${live.subdomain}`).catch(() => null)
+          || await httpGet(`http://${live.subdomain}`).catch(() => null);
+        return resp ? { host: live.subdomain, headers: resp.headers, html: resp.body } : null;
+      },
+      signal,
+    );
+    for (const r of subFetches) {
+      if (!r) continue;
+      if (!results.reconData.rawHeadersByHost) results.reconData.rawHeadersByHost = {};
+      if (!results.reconData.htmlByHost) results.reconData.htmlByHost = {};
+      results.reconData.rawHeadersByHost[r.host] = r.headers;
+      results.reconData.htmlByHost[r.host] = r.html;
+    }
   }
 
   if (gold && liveSubdomains.length > 0) {

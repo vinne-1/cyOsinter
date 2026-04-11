@@ -64,6 +64,31 @@ export function extractCveIds(text: string): string[] {
   return Array.from(new Set(matches.map((m) => m.toUpperCase())));
 }
 
+/** Build a searchable text blob from a finding for CVE extraction.
+ *  Includes title, description, checkId (Nuclei template IDs carry CVE IDs),
+ *  and evidence snippets where CVE IDs often appear. */
+export function findingCveText(f: { title: string; description: string | null; checkId?: string | null; evidence?: unknown }): string {
+  const parts: string[] = [f.title, f.description ?? ""];
+  if (f.checkId) parts.push(f.checkId);
+  // Evidence can be a JSON array of objects with snippet fields
+  if (f.evidence) {
+    try {
+      const ev = typeof f.evidence === "string" ? JSON.parse(f.evidence) : f.evidence;
+      if (Array.isArray(ev)) {
+        for (const item of ev) {
+          if (item && typeof item === "object") {
+            const snippet = (item as Record<string, unknown>).snippet;
+            if (typeof snippet === "string") parts.push(snippet.slice(0, 500));
+          }
+        }
+      }
+    } catch {
+      // Non-JSON evidence — ignore
+    }
+  }
+  return parts.join(" ");
+}
+
 /** Refresh EPSS scores for all CVEs referenced in a workspace's findings. */
 export async function refreshEpssForWorkspace(workspaceId: string): Promise<void> {
   try {
@@ -71,8 +96,7 @@ export async function refreshEpssForWorkspace(workspaceId: string): Promise<void
 
     const cveSet = new Set<string>();
     for (const f of findings) {
-      const text = `${f.title} ${f.description ?? ""}`;
-      for (const cve of extractCveIds(text)) {
+      for (const cve of extractCveIds(findingCveText(f))) {
         cveSet.add(cve);
       }
     }

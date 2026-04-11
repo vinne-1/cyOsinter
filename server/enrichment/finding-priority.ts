@@ -12,7 +12,7 @@
  */
 import { createLogger } from "../logger";
 import { storage } from "../storage";
-import { extractCveIds, fetchEpssScores } from "./epss-feed";
+import { extractCveIds, fetchEpssScores, findingCveText } from "./epss-feed";
 import type { Finding } from "@shared/schema";
 
 const log = createLogger("enrichment:finding-priority");
@@ -102,7 +102,8 @@ export async function recomputeFindingPriorities(workspaceId: string): Promise<v
     const allCveIds = new Set<string>();
 
     for (const f of openFindings) {
-      const cves = extractCveIds(`${f.title} ${f.description ?? ""}`);
+      // Use broadened text: title + description + checkId + evidence snippets
+      const cves = extractCveIds(findingCveText(f));
       cveMap.set(f.id, cves);
       cves.forEach((c) => allCveIds.add(c));
     }
@@ -128,8 +129,8 @@ export async function recomputeFindingPriorities(workspaceId: string): Promise<v
         ? Math.max(...fCves.map((c) => epssById.get(c) ?? 0))
         : null;
 
-      // KEV check: crude check for common KEV markers in finding text
-      const text = `${f.title} ${f.description ?? ""}`.toLowerCase();
+      // KEV check: check finding text and checkId for KEV markers
+      const text = findingCveText(f).toLowerCase();
       const inKev = text.includes("cisa kev") || text.includes("known exploited") || f.cvssScore === "kev";
 
       return {

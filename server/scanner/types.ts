@@ -36,8 +36,14 @@ export interface ReconData {
     leaks?: string[];
     allHeaders?: Record<string, string>;
   };
-  perAssetTls?: Record<string, { subject?: string; issuer?: string; daysRemaining?: number; protocol?: string } | null>;
+  perAssetTls?: Record<string, { subject?: string; issuer?: string; serial?: string; validFrom?: string; validTo?: string; daysRemaining?: number; protocol?: string; altNames?: string[]; signatureAlgorithm?: string } | null>;
   perAssetHeaders?: Record<string, Record<string, { present?: boolean; value?: string | null }>>;
+  /** Raw flat header maps per host (for tech-inventory / Wappalyzer — not the grading wrapper shape) */
+  rawHeadersByHost?: Record<string, Record<string, string>>;
+  /** Truncated HTML body per host (for Wappalyzer + meta extraction, max 5 KB each) */
+  htmlByHost?: Record<string, string>;
+  /** Extracted page metadata per host (title, generator, canonical, favicon hash) */
+  pageMeta?: Record<string, import("../enrichment/page-meta.js").PageMeta>;
   perAssetLeaks?: Record<string, string[]>;
   wafByHost?: Record<string, { waf: boolean; wafProvider: string; cdn: string }>;
   openPorts?: number[];
