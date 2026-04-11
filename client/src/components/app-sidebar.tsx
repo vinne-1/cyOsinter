@@ -33,6 +33,12 @@ import {
   ScrollText,
   Webhook,
   Trash2,
+  Lock,
+  Package,
+  Zap,
+  LineChart,
+  FileSearch,
+  Trophy,
 } from "lucide-react";
 import {
   Sidebar,
@@ -89,6 +95,12 @@ const navGroups: Array<{ label: string; items: NavItem[] }> = [
       { title: "Risk Register", url: "/risk-register", icon: ClipboardList },
       { title: "Compliance Drift", url: "/compliance-drift", icon: ActivitySquare },
       { title: "Trends", url: "/trends", icon: TrendingUp },
+      { title: "Fix This First", url: "/smart-priority", icon: Zap },
+      { title: "Certificates", url: "/certificates", icon: Lock },
+      { title: "Tech SBOM", url: "/tech-sbom", icon: Package },
+      { title: "Posture Anomalies", url: "/anomalies", icon: LineChart },
+      { title: "Evidence Search", url: "/search", icon: FileSearch },
+      { title: "Exec Scorecard", url: "/scorecard", icon: Trophy },
     ],
   },
   {

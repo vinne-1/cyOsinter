@@ -29,6 +29,12 @@ import { riskRegisterRouter } from "./risk-register";
 import { complianceDriftRouter } from "./compliance-drift";
 import { questionnairesRouter } from "./questionnaires";
 import { policiesRouter } from "./policies";
+import { certificatesRouter } from "./certificates";
+import { techInventoryRouter } from "./tech-inventory";
+import { smartPriorityRouter } from "./smart-priority";
+import { postureAnomaliesRouter } from "./posture-anomalies";
+import { evidenceSearchRouter } from "./evidence-search";
+import { executiveScorecardRouter } from "./executive-scorecard";
 import { requireAuth } from "./auth-middleware";
 import { errorHandler } from "./response";
 
@@ -91,6 +97,12 @@ export async function registerRoutes(
   app.use("/api", complianceDriftRouter);
   app.use("/api", questionnairesRouter);
   app.use("/api", policiesRouter);
+  app.use("/api", certificatesRouter);
+  app.use("/api", techInventoryRouter);
+  app.use("/api", smartPriorityRouter);
+  app.use("/api", postureAnomaliesRouter);
+  app.use("/api", evidenceSearchRouter);
+  app.use("/api", executiveScorecardRouter);
 
   // Standalone asset routes that don't fit under /api/workspaces
   app.get("/api/assets/:id", async (req, res) => {

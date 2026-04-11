@@ -85,6 +85,12 @@ const RiskRegisterPage = React.lazy(() => import("@/pages/risk-register"));
 const ComplianceDriftPage = React.lazy(() => import("@/pages/compliance-drift"));
 const QuestionnairesPage = React.lazy(() => import("@/pages/questionnaires"));
 const PoliciesPage = React.lazy(() => import("@/pages/policies"));
+const CertificatesPage = React.lazy(() => import("@/pages/certificates"));
+const TechSbomPage = React.lazy(() => import("@/pages/tech-sbom"));
+const SmartPriorityPage = React.lazy(() => import("@/pages/smart-priority"));
+const PostureAnomaliesPage = React.lazy(() => import("@/pages/posture-anomalies"));
+const EvidenceSearchPage = React.lazy(() => import("@/pages/evidence-search"));
+const ExecutiveScorecardPage = React.lazy(() => import("@/pages/executive-scorecard"));
 
 function Router() {
   return (
@@ -119,6 +125,12 @@ function Router() {
         <Route path="/compliance-drift" component={ComplianceDriftPage} />
         <Route path="/questionnaires" component={QuestionnairesPage} />
         <Route path="/policies" component={PoliciesPage} />
+        <Route path="/certificates" component={CertificatesPage} />
+        <Route path="/tech-sbom" component={TechSbomPage} />
+        <Route path="/smart-priority" component={SmartPriorityPage} />
+        <Route path="/anomalies" component={PostureAnomaliesPage} />
+        <Route path="/search" component={EvidenceSearchPage} />
+        <Route path="/scorecard" component={ExecutiveScorecardPage} />
         <Route component={NotFound} />
       </Switch>
     </Suspense>

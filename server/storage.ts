@@ -17,6 +17,11 @@ import {
   policyDocuments,
   questionnaireRuns,
   workspaceMembers,
+  tlsCertificates,
+  techInventory,
+  epssScores,
+  findingPriority,
+  postureAnomalies,
 } from "@shared/schema";
 import type {
   Workspace,
@@ -50,6 +55,16 @@ import type {
   InsertPolicyDocument,
   QuestionnaireRun,
   InsertQuestionnaireRun,
+  TlsCertificate,
+  InsertTlsCertificate,
+  TechInventoryItem,
+  InsertTechInventoryItem,
+  EpssScore,
+  InsertEpssScore,
+  FindingPriority,
+  InsertFindingPriority,
+  PostureAnomaly,
+  InsertPostureAnomaly,
 } from "@shared/schema";
 
 export interface PaginationOpts {
@@ -166,6 +181,30 @@ export interface IStorage {
   getQuestionnaireRuns(workspaceId: string): Promise<QuestionnaireRun[]>;
   getQuestionnaireRun(id: string): Promise<QuestionnaireRun | undefined>;
   createQuestionnaireRun(run: InsertQuestionnaireRun): Promise<QuestionnaireRun>;
+
+  // ── Enrichment: Certificate Inventory ──
+  getCertificates(workspaceId: string, opts?: { expiringWithinDays?: number }): Promise<TlsCertificate[]>;
+  upsertCertificate(cert: Omit<InsertTlsCertificate, "id">): Promise<void>;
+
+  // ── Enrichment: Tech Inventory ──
+  getTechInventory(workspaceId: string): Promise<TechInventoryItem[]>;
+  upsertTechInventory(item: Omit<InsertTechInventoryItem, "id">): Promise<void>;
+
+  // ── Enrichment: EPSS Scores ──
+  getEpssScore(cveId: string): Promise<EpssScore | undefined>;
+  upsertEpssScore(score: InsertEpssScore): Promise<void>;
+
+  // ── Enrichment: Finding Priority ──
+  getFindingPriorities(workspaceId: string, limit?: number): Promise<Array<FindingPriority & { finding: Finding }>>;
+  upsertFindingPriority(priority: InsertFindingPriority): Promise<void>;
+
+  // ── Enrichment: Posture Anomalies ──
+  getPostureAnomalies(workspaceId: string, limit?: number): Promise<PostureAnomaly[]>;
+  createPostureAnomaly(anomaly: InsertPostureAnomaly): Promise<PostureAnomaly>;
+  acknowledgePostureAnomaly(id: string): Promise<void>;
+
+  // ── Evidence Search ──
+  searchEvidence(workspaceId: string, query: string, limit?: number): Promise<Array<{ type: "finding" | "recon"; id: string; title: string; snippet: string; host: string | null }>>;
 }
 
 const DEFAULT_LIMIT = 500;
@@ -668,6 +707,192 @@ export class DatabaseStorage implements IStorage {
   async createQuestionnaireRun(run: InsertQuestionnaireRun): Promise<QuestionnaireRun> {
     const [created] = await db.insert(questionnaireRuns).values(run).returning();
     return created;
+  }
+
+  // ── Enrichment: Certificate Inventory ──
+
+  async getCertificates(workspaceId: string, opts?: { expiringWithinDays?: number }): Promise<TlsCertificate[]> {
+    const conditions = [eq(tlsCertificates.workspaceId, workspaceId)];
+    if (opts?.expiringWithinDays != null) {
+      const cutoff = new Date(Date.now() + opts.expiringWithinDays * 86_400_000);
+      conditions.push(lt(tlsCertificates.validTo, cutoff));
+    }
+    return db.select().from(tlsCertificates)
+      .where(and(...conditions))
+      .orderBy(asc(tlsCertificates.validTo));
+  }
+
+  async upsertCertificate(cert: Omit<InsertTlsCertificate, "id">): Promise<void> {
+    await db.insert(tlsCertificates)
+      .values({ ...cert, lastSeen: new Date() })
+      .onConflictDoUpdate({
+        target: [tlsCertificates.workspaceId, tlsCertificates.host, tlsCertificates.fingerprint],
+        set: {
+          subject: cert.subject,
+          issuer: cert.issuer,
+          validFrom: cert.validFrom,
+          validTo: cert.validTo,
+          daysRemaining: cert.daysRemaining,
+          protocol: cert.protocol,
+          san: cert.san,
+          signatureAlgorithm: cert.signatureAlgorithm,
+          isWildcard: cert.isWildcard,
+          lastSeen: new Date(),
+        },
+      });
+  }
+
+  // ── Enrichment: Tech Inventory ──
+
+  async getTechInventory(workspaceId: string): Promise<TechInventoryItem[]> {
+    return db.select().from(techInventory)
+      .where(eq(techInventory.workspaceId, workspaceId))
+      .orderBy(asc(techInventory.product), asc(techInventory.version));
+  }
+
+  async upsertTechInventory(item: Omit<InsertTechInventoryItem, "id">): Promise<void> {
+    await db.insert(techInventory)
+      .values({ ...item, lastSeen: new Date() })
+      .onConflictDoUpdate({
+        target: [techInventory.workspaceId, techInventory.host, techInventory.product, techInventory.version],
+        set: {
+          source: item.source,
+          confidence: item.confidence,
+          eol: item.eol,
+          lastSeen: new Date(),
+        },
+      });
+  }
+
+  // ── Enrichment: EPSS Scores ──
+
+  async getEpssScore(cveId: string): Promise<EpssScore | undefined> {
+    const [row] = await db.select().from(epssScores).where(eq(epssScores.cveId, cveId));
+    return row;
+  }
+
+  async upsertEpssScore(score: InsertEpssScore): Promise<void> {
+    await db.insert(epssScores)
+      .values({ ...score, updatedAt: new Date() })
+      .onConflictDoUpdate({
+        target: epssScores.cveId,
+        set: { epss: score.epss, percentile: score.percentile, updatedAt: new Date() },
+      });
+  }
+
+  // ── Enrichment: Finding Priority ──
+
+  async getFindingPriorities(workspaceId: string, limit = 50): Promise<Array<FindingPriority & { finding: Finding }>> {
+    const rows = await db
+      .select()
+      .from(findingPriority)
+      .innerJoin(findings, eq(findingPriority.findingId, findings.id))
+      .where(eq(findings.workspaceId, workspaceId))
+      .orderBy(desc(findingPriority.compositeScore))
+      .limit(limit);
+
+    return rows.map((r) => ({ ...r.finding_priority, finding: r.findings }));
+  }
+
+  async upsertFindingPriority(priority: InsertFindingPriority): Promise<void> {
+    await db.insert(findingPriority)
+      .values({ ...priority, computedAt: new Date() })
+      .onConflictDoUpdate({
+        target: findingPriority.findingId,
+        set: {
+          cvssComponent: priority.cvssComponent,
+          epssComponent: priority.epssComponent,
+          kevComponent: priority.kevComponent,
+          exposureComponent: priority.exposureComponent,
+          ageComponent: priority.ageComponent,
+          compositeScore: priority.compositeScore,
+          rank: priority.rank,
+          computedAt: new Date(),
+        },
+      });
+  }
+
+  // ── Enrichment: Posture Anomalies ──
+
+  async getPostureAnomalies(workspaceId: string, limit = 20): Promise<PostureAnomaly[]> {
+    return db.select().from(postureAnomalies)
+      .where(eq(postureAnomalies.workspaceId, workspaceId))
+      .orderBy(desc(postureAnomalies.detectedAt))
+      .limit(limit);
+  }
+
+  async createPostureAnomaly(anomaly: InsertPostureAnomaly): Promise<PostureAnomaly> {
+    const [created] = await db.insert(postureAnomalies).values(anomaly).returning();
+    return created;
+  }
+
+  async acknowledgePostureAnomaly(id: string): Promise<void> {
+    await db.update(postureAnomalies)
+      .set({ acknowledged: true })
+      .where(eq(postureAnomalies.id, id));
+  }
+
+  // ── Evidence Search ──
+
+  async searchEvidence(
+    workspaceId: string,
+    query: string,
+    limit = 50,
+  ): Promise<Array<{ type: "finding" | "recon"; id: string; title: string; snippet: string; host: string | null }>> {
+    const safeLimit = Math.min(limit, 100);
+
+    // Search findings
+    const findingRows = await db
+      .select({
+        id: findings.id,
+        title: findings.title,
+        description: findings.description,
+        affectedAsset: findings.affectedAsset,
+      })
+      .from(findings)
+      .where(
+        and(
+          eq(findings.workspaceId, workspaceId),
+          sql`(to_tsvector('english', ${findings.title} || ' ' || coalesce(${findings.description}, ''))
+               @@ plainto_tsquery('english', ${query}))`,
+        ),
+      )
+      .limit(safeLimit);
+
+    const findingResults = findingRows.map((r) => ({
+      type: "finding" as const,
+      id: r.id,
+      title: r.title,
+      snippet: (r.description ?? "").slice(0, 200),
+      host: r.affectedAsset,
+    }));
+
+    // Search recon modules (target field + moduleType)
+    const reconRows = await db
+      .select({
+        id: reconModules.id,
+        target: reconModules.target,
+        moduleType: reconModules.moduleType,
+      })
+      .from(reconModules)
+      .where(
+        and(
+          eq(reconModules.workspaceId, workspaceId),
+          sql`(to_tsvector('english', ${reconModules.target} || ' ' || ${reconModules.moduleType})
+               @@ plainto_tsquery('english', ${query}))`,
+        ),
+      )
+      .limit(safeLimit);
+
+    const reconResults = reconRows.map((r) => ({
+      type: "recon" as const,
+      id: r.id,
+      title: `${r.moduleType}: ${r.target}`,
+      snippet: `Recon module data for ${r.target}`,
+      host: r.target,
+    }));
+
+    return [...findingResults, ...reconResults].slice(0, safeLimit);
   }
 }
 

@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, integer, timestamp, jsonb, boolean, index, unique, foreignKey } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, integer, timestamp, jsonb, boolean, index, unique, foreignKey, numeric } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -452,6 +452,114 @@ export const questionnaireRuns = pgTable("questionnaire_runs", {
   foreignKey({ columns: [t.workspaceId], foreignColumns: [workspaces.id], name: "questionnaire_runs_workspace_fk" }).onDelete("cascade"),
   foreignKey({ columns: [t.createdBy], foreignColumns: [users.id], name: "questionnaire_runs_created_by_fk" }).onDelete("set null"),
 ]);
+
+// ── Enrichment: Certificate Lifecycle ──
+
+export const tlsCertificates = pgTable("tls_certificates", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  workspaceId: varchar("workspace_id").notNull(),
+  host: text("host").notNull(),
+  subject: text("subject"),
+  issuer: text("issuer"),
+  serial: text("serial"),
+  fingerprint: text("fingerprint"),
+  validFrom: timestamp("valid_from"),
+  validTo: timestamp("valid_to"),
+  daysRemaining: integer("days_remaining"),
+  protocol: text("protocol"),
+  san: text("san").array().default(sql`'{}'::text[]`),
+  signatureAlgorithm: text("signature_algorithm"),
+  isWildcard: boolean("is_wildcard").notNull().default(false),
+  firstSeen: timestamp("first_seen").defaultNow(),
+  lastSeen: timestamp("last_seen").defaultNow(),
+}, (t) => [
+  index("tls_certs_ws_idx").on(t.workspaceId),
+  index("tls_certs_expiry_idx").on(t.validTo),
+  unique("tls_certs_ws_host_fp_unique").on(t.workspaceId, t.host, t.fingerprint),
+  foreignKey({ columns: [t.workspaceId], foreignColumns: [workspaces.id], name: "tls_certs_workspace_fk" }).onDelete("cascade"),
+]);
+
+// ── Enrichment: Tech Inventory (SBOM) ──
+
+export const techInventory = pgTable("tech_inventory", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  workspaceId: varchar("workspace_id").notNull(),
+  host: text("host").notNull(),
+  product: text("product").notNull(),
+  version: text("version"),
+  source: text("source").notNull(), // server_header | banner | html | nuclei
+  confidence: integer("confidence").default(80),
+  eol: boolean("eol").notNull().default(false),
+  firstSeen: timestamp("first_seen").defaultNow(),
+  lastSeen: timestamp("last_seen").defaultNow(),
+}, (t) => [
+  index("tech_inv_ws_idx").on(t.workspaceId),
+  index("tech_inv_product_idx").on(t.product),
+  unique("tech_inv_ws_host_prod_ver_unique").on(t.workspaceId, t.host, t.product, t.version),
+  foreignKey({ columns: [t.workspaceId], foreignColumns: [workspaces.id], name: "tech_inv_workspace_fk" }).onDelete("cascade"),
+]);
+
+// ── Enrichment: EPSS Scores (global cache, no workspace) ──
+
+export const epssScores = pgTable("epss_scores", {
+  cveId: varchar("cve_id").primaryKey(),
+  epss: numeric("epss", { precision: 7, scale: 5 }).notNull(),
+  percentile: numeric("percentile", { precision: 7, scale: 5 }).notNull(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+// ── Enrichment: Finding Priority (SmartPriority) ──
+
+export const findingPriority = pgTable("finding_priority", {
+  findingId: varchar("finding_id").primaryKey(),
+  cvssComponent: numeric("cvss_component", { precision: 5, scale: 3 }),
+  epssComponent: numeric("epss_component", { precision: 5, scale: 3 }),
+  kevComponent: integer("kev_component").default(0), // 0 or 1
+  exposureComponent: numeric("exposure_component", { precision: 5, scale: 3 }),
+  ageComponent: numeric("age_component", { precision: 5, scale: 3 }),
+  compositeScore: numeric("composite_score", { precision: 6, scale: 2 }).notNull(),
+  rank: integer("rank"),
+  computedAt: timestamp("computed_at").defaultNow(),
+}, (t) => [
+  index("finding_priority_score_idx").on(t.compositeScore),
+  foreignKey({ columns: [t.findingId], foreignColumns: [findings.id], name: "finding_priority_finding_fk" }).onDelete("cascade"),
+]);
+
+// ── Enrichment: Posture Anomalies ──
+
+export const postureAnomalies = pgTable("posture_anomalies", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  workspaceId: varchar("workspace_id").notNull(),
+  metric: text("metric").notNull(), // security_score | open_ports | waf_coverage | critical_count
+  detectedAt: timestamp("detected_at").defaultNow(),
+  baselineValue: numeric("baseline_value", { precision: 10, scale: 2 }),
+  currentValue: numeric("current_value", { precision: 10, scale: 2 }),
+  deviationSigma: numeric("deviation_sigma", { precision: 6, scale: 3 }),
+  direction: text("direction").notNull(), // improvement | regression
+  severity: text("severity").notNull().default("warning"), // info | warning | critical
+  acknowledged: boolean("acknowledged").notNull().default(false),
+}, (t) => [
+  index("posture_anom_ws_idx").on(t.workspaceId),
+  index("posture_anom_detected_idx").on(t.detectedAt),
+  foreignKey({ columns: [t.workspaceId], foreignColumns: [workspaces.id], name: "posture_anom_workspace_fk" }).onDelete("cascade"),
+]);
+
+export const insertTlsCertificateSchema = createInsertSchema(tlsCertificates).omit({ id: true, firstSeen: true, lastSeen: true });
+export const insertTechInventorySchema = createInsertSchema(techInventory).omit({ id: true, firstSeen: true, lastSeen: true });
+export const insertEpssScoreSchema = createInsertSchema(epssScores).omit({ updatedAt: true });
+export const insertFindingPrioritySchema = createInsertSchema(findingPriority).omit({ computedAt: true });
+export const insertPostureAnomalySchema = createInsertSchema(postureAnomalies).omit({ id: true, detectedAt: true });
+
+export type TlsCertificate = typeof tlsCertificates.$inferSelect;
+export type InsertTlsCertificate = z.infer<typeof insertTlsCertificateSchema>;
+export type TechInventoryItem = typeof techInventory.$inferSelect;
+export type InsertTechInventoryItem = z.infer<typeof insertTechInventorySchema>;
+export type EpssScore = typeof epssScores.$inferSelect;
+export type InsertEpssScore = z.infer<typeof insertEpssScoreSchema>;
+export type FindingPriority = typeof findingPriority.$inferSelect;
+export type InsertFindingPriority = z.infer<typeof insertFindingPrioritySchema>;
+export type PostureAnomaly = typeof postureAnomalies.$inferSelect;
+export type InsertPostureAnomaly = z.infer<typeof insertPostureAnomalySchema>;
 
 export const insertUserSchema = createInsertSchema(users).omit({ id: true, createdAt: true, updatedAt: true, lastLoginAt: true });
 export const insertSessionSchema = createInsertSchema(sessions).omit({ id: true, createdAt: true });

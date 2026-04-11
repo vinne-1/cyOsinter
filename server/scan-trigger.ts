@@ -7,6 +7,7 @@ import { enrichFinding } from "./ai-service";
 import { emitScanCompleted, emitScanFailed, emitNewCriticalFinding } from "./notifications";
 import { generateAllComplianceReports } from "./compliance-mapper";
 import { autoSeedRiskRegister } from "./compliance-workflows";
+import { runPostScanHooks } from "./post-scan-hooks";
 import type { ScanProfileConfig } from "@shared/schema";
 
 const log = createLogger("scan-trigger");
@@ -475,6 +476,9 @@ export async function triggerScan(
 
       runBackgroundEnrichment(workspaceId).catch((err) =>
         log.warn({ err }, "Background enrichment failed"));
+
+      runPostScanHooks(workspaceId).catch((err) =>
+        log.warn({ err }, "Post-scan hooks failed"));
     } catch (err) {
       const abortedByTimeout = abortController.signal.aborted;
       const timeoutMessage = timeoutMinutes
