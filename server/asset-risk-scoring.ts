@@ -139,25 +139,51 @@ export function determineTrend(
     (f) => f.status === "resolved" || f.workflowState === "closed" || f.workflowState === "remediated",
   ).length;
 
-  if (resolvedCount > openCount && currentScore < 50) {
+  if (resolvedCount > openCount) {
     return "improving";
   }
-  if (openCount > resolvedCount * 2 || currentScore >= 70) {
+  if (openCount > resolvedCount * 2) {
     return "degrading";
   }
   return "stable";
+}
+
+/**
+ * Strip URL scheme, path, query and fragment from an affectedAsset string so
+ * it can be compared against bare asset values (hostnames).
+ * "https://api.example.com:443/v1/foo?q=1" → "api.example.com:443"
+ */
+function normalizeAffected(raw: string): string {
+  return raw
+    .replace(/^https?:\/\//i, "") // strip scheme
+    .split("/")[0]                 // strip path
+    .split("?")[0]                 // strip query
+    .split("#")[0];                // strip fragment
+  // result is "host" or "host:port"
 }
 
 function findingsForAsset(
   assetValue: string,
   allFindings: readonly Finding[],
 ): Finding[] {
-  const normalized = assetValue.toLowerCase();
+  const needle = assetValue.toLowerCase();
   return allFindings.filter((f) => {
-    const affected = (f.affectedAsset ?? "").toLowerCase();
-    return affected === normalized
-      || affected.endsWith(`.${normalized}`)
-      || affected.startsWith(`${normalized}:`);
+    const raw = (f.affectedAsset ?? "").toLowerCase();
+    // normalised form strips scheme + path; may still have :port
+    const norm = normalizeAffected(raw);
+    const hostOnly = norm.split(":")[0]; // remove port
+
+    return (
+      // exact matches (with or without port)
+      norm === needle
+      || hostOnly === needle
+      // subdomain of the asset (e.g. asset=example.com, finding=api.example.com)
+      || norm.endsWith(`.${needle}`)
+      || hostOnly.endsWith(`.${needle}`)
+      // raw starts with scheme+asset (e.g. https://example.com/path)
+      || raw.startsWith(`http://${needle}`)
+      || raw.startsWith(`https://${needle}`)
+    );
   });
 }
 

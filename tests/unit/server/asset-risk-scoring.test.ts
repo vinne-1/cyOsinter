@@ -444,21 +444,24 @@ describe("determineTrend", () => {
     expect(determineTrend(30, [])).toBe("stable");
   });
 
-  it("returns 'improving' when resolved > open AND score < 50", () => {
+  it("returns 'improving' when resolved > open", () => {
     const findings: Finding[] = [
       makeFinding({ severity: "high", category: "vulnerability", status: "open", workflowState: "open" }),
       makeFinding({ severity: "high", category: "vulnerability", status: "resolved", workflowState: "closed" }),
       makeFinding({ severity: "high", category: "vulnerability", status: "resolved", workflowState: "remediated" }),
     ];
-    // resolvedCount(2) > openCount(1) AND score(30) < 50
+    // resolvedCount(2) > openCount(1) → improving regardless of score
     expect(determineTrend(30, findings)).toBe("improving");
   });
 
-  it("returns 'degrading' when score >= 70", () => {
+  it("returns 'improving' when resolved > open even with a high score", () => {
     const findings: Finding[] = [
-      makeFinding({ severity: "critical", category: "vulnerability", status: "open", workflowState: "open" }),
+      makeFinding({ severity: "low", category: "vulnerability", status: "open", workflowState: "open" }),
+      makeFinding({ severity: "low", category: "vulnerability", status: "resolved", workflowState: "closed" }),
+      makeFinding({ severity: "low", category: "vulnerability", status: "resolved", workflowState: "closed" }),
     ];
-    expect(determineTrend(75, findings)).toBe("degrading");
+    // score=80 (high), but resolved(2) > open(1) → still improving
+    expect(determineTrend(80, findings)).toBe("improving");
   });
 
   it("returns 'degrading' when open > resolved * 2 (zero resolved)", () => {
@@ -471,46 +474,55 @@ describe("determineTrend", () => {
     expect(determineTrend(40, findings)).toBe("degrading");
   });
 
-  it("returns 'stable' when open == resolved and score < 70", () => {
+  it("returns 'stable' when open == resolved", () => {
     const findings: Finding[] = [
       makeFinding({ severity: "high", category: "vulnerability", status: "open", workflowState: "open" }),
       makeFinding({ severity: "high", category: "vulnerability", status: "open", workflowState: "open" }),
       makeFinding({ severity: "high", category: "vulnerability", status: "resolved", workflowState: "closed" }),
       makeFinding({ severity: "high", category: "vulnerability", status: "resolved", workflowState: "closed" }),
     ];
-    // open(2) <= resolved(2)*2=4 AND score(40)<70 AND NOT resolved(2)>open(2)
+    // open(2) == resolved(2) → NOT improving (not resolved > open), NOT degrading (2 <= 2*2=4) → stable
     expect(determineTrend(40, findings)).toBe("stable");
+  });
+
+  it("returns 'stable' with a high score and equal open/resolved", () => {
+    const findings: Finding[] = [
+      makeFinding({ severity: "low", category: "vulnerability", status: "open", workflowState: "open" }),
+      makeFinding({ severity: "low", category: "vulnerability", status: "resolved", workflowState: "closed" }),
+    ];
+    // Score doesn't affect result; resolved == open → stable
+    expect(determineTrend(75, findings)).toBe("stable");
   });
 
   it("counts workflowState 'remediated' as resolved", () => {
     const findings: Finding[] = [
-      // status="open" + workflowState="open" → counted as open only
       makeFinding({ severity: "low", category: "vulnerability", status: "open", workflowState: "open" }),
-      // status="resolved" + workflowState="remediated" → counted as resolved only (status takes priority for open check)
       makeFinding({ severity: "low", category: "vulnerability", status: "resolved", workflowState: "remediated" }),
       makeFinding({ severity: "low", category: "vulnerability", status: "resolved", workflowState: "remediated" }),
     ];
-    // resolvedCount(2) > openCount(1) AND score(20) < 50 → improving
+    // resolvedCount(2) > openCount(1) → improving
     expect(determineTrend(20, findings)).toBe("improving");
   });
 
-  it("boundary: score exactly 70 returns 'degrading'", () => {
-    expect(determineTrend(70, [])).toBe("degrading");
-  });
-
-  it("boundary: score 69 with no findings returns 'stable'", () => {
-    expect(determineTrend(69, [])).toBe("stable");
-  });
-
-  it("'improving' requires BOTH resolved > open AND score < 50", () => {
-    // resolved > open but score >= 50 → should NOT be improving
+  it("boundary: open exactly 2x resolved is stable, not degrading", () => {
     const findings: Finding[] = [
       makeFinding({ severity: "high", category: "vulnerability", status: "open", workflowState: "open" }),
-      makeFinding({ severity: "high", category: "vulnerability", status: "resolved", workflowState: "closed" }),
+      makeFinding({ severity: "high", category: "vulnerability", status: "open", workflowState: "open" }),
       makeFinding({ severity: "high", category: "vulnerability", status: "resolved", workflowState: "closed" }),
     ];
-    // score=55 → NOT improving (score not < 50), open(1) <= resolved(2)*2=4 → stable
-    expect(determineTrend(55, findings)).toBe("stable");
+    // open(2) == resolved(1)*2 → NOT degrading (requires strictly greater), NOT improving → stable
+    expect(determineTrend(50, findings)).toBe("stable");
+  });
+
+  it("boundary: open 3 vs resolved 1 → degrading (3 > 1*2)", () => {
+    const findings: Finding[] = [
+      makeFinding({ severity: "high", category: "vulnerability", status: "open", workflowState: "open" }),
+      makeFinding({ severity: "high", category: "vulnerability", status: "open", workflowState: "open" }),
+      makeFinding({ severity: "high", category: "vulnerability", status: "open", workflowState: "open" }),
+      makeFinding({ severity: "high", category: "vulnerability", status: "resolved", workflowState: "closed" }),
+    ];
+    // open(3) > resolved(1)*2=2 → degrading
+    expect(determineTrend(30, findings)).toBe("degrading");
   });
 });
 

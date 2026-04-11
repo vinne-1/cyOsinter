@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useDomain } from "@/lib/domain-context";
+import { SEVERITY_SCORE_RISK } from "@shared/scoring";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Shield, AlertTriangle, ArrowRight, Globe, Key, Server, Lock, Bug, Zap } from "lucide-react";
@@ -295,11 +296,12 @@ function highestSeverity(findings: Finding[]): "critical" | "high" | "medium" | 
 }
 
 function computePathRisk(nodes: AttackNode[]): number {
-  const severityScores: Record<string, number> = { critical: 10, high: 7.5, medium: 5, low: 2.5, info: 1 };
   let total = 0;
   for (const node of nodes) {
-    const nodeSeverityScore = severityScores[node.severity] ?? 1;
-    total += nodeSeverityScore * Math.max(1, node.findings.length);
+    // Skip placeholder nodes with no real findings — they inflate the score
+    if (node.findings.length === 0) continue;
+    const nodeSeverityScore = SEVERITY_SCORE_RISK[node.severity] ?? 1;
+    total += nodeSeverityScore * node.findings.length;
   }
   return Math.min(100, Math.round(total));
 }

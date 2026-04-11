@@ -165,7 +165,7 @@ export default function Dashboard() {
         />
         <StatCard
           title="Security Score"
-          value={findings.length === 0 ? "N/A" : `${computeSecurityScore(findings)}/100`}
+          value={`${computeSecurityScore(findings)}/100`}
           icon={Shield}
           description="Based on open findings"
           testId="stat-security-score"

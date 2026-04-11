@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { computeSecurityScore, SEVERITY_DEDUCTION } from "../../../shared/scoring";
+import {
+  computeSecurityScore,
+  SEVERITY_DEDUCTION,
+  SEVERITY_SCORE_DIFF,
+  SEVERITY_SCORE_RISK,
+} from "../../../shared/scoring";
 
 describe("computeSecurityScore", () => {
   it("returns 100 for empty findings", () => {
@@ -37,13 +42,25 @@ describe("computeSecurityScore", () => {
     expect(computeSecurityScore(manyFindings)).toBe(0);
   });
 
-  it("ignores resolved findings in deduction", () => {
+  it("excludes resolved, false_positive, and accepted_risk findings", () => {
     const findings = [
-      { severity: "critical", status: "open" },          // -20
-      { severity: "critical", status: "resolved" },       // ignored
-      { severity: "high", status: "false_positive" },     // -10 (not resolved)
+      { severity: "critical", status: "open" },           // -20
+      { severity: "critical", status: "resolved" },        // excluded
+      { severity: "high", status: "false_positive" },      // excluded
+      { severity: "medium", status: "accepted_risk" },     // excluded
+      { severity: "low", status: "risk_accepted" },        // excluded
     ];
-    expect(computeSecurityScore(findings)).toBe(70);
+    // Only the critical open finding contributes → 100 - 20 = 80
+    expect(computeSecurityScore(findings)).toBe(80);
+  });
+
+  it("handles uppercase status values gracefully", () => {
+    const findings = [
+      { severity: "critical", status: "RESOLVED" },
+      { severity: "high", status: "FALSE_POSITIVE" },
+    ];
+    // Status comparison is case-insensitive, so both should be excluded → 100
+    expect(computeSecurityScore(findings)).toBe(100);
   });
 
   it("treats unknown severity as 1 deduction", () => {
@@ -56,5 +73,58 @@ describe("computeSecurityScore", () => {
     expect(SEVERITY_DEDUCTION.medium).toBe(5);
     expect(SEVERITY_DEDUCTION.low).toBe(2);
     expect(SEVERITY_DEDUCTION.info).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SEVERITY_SCORE_DIFF — used by differential reporting
+// ---------------------------------------------------------------------------
+describe("SEVERITY_SCORE_DIFF", () => {
+  it("has correct weights for each severity level", () => {
+    expect(SEVERITY_SCORE_DIFF.critical).toBe(10);
+    expect(SEVERITY_SCORE_DIFF.high).toBe(7);
+    expect(SEVERITY_SCORE_DIFF.medium).toBe(4);
+    expect(SEVERITY_SCORE_DIFF.low).toBe(1);
+    expect(SEVERITY_SCORE_DIFF.info).toBe(0);
+  });
+
+  it("weights are in descending order from critical to info", () => {
+    const order = ["critical", "high", "medium", "low", "info"];
+    for (let i = 0; i < order.length - 1; i++) {
+      expect(SEVERITY_SCORE_DIFF[order[i]]).toBeGreaterThanOrEqual(
+        SEVERITY_SCORE_DIFF[order[i + 1]],
+      );
+    }
+  });
+
+  it("info weight is 0 (info findings don't change risk delta)", () => {
+    expect(SEVERITY_SCORE_DIFF.info).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SEVERITY_SCORE_RISK — used by attack path risk computation (client-side)
+// ---------------------------------------------------------------------------
+describe("SEVERITY_SCORE_RISK", () => {
+  it("has correct weights for each severity level", () => {
+    expect(SEVERITY_SCORE_RISK.critical).toBe(10);
+    expect(SEVERITY_SCORE_RISK.high).toBe(7.5);
+    expect(SEVERITY_SCORE_RISK.medium).toBe(5);
+    expect(SEVERITY_SCORE_RISK.low).toBe(2.5);
+    expect(SEVERITY_SCORE_RISK.info).toBe(1);
+  });
+
+  it("weights are in descending order from critical to info", () => {
+    const order = ["critical", "high", "medium", "low", "info"];
+    for (let i = 0; i < order.length - 1; i++) {
+      expect(SEVERITY_SCORE_RISK[order[i]]).toBeGreaterThan(
+        SEVERITY_SCORE_RISK[order[i + 1]],
+      );
+    }
+  });
+
+  it("critical is the maximum weight", () => {
+    const max = Math.max(...Object.values(SEVERITY_SCORE_RISK));
+    expect(SEVERITY_SCORE_RISK.critical).toBe(max);
   });
 });

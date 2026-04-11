@@ -214,7 +214,7 @@ export default function ScanComparison() {
                   <Minus className="w-4 h-4" />
                 )}
                 {diff.riskDelta > 0 ? "+" : ""}
-                {diff.riskDelta}
+                {diff.riskDelta} risk pts
               </span>
               <div className="flex gap-4 ml-auto text-sm text-muted-foreground">
                 <span>

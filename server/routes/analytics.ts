@@ -79,7 +79,7 @@ analyticsRouter.get("/workspaces/:workspaceId/trends/findings", async (req, res)
       const day = f.discoveredAt ? new Date(f.discoveredAt).toISOString().slice(0, 10) : "unknown";
       const existing = byDay.get(day) ?? { total: 0, critical: 0, high: 0, medium: 0, low: 0, info: 0 };
       existing.total++;
-      const sev = f.severity as keyof typeof existing;
+      const sev = (f.severity ?? "info").toLowerCase() as keyof typeof existing;
       if (sev in existing && sev !== "total") {
         (existing as Record<string, number>)[sev]++;
       }
@@ -111,8 +111,8 @@ analyticsRouter.get("/workspaces/:workspaceId/trends/categories", async (req, re
       existing.total++;
       if (f.status === "open") existing.open++;
       if (f.status === "resolved") existing.resolved++;
-      if (f.severity === "critical") existing.critical++;
-      if (f.severity === "high") existing.high++;
+      if (f.severity?.toLowerCase() === "critical") existing.critical++;
+      if (f.severity?.toLowerCase() === "high") existing.high++;
       byCategory.set(cat, existing);
     }
 
@@ -137,7 +137,7 @@ analyticsRouter.get("/workspaces/:workspaceId/trends/mttr", async (req, res) => 
     for (const f of resolved) {
       const hours = (new Date(f.resolvedAt!).getTime() - new Date(f.discoveredAt!).getTime()) / 3_600_000;
       if (hours < 0) continue; // data anomaly
-      const sev = f.severity;
+      const sev = (f.severity ?? "unknown").toLowerCase();
       if (!bySeverity[sev]) bySeverity[sev] = { count: 0, totalHours: 0 };
       bySeverity[sev].count++;
       bySeverity[sev].totalHours += hours;

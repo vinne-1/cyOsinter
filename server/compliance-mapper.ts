@@ -310,12 +310,26 @@ function mapFindingsToControls(
   });
 }
 
+/**
+ * Weight applied to "partial" controls when computing the compliance score.
+ * A partial control satisfies some (but not all) requirements, so it contributes
+ * half-credit toward the passing count.
+ */
+const PARTIAL_WEIGHT = 0.5;
+
+/**
+ * Compute a compliance score (0–100) for a set of control mappings.
+ *
+ * Formula: round((passing + partial × PARTIAL_WEIGHT) / assessedControls × 100)
+ * "unknown" controls (no evidence for or against) are excluded from the denominator.
+ * Returns 0 when no controls have been assessed.
+ */
 function computeScore(mappings: ComplianceMapping[]): number {
   const assessed = mappings.filter((m) => m.overallStatus !== "unknown");
   if (assessed.length === 0) return 0;
   const passing = assessed.filter((m) => m.overallStatus === "pass").length;
   const partial = assessed.filter((m) => m.overallStatus === "partial").length;
-  return Math.round(((passing + partial * 0.5) / assessed.length) * 100);
+  return Math.round(((passing + partial * PARTIAL_WEIGHT) / assessed.length) * 100);
 }
 
 export function generateComplianceReport(

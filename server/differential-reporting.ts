@@ -1,16 +1,9 @@
 import { createLogger } from "./logger";
 import { storage } from "./storage";
 import type { Finding } from "@shared/schema";
+import { SEVERITY_SCORE_DIFF } from "@shared/scoring";
 
 const log = createLogger("differential-reporting");
-
-const SEVERITY_SCORES: Record<string, number> = {
-  critical: 10,
-  high: 7,
-  medium: 4,
-  low: 1,
-  info: 0,
-};
 
 export interface ScanDiff {
   newFindings: Finding[];
@@ -26,7 +19,7 @@ function findingKey(finding: Finding): string {
 function computeRiskScore(findings: readonly Finding[]): number {
   return findings.reduce((total, f) => {
     const severity = (f.severity ?? "info").toLowerCase();
-    return total + (SEVERITY_SCORES[severity] ?? 0);
+    return total + (SEVERITY_SCORE_DIFF[severity] ?? 0);
   }, 0);
 }
 
