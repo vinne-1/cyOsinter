@@ -853,8 +853,12 @@ export class DatabaseStorage implements IStorage {
       .where(
         and(
           eq(findings.workspaceId, workspaceId),
-          sql`(to_tsvector('english', ${findings.title} || ' ' || coalesce(${findings.description}, ''))
-               @@ plainto_tsquery('english', ${query}))`,
+          sql`(
+            to_tsvector('simple', ${findings.title} || ' ' || coalesce(${findings.description}, ''))
+              @@ plainto_tsquery('simple', ${query})
+            OR ${findings.title} ILIKE ${'%' + query + '%'}
+            OR coalesce(${findings.affectedAsset}, '') ILIKE ${'%' + query + '%'}
+          )`,
         ),
       )
       .limit(safeLimit);
@@ -878,8 +882,11 @@ export class DatabaseStorage implements IStorage {
       .where(
         and(
           eq(reconModules.workspaceId, workspaceId),
-          sql`(to_tsvector('english', ${reconModules.target} || ' ' || ${reconModules.moduleType})
-               @@ plainto_tsquery('english', ${query}))`,
+          sql`(
+            to_tsvector('simple', ${reconModules.target} || ' ' || ${reconModules.moduleType})
+              @@ plainto_tsquery('simple', ${query})
+            OR ${reconModules.target} ILIKE ${'%' + query + '%'}
+          )`,
         ),
       )
       .limit(safeLimit);
