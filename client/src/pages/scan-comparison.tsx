@@ -25,7 +25,7 @@ interface Scan {
   id: number;
   target: string;
   status: string;
-  createdAt: string;
+  startedAt: string | null;
 }
 
 interface DiffFinding {
@@ -153,7 +153,7 @@ export default function ScanComparison() {
                 <SelectContent>
                   {scans.map((s) => (
                     <SelectItem key={s.id} value={String(s.id)}>
-                      {s.target} - {new Date(s.createdAt).toLocaleDateString()}
+                      {s.target} - {s.startedAt ? new Date(s.startedAt).toLocaleDateString() : "pending"}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -170,7 +170,7 @@ export default function ScanComparison() {
                     .filter((s) => String(s.id) !== scanA)
                     .map((s) => (
                       <SelectItem key={s.id} value={String(s.id)}>
-                        {s.target} - {new Date(s.createdAt).toLocaleDateString()}
+                        {s.target} - {s.startedAt ? new Date(s.startedAt).toLocaleDateString() : "pending"}
                       </SelectItem>
                     ))}
                 </SelectContent>

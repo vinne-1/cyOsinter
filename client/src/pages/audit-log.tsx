@@ -52,7 +52,7 @@ const filterActions = [
 export default function AuditLog() {
   const [activeFilter, setActiveFilter] = useState("all");
 
-  const { data: logs = [], isLoading } = useQuery<AuditLogEntry[]>({
+  const { data: logs = [], isLoading, error } = useQuery<AuditLogEntry[]>({
     queryKey: ["/api/audit-logs", { limit: "100" }],
   });
 
@@ -65,6 +65,29 @@ export default function AuditLog() {
       <div className="p-6 space-y-4">
         <Skeleton className="h-8 w-48" />
         <Skeleton className="h-64 w-full" />
+      </div>
+    );
+  }
+
+  if (error) {
+    const msg = error instanceof Error ? error.message : "";
+    const isAccessDenied = msg.toLowerCase().includes("insufficient") || msg.toLowerCase().includes("forbidden");
+    return (
+      <div className="p-6">
+        <div className="flex items-center gap-3 mb-6">
+          <ClipboardList className="w-6 h-6 text-primary" />
+          <h1 className="text-2xl font-bold">Audit Log</h1>
+        </div>
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center py-16">
+            <ClipboardList className="w-12 h-12 text-muted-foreground mb-4" />
+            <p className="text-muted-foreground">
+              {isAccessDenied
+                ? "You don't have permission to view audit logs. Admin access required."
+                : "Failed to load audit logs."}
+            </p>
+          </CardContent>
+        </Card>
       </div>
     );
   }

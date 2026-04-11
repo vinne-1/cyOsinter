@@ -356,7 +356,7 @@ export default function ScheduledScans() {
                         {schedule.lastRunAt && (
                           <span>Last run: {new Date(schedule.lastRunAt).toLocaleString()}</span>
                         )}
-                        {schedule.nextRunAt && (
+                        {schedule.enabled && schedule.nextRunAt && (
                           <span>Next: {new Date(schedule.nextRunAt).toLocaleString()}</span>
                         )}
                       </div>
