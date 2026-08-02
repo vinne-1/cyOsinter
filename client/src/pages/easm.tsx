@@ -83,7 +83,7 @@ interface ScanProfile {
 function NewScanDialog() {
   const [open, setOpen] = useState(false);
   const [scanType, setScanType] = useState<"easm" | "full" | "dast">("full");
-  const [scanMode, setScanMode] = useState<"standard" | "gold">("gold");
+  const [scanMode, setScanMode] = useState<"standard" | "gold" | "safe">("gold");
   const [selectedProfileId, setSelectedProfileId] = useState<string>("");
   const { toast } = useToast();
   const { selectedWorkspaceId, selectedWorkspace } = useDomain();
@@ -165,7 +165,7 @@ function NewScanDialog() {
                     const p = profiles.find((pr) => pr.id === v);
                     if (p) {
                       setScanType(p.scanType as "easm" | "full" | "dast");
-                      setScanMode(p.mode as "standard" | "gold");
+                      setScanMode(p.mode as "standard" | "gold" | "safe");
                     }
                   }
                 }}>
@@ -200,17 +200,22 @@ function NewScanDialog() {
             </div>
             <div className="space-y-2">
               <FormLabel>Scan Mode</FormLabel>
-              <Select value={scanMode} onValueChange={(v) => setScanMode(v as "standard" | "gold")}>
+              <Select value={scanMode} onValueChange={(v) => setScanMode(v as "standard" | "gold" | "safe")}>
                 <SelectTrigger data-testid="select-scan-mode">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="gold">Gold (comprehensive, no limits)</SelectItem>
+                  <SelectItem value="safe">Safe (stealth — full coverage, low &amp; slow)</SelectItem>
                   <SelectItem value="standard">Standard (quick scan)</SelectItem>
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                {scanMode === "gold" ? "No limits—probe all subdomains, full wordlists, per-asset analysis" : "Faster scan with capped subdomains and paths"}
+                {scanMode === "gold"
+                  ? "No limits—probe all subdomains, full wordlists, per-asset analysis"
+                  : scanMode === "safe"
+                    ? "Full coverage like Gold, but stealthy: rate-limited, jittered, rotating User-Agents (much slower)"
+                    : "Faster scan with capped subdomains and paths"}
               </p>
             </div>
             <Button type="submit" className="w-full" disabled={mutation.isPending} data-testid="button-start-scan">

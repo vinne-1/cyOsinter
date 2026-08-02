@@ -253,17 +253,27 @@ export async function buildReconModules(
       : null;
     if (pathChecks || directoryBruteforce) {
       const now = new Date().toISOString();
-      const publicFiles = pathChecks ? Object.entries(pathChecks).map(([path, v]) => ({
-        path,
-        type: path.replace(/^\//, "").replace(/\//g, " ") || "path",
-        severity: v.severity ?? (v.accessible ? "low" : "info"),
-        responseType: v.responseType ?? "other",
-        validated: v.validated,
-        confidence: v.confidence,
-        redirectTarget: v.redirectTarget,
-        firstSeen: now,
-        evidenceUrl: `https://${domain}${path}`,
-      })) : [];
+      // A path is only "exposed content" if it actually resolves to a real
+      // resource. Non-existent paths (not_found / soft_404) and inconclusive
+      // probes (other, server_error) must NOT be counted as public files —
+      // otherwise every probed candidate inflates the exposure metric.
+      // This mirrors the frontend's `positiveResponseTypes` definition.
+      const PRESENT_RESPONSE_TYPES = new Set([
+        "success", "redirect", "redirect_to_login", "forbidden", "unauthorized",
+      ]);
+      const publicFiles = pathChecks ? Object.entries(pathChecks)
+        .filter(([, v]) => PRESENT_RESPONSE_TYPES.has(v.responseType ?? (v.accessible ? "success" : "other")))
+        .map(([path, v]) => ({
+          path,
+          type: path.replace(/^\//, "").replace(/\//g, " ") || "path",
+          severity: v.severity ?? (v.accessible ? "low" : "info"),
+          responseType: v.responseType ?? "other",
+          validated: v.validated,
+          confidence: v.confidence,
+          redirectTarget: v.redirectTarget,
+          firstSeen: now,
+          evidenceUrl: `https://${domain}${path}`,
+        })) : [];
       modules.push({
         moduleType: "exposed_content",
         confidence: 95,
@@ -393,6 +403,48 @@ export async function buildReconModules(
         matchCount: osint.secretExposure.matchCount,
         leakyPaths: osint.secretExposure.leakyPaths,
         patternTypes: osint.secretExposure.patternTypes,
+        verifiedAt: new Date().toISOString(),
+      },
+      confidence: 90,
+    });
+  }
+
+  // Phase 3: Advanced EASM coverage recon modules
+  if (easm?.cloudDiscovery && (easm.cloudDiscovery.buckets.length > 0 || easm.cloudDiscovery.cloudServices.length > 0)) {
+    modules.push({
+      moduleType: "cloud_assets",
+      data: {
+        source: "Cloud storage enumeration (S3/GCS/Azure) + CNAME/header analysis",
+        buckets: easm.cloudDiscovery.buckets,
+        cloudServices: easm.cloudDiscovery.cloudServices,
+        bucketCount: easm.cloudDiscovery.buckets.length,
+        verifiedAt: new Date().toISOString(),
+      },
+      confidence: 85,
+    });
+  }
+
+  if (easm?.containerExposure && easm.containerExposure.exposedEndpoints.length > 0) {
+    modules.push({
+      moduleType: "container_exposure",
+      data: {
+        source: "Container/orchestration endpoint probing (Docker API, Kubernetes, etcd, etc.)",
+        exposedEndpoints: easm.containerExposure.exposedEndpoints,
+        endpointCount: easm.containerExposure.exposedEndpoints.length,
+        verifiedAt: new Date().toISOString(),
+      },
+      confidence: 85,
+    });
+  }
+
+  if (easm?.portScan && Object.keys(easm.portScan).length > 0) {
+    const totalOpen = Object.values(easm.portScan).reduce((sum, ports) => sum + ports.length, 0);
+    modules.push({
+      moduleType: "port_services",
+      data: {
+        source: "TCP connect + banner grab",
+        portScan: easm.portScan,
+        openPortCount: totalOpen,
         verifiedAt: new Date().toISOString(),
       },
       confidence: 90,

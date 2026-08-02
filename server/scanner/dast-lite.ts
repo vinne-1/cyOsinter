@@ -6,6 +6,7 @@
  */
 
 import { createLogger } from "../logger";
+import { stealthFetch } from "./stealth.js";
 
 const log = createLogger("dast-lite");
 
@@ -38,14 +39,9 @@ interface SecurityHeaders {
 const DAST_TIMEOUT_MS = 8000;
 
 async function safeFetch(url: string, options: RequestInit = {}): Promise<Response | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), DAST_TIMEOUT_MS);
   try {
-    const res = await fetch(url, { ...options, signal: controller.signal, redirect: "manual" });
-    clearTimeout(timer);
-    return res;
+    return await stealthFetch(url, { ...options, redirect: "manual" }, DAST_TIMEOUT_MS);
   } catch {
-    clearTimeout(timer);
     return null;
   }
 }

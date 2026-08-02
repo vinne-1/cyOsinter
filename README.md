@@ -20,6 +20,36 @@
 
 ---
 
+## Screenshots
+
+> All screenshots below are live results from scanning **hackthissite.org** — a legal CTF/security training platform.
+
+| Login | Dashboard — 16 assets · 16 findings · Score 12/100 |
+|-------|-----------|
+| ![Login page](docs/screenshots/login.png) | ![Dashboard overview](docs/screenshots/dashboard-overview.png) |
+
+| Dashboard — Severity Distribution & Intel Overview | Attack Surface (EASM) — Gold scan completed |
+|-----------------------|-----------------|
+| ![Dashboard stats](docs/screenshots/dashboard-stats.png) | ![EASM scanning page](docs/screenshots/easm.png) |
+
+| EASM — 16 Discovered Assets (subdomains, IPs) | OSINT Discovery — 2 Leaked Credentials · 2 Emails |
+|-----------------------|-----------------|
+| ![EASM assets list](docs/screenshots/easm-assets.png) | ![OSINT discovery page](docs/screenshots/osint.png) |
+
+| Findings Inbox — 2 Critical · 1 High · 5 Medium | Full Findings List |
+|----------|-------------|
+| ![Findings view](docs/screenshots/findings.png) | ![Findings list](docs/screenshots/findings-list.png) |
+
+| Critical Finding — /.git-credentials CVSS 9.8 | Intelligence — 13 modules · Surface Risk 50/100 |
+|----------|-------------|
+| ![Critical finding detail](docs/screenshots/finding-critical-detail.png) | ![Intelligence panel](docs/screenshots/intelligence.png) |
+
+| Reports — Full Security Assessment | Threat Intel — IP Reputation Lookup |
+|---------|-------------|
+| ![Reports page](docs/screenshots/reports.png) | ![Threat intelligence](docs/screenshots/threat-intel.png) |
+
+---
+
 ## What is cyOsinter?
 
 cyOsinter is a self-hosted **External Attack Surface Management (EASM)** and **OSINT** platform. Point it at a domain and it automatically enumerates subdomains, probes HTTP/HTTPS services, analyzes SSL certificates, checks security headers, validates SPF/DMARC records, discovers exposed paths, and correlates findings into a prioritized risk view — all stored in your own PostgreSQL database, with no data leaving your infrastructure.
@@ -37,6 +67,10 @@ cyOsinter is a self-hosted **External Attack Surface Management (EASM)** and **O
 | **Report Generation** | PDF, Excel, and JSON exports with executive summary and evidence packs |
 | **Multi-Workspace** | Isolate scans and findings per client, project, or domain |
 | **Nmap Import** | Parse and ingest existing Nmap XML scan results |
+
+![Dashboard Overview — hackthissite.org scan: 16 assets, 16 findings, Security Score 12/100](docs/screenshots/dashboard-overview.png)
+
+![Severity Distribution & Intelligence Overview — Surface Risk 50/100](docs/screenshots/dashboard-stats.png)
 
 ---
 
@@ -200,6 +234,10 @@ ollama serve
 
 Then in cyOsinter: **Integrations → Ollama → Enable AI → Save**
 
+![AI Insights](docs/screenshots/ai-insights.png)
+
+![Integrations & Settings](docs/screenshots/integrations.png)
+
 Or set in `.env`:
 ```env
 OLLAMA_ENABLED=1
@@ -249,6 +287,8 @@ cyOsinter uses session-based authentication with Bearer tokens. All API endpoint
 
 ### Getting Started
 
+![Login & Registration](docs/screenshots/login.png)
+
 1. **Register** an account at the login page or via `POST /api/auth/register`
 2. **Login** to receive a Bearer token
 3. Include the token in all API requests: `Authorization: Bearer <token>`
@@ -283,6 +323,34 @@ For programmatic access, create API keys at **Settings -> API Keys**. Keys use t
 ## API Overview
 
 All endpoints are prefixed with `/api`. Workspaced resources use `/api/workspaces/:workspaceId/...`. All endpoints (except `/api/auth/*`) require a valid Bearer token.
+
+**EASM Attack Surface Scanning**
+
+![Attack Surface Scanning — 1 Domain, 3 Subdomains, 11 IPs discovered on hackthissite.org](docs/screenshots/easm.png)
+
+![Discovered Assets — www, git, api subdomains + 137.74.187.x IP block](docs/screenshots/easm-assets.png)
+
+**OSINT Discovery**
+
+![OSINT Discovery — 2 Leaked Credentials, 2 Email addresses exposed](docs/screenshots/osint.png)
+
+**Findings Management**
+
+![Findings Inbox — 2 Critical, 1 High, 5 Medium, 5 Low](docs/screenshots/findings.png)
+
+![Findings List — XSS, Open Redirect, CORS Wildcard, Clickjacking, .git-credentials](docs/screenshots/findings-list.png)
+
+![Critical Finding Detail — Exposed /.git-credentials file, CVSS 9.8](docs/screenshots/finding-critical-detail.png)
+
+**Intelligence & Threat Intel**
+
+![Intelligence Panel — 13 modules populated, Surface Risk 50/100](docs/screenshots/intelligence.png)
+
+![Threat Intel — IP reputation lookup for 137.74.187.145](docs/screenshots/threat-intel.png)
+
+**Reports**
+
+![Reports — hackthissite.org Full Security Assessment, 16 findings](docs/screenshots/reports.png)
 
 | Method | Endpoint | Description |
 |---|---|---|
@@ -354,6 +422,12 @@ ABUSEIPDB_API_KEY=your_key
 ---
 
 ## Security Architecture
+
+**Attack Paths & Compliance Mapping**
+
+| Attack Paths | Compliance |
+|-------------|------------|
+| ![Attack Paths](docs/screenshots/attack-paths.png) | ![Compliance](docs/screenshots/compliance.png) |
 
 cyOsinter is built with defense-in-depth security across all layers.
 

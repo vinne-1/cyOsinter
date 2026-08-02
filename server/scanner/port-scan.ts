@@ -187,16 +187,17 @@ export async function runPortScan(
   host: string,
   ports?: number[],
   signal?: AbortSignal,
+  concurrency: number = BATCH_CONCURRENCY,
 ): Promise<PortScanResults> {
   const startTime = Date.now();
   const targetPorts = ports ?? Array.from(new Set(DEFAULT_PORTS));
   const uniquePorts = Array.from(new Set(targetPorts)).sort((a, b) => a - b);
 
-  log.info({ host, portCount: uniquePorts.length }, "Starting port scan");
+  log.info({ host, portCount: uniquePorts.length, concurrency }, "Starting port scan");
 
   const probeResults = await runWithConcurrency(
     uniquePorts,
-    BATCH_CONCURRENCY,
+    Math.max(1, concurrency),
     (port) => probePort(host, port, CONNECT_TIMEOUT_MS),
     signal,
   );

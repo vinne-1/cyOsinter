@@ -114,11 +114,20 @@ export type ScanProgressCallback = (msg: string, percent: number, step: string, 
 
 export interface ScanOptions {
   signal?: AbortSignal;
-  mode?: "standard" | "gold";
+  mode?: "standard" | "gold" | "safe";
 }
 
 export function isGold(options?: ScanOptions): boolean {
   return options?.mode === "gold";
+}
+
+/**
+ * Full-coverage breadth: use the full wordlists, full port list, and all Nuclei
+ * templates. True for both "gold" (fast + loud) and "safe" (slow + stealthy) —
+ * the two modes share breadth and differ only in pacing (see stealth.ts).
+ */
+export function isFullCoverage(options?: ScanOptions): boolean {
+  return options?.mode === "gold" || options?.mode === "safe";
 }
 
 export function checkAborted(signal?: AbortSignal): void {

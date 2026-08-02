@@ -1,95 +1,64 @@
+import { stealthFetch } from "./stealth.js";
+
+/**
+ * Every scanner HTTP request goes through {@link stealthFetch} so it inherits
+ * the active stealth profile: a global concurrency cap, jittered inter-request
+ * pacing, and a browser-like (optionally rotating) User-Agent. When no stealth
+ * context is active, a passthrough default applies.
+ */
+
 export async function fetchJSON(url: string, timeoutMs = 10000): Promise<any> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: { "User-Agent": "Cyshield-Scanner/1.0" },
-    });
+    const res = await stealthFetch(url, {}, timeoutMs);
     if (!res.ok) return null;
     return await res.json();
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
 export async function fetchText(url: string, timeoutMs = 10000): Promise<string | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: { "User-Agent": "Cyshield-Scanner/1.0" },
-      redirect: "follow",
-    });
+    const res = await stealthFetch(url, { redirect: "follow" }, timeoutMs);
     if (!res.ok) return null;
     return await res.text();
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
 export async function httpHead(url: string, timeoutMs = 8000): Promise<{ status: number; headers: Record<string, string>; redirectUrl?: string } | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(url, {
-      method: "HEAD",
-      signal: controller.signal,
-      headers: { "User-Agent": "Cyshield-Scanner/1.0" },
-      redirect: "follow",
-    });
+    const res = await stealthFetch(url, { method: "HEAD", redirect: "follow" }, timeoutMs);
     const headers: Record<string, string> = {};
     res.headers.forEach((v, k) => { headers[k] = v; });
     return { status: res.status, headers, redirectUrl: res.url !== url ? res.url : undefined };
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
 export async function httpGet(url: string, timeoutMs = 8000): Promise<{ status: number; headers: Record<string, string>; body: string; finalUrl: string } | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: { "User-Agent": "Cyshield-Scanner/1.0" },
-      redirect: "follow",
-    });
+    const res = await stealthFetch(url, { redirect: "follow" }, timeoutMs);
     const headers: Record<string, string> = {};
     res.headers.forEach((v, k) => { headers[k] = v; });
     const body = await res.text();
     return { status: res.status, headers, body: body.substring(0, 5000), finalUrl: res.url };
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
 export async function httpGetNoRedirect(url: string, timeoutMs = 6000): Promise<{ status: number; headers: Record<string, string>; location?: string } | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: { "User-Agent": "Cyshield-Scanner/1.0" },
-      redirect: "manual",
-    });
+    const res = await stealthFetch(url, { redirect: "manual" }, timeoutMs);
     const headers: Record<string, string> = {};
     res.headers.forEach((v, k) => { headers[k] = v; });
     const location = res.headers.get("location") ?? undefined;
     return { status: res.status, headers, location };
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
@@ -116,14 +85,8 @@ export async function getRedirectChain(initialUrl: string, maxHops = 10): Promis
 }
 
 export async function httpGetMainPage(url: string, timeoutMs = 10000): Promise<{ status: number; body: string; headers: Record<string, string>; setCookieStrings: string[]; finalUrl: string } | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: { "User-Agent": "Cyshield-Scanner/1.0" },
-      redirect: "follow",
-    });
+    const res = await stealthFetch(url, { redirect: "follow" }, timeoutMs);
     const headers: Record<string, string> = {};
     res.headers.forEach((v, k) => { headers[k] = v; });
     const setCookieStrings = typeof (res.headers as any).getSetCookie === "function" ? (res.headers as any).getSetCookie() : (headers["set-cookie"] ? [headers["set-cookie"]] : []);
@@ -131,8 +94,6 @@ export async function httpGetMainPage(url: string, timeoutMs = 10000): Promise<{
     return { status: res.status, body: body.substring(0, 100000), headers, setCookieStrings, finalUrl: res.url };
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 

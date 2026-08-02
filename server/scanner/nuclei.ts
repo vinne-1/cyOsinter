@@ -3,6 +3,8 @@ import fs from "fs/promises";
 import os from "os";
 import path from "path";
 import { checkCISAKEV } from "../cve-service.js";
+import { resolveExecutable } from "./utils.js";
+import { resolveProfile } from "./stealth.js";
 import { createLogger } from "../logger.js";
 import type { ScanProgressCallback, ScanOptions } from "./types.js";
 
@@ -101,12 +103,17 @@ export async function runNucleiScan(
     });
 
   let nucleiPath: string | null = null;
-  if (await checkNuclei("nuclei")) {
-    nucleiPath = "nuclei";
-  } else {
-    const altPath = path.join(goBin, "nuclei");
-    if (await checkNuclei(altPath)) {
-      nucleiPath = altPath;
+  // Build an ordered candidate list. resolveExecutable honors Windows PATHEXT
+  // (spawn without shell won't append .exe/.cmd), so scoop/go shims resolve.
+  const resolved = resolveExecutable("nuclei", [goBin]);
+  const candidates = Array.from(new Set(
+    [resolved, "nuclei", path.join(goBin, "nuclei"), path.join(goBin, "nuclei.exe")]
+      .filter((c): c is string => Boolean(c)),
+  ));
+  for (const candidate of candidates) {
+    if (await checkNuclei(candidate)) {
+      nucleiPath = candidate;
+      break;
     }
   }
   if (!nucleiPath) {
@@ -117,9 +124,11 @@ export async function runNucleiScan(
     );
   }
 
-  const isGoldScan = options?.mode === "gold";
-  // Standard: 8 min cap (severity + http-only); Gold: 30 min full scan
-  const NUCLEI_MAX_DURATION_MS = isGoldScan ? 30 * 60 * 1000 : 8 * 60 * 1000;
+  const profile = resolveProfile(options?.mode);
+  const isGoldScan = profile.mode === "gold";
+  // standard: 8 min (targeted templates); gold: 30 min (all templates, fast);
+  // safe: up to 60 min (all templates, throttled low-and-slow).
+  const NUCLEI_MAX_DURATION_MS = profile.nuclei.maxDurationMs;
   await report(`Running Nuclei scan against ${targetUrls.length} target(s)...`, 0, "nuclei_scan", 300);
   const tempFile = path.join(os.tmpdir(), `nuclei-targets-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
   try {
@@ -138,12 +147,14 @@ export async function runNucleiScan(
     const args = [
       "-l", tempFile, "-jsonl", "-silent", "-no-color",
       "-timeout", "30",
-      "-rate-limit", isGoldScan ? "150" : "100",
-      "-bulk-size", isGoldScan ? "25" : "15",
-      "-concurrency", isGoldScan ? "25" : "15",
-      // Standard: targeted template dirs (~2.5k templates) — fast + relevant for EASM
-      // Gold: all templates, all severities (full 12k+ templates)
-      ...(isGoldScan
+      "-rate-limit", String(profile.nuclei.rateLimit),
+      "-bulk-size", String(profile.nuclei.bulkSize),
+      "-concurrency", String(profile.nuclei.concurrency),
+      // Extra per-request jitter in stealth mode to avoid a regular request cadence.
+      ...(profile.nuclei.jitterMs > 0 ? ["-jitter", `${profile.nuclei.jitterMs}ms`] : []),
+      // Full-coverage modes (gold, safe): all templates, all severities (12k+).
+      // Standard: targeted template dirs (~2.5k) — fast + relevant for EASM.
+      ...(profile.nuclei.allTemplates
         ? []
         : ["-t", "http/technologies/", "-t", "http/misconfiguration/", "-t", "http/exposures/"]),
     ];

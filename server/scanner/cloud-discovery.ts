@@ -1,6 +1,7 @@
 import dns from "dns/promises";
 import { createLogger } from "../logger.js";
 import { runWithConcurrency } from "./utils.js";
+import { stealthFetch } from "./stealth.js";
 
 const log = createLogger("cloud-discovery");
 
@@ -108,27 +109,13 @@ async function safeFetch(
   timeout: number,
   signal?: AbortSignal,
 ): Promise<{ status: number; headers: Record<string, string> } | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeout);
-
-  const onAbort = () => controller.abort();
-  signal?.addEventListener("abort", onAbort, { once: true });
-
   try {
-    const res = await fetch(url, {
-      method: "HEAD",
-      signal: controller.signal,
-      headers: { "User-Agent": "Cyshield-Scanner/1.0" },
-      redirect: "follow",
-    });
+    const res = await stealthFetch(url, { method: "HEAD", redirect: "follow", signal }, timeout);
     const headers: Record<string, string> = {};
     res.headers.forEach((v, k) => { headers[k] = v; });
     return { status: res.status, headers };
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
-    signal?.removeEventListener("abort", onAbort);
   }
 }
 

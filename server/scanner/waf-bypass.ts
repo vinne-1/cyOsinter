@@ -1,5 +1,6 @@
 import { createLogger } from "../logger.js";
 import { runWithConcurrency } from "./utils.js";
+import { stealthFetch } from "./stealth.js";
 
 const log = createLogger("waf-bypass");
 
@@ -83,25 +84,12 @@ async function safeFetchGet(
   timeout: number,
   signal?: AbortSignal,
 ): Promise<{ status: number; body: string } | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeout);
-
-  const onAbort = () => controller.abort();
-  signal?.addEventListener("abort", onAbort, { once: true });
-
   try {
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: { "User-Agent": "Cyshield-Scanner/1.0", ...headers },
-      redirect: "follow",
-    });
+    const res = await stealthFetch(url, { headers, redirect: "follow", signal }, timeout);
     const body = (await res.text()).substring(0, 10000);
     return { status: res.status, body };
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
-    signal?.removeEventListener("abort", onAbort);
   }
 }
 

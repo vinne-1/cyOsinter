@@ -5,7 +5,7 @@ import {
   SUBDOMAIN_WORDLIST_SOURCE, STANDARD_SUBDOMAIN_WORDLIST_CAP, STANDARD_PROBE_BATCH,
   STANDARD_SUBDOMAIN_CERT_CHECK, STANDARD_PORTS,
   GOLD_SUBDOMAIN_WORDLIST_CAP, GOLD_PROBE_BATCH, GOLD_SUBDOMAIN_CERT_CHECK, GOLD_PORTS,
-  isGold, checkAborted, loadSubdomainWordlist,
+  isFullCoverage, checkAborted, loadSubdomainWordlist,
   type ScanProgressCallback, type ScanOptions, type ScanResults,
 } from "./constants.js";
 import { resolveDNS, getNSRecords } from "./dns.js";
@@ -14,6 +14,23 @@ import { getCertificateInfo } from "./tls.js";
 import { scanOpenPorts, checkSecurityHeaders, detectServerInfo, detectWAF, detectCDN } from "./detection.js";
 import { runWithConcurrency } from "./utils.js";
 import { scanSubdomainTakeover } from "./takeover.js";
+import { resolveProfile } from "./stealth.js";
+import { runPortScan } from "./port-scan.js";
+import { runCloudDiscovery } from "./cloud-discovery.js";
+import { runContainerDetection } from "./container-detection.js";
+import { runWAFBypassTest } from "./waf-bypass.js";
+import { fetchSubdomainsFromFreeSources, fetchWaybackUrls, reverseDnsLookup } from "./passive-sources.js";
+
+/** CVSS score by severity band for findings produced by advanced sub-modules. */
+const SEVERITY_CVSS: Record<string, string> = { critical: "9.1", high: "7.5", medium: "5.3", low: "3.1", info: "0.0" };
+
+/** Adapt a sub-module finding (no cvss/evidence) into a full VerifiedFinding. */
+function toVerifiedFinding(
+  f: { title: string; description: string; severity: string; category: string; affectedAsset: string; remediation: string },
+  evidence: ScanResults["findings"][number]["evidence"] = [],
+): ScanResults["findings"][number] {
+  return { ...f, cvssScore: SEVERITY_CVSS[f.severity] ?? "5.0", evidence };
+}
 
 const log = createLogger("scanner");
 
@@ -46,7 +63,10 @@ async function enumerateSubdomainsBruteforce(
     log.info({ domain, wildcardIPs: Array.from(wildcardIPs) }, "Wildcard DNS detected — filtering false positives");
   }
 
-  const prefixes = await loadSubdomainWordlist();
+  // Pass the caller's cap through so gold mode (cap = large) loads the FULL
+  // wordlist. Without this, loadSubdomainWordlist() defaulted to the standard
+  // 2000-entry cap even in gold, silently limiting enumeration breadth.
+  const prefixes = await loadSubdomainWordlist(cap);
   const toTry = prefixes.slice(0, cap).map((prefix) => `${prefix}.${domain}`);
   const resolved: string[] = [];
   const results = await runWithConcurrency(
@@ -89,7 +109,11 @@ export async function runEASMScan(domain: string, onProgress?: ScanProgressCallb
   const DOMAIN_RE = /^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
   if (!domain || !DOMAIN_RE.test(domain)) throw new Error(`Invalid domain: ${domain}`);
   const signal = options?.signal;
-  const gold = isGold(options);
+  const profile = resolveProfile(options?.mode);
+  // Full-coverage breadth (gold + safe). `gold` keeps its name below; safe mode
+  // shares the same breadth and differs only in pacing (handled by stealth.ts).
+  const gold = isFullCoverage(options);
+  const stealth = profile.stealth;
   const results: ScanResults = { subdomains: [], assets: [], findings: [], reconData: {} };
   const now = new Date().toISOString();
   const report = async (msg: string, pct: number, step: string, eta?: number) => {
@@ -103,21 +127,28 @@ export async function runEASMScan(domain: string, onProgress?: ScanProgressCallb
   const portList = gold ? GOLD_PORTS : STANDARD_PORTS;
 
   checkAborted(signal);
-  log.info({ domain, mode: gold ? "gold" : "standard" }, "Starting EASM scan");
+  log.info({ domain, mode: profile.mode, stealth }, "Starting EASM scan");
   await report("Enumerating subdomains (crt.sh + bruteforce)...", 0, "enumerate_subdomains", 180);
 
-  const [crtShSubdomains, mainDns, certInfo, nsRecords, bruteforceResult] = await Promise.all([
+  const [crtShSubdomains, mainDns, certInfo, nsRecords, bruteforceResult, passiveSources] = await Promise.all([
     enumerateSubdomainsCrtSh(domain),
     resolveDNS(domain),
     getCertificateInfo(domain),
     getNSRecords(domain),
-    enumerateSubdomainsBruteforce(domain, subdomainCap === 0 ? 99999 : subdomainCap, 20, signal),
+    enumerateSubdomainsBruteforce(domain, subdomainCap === 0 ? 99999 : subdomainCap, profile.dnsConcurrency, signal),
+    // Free, keyless passive sources (CT mirrors, passive DNS, archives). Best-effort.
+    fetchSubdomainsFromFreeSources(domain).catch(() => ({ subdomains: [] as string[], bySource: {} as Record<string, number> })),
   ]);
 
   checkAborted(signal);
   const bruteforceSet = new Set(bruteforceResult.resolved);
-  const combinedSubdomains = Array.from(new Set([...crtShSubdomains, ...bruteforceResult.resolved])).sort();
+  const combinedSubdomains = Array.from(
+    new Set([...crtShSubdomains, ...bruteforceResult.resolved, ...passiveSources.subdomains]),
+  ).sort();
   results.subdomains = combinedSubdomains;
+  if (Object.keys(passiveSources.bySource).length > 0) {
+    results.reconData.passiveSources = passiveSources.bySource;
+  }
   if (bruteforceResult.wildcardDetected) {
     log.info({ domain }, "Wildcard DNS filtering applied — bruteforce results de-duplicated against wildcard IPs");
   }
@@ -137,7 +168,7 @@ export async function runEASMScan(domain: string, onProgress?: ScanProgressCallb
 
   const probeResults = await runWithConcurrency(
     probeBatch,
-    20,
+    stealth ? profile.dnsConcurrency : 20,
     async (sub) => {
       const subDns = await resolveDNS(sub);
       let httpResult = null;
@@ -334,7 +365,14 @@ export async function runEASMScan(domain: string, onProgress?: ScanProgressCallb
 
   await report("Checking security headers and HTTP configuration...", 75, "check_headers", 30);
 
-  const mainHttps = await httpGet(`https://${domain}`);
+  // Fetch the main page for header analysis, with resilience: a single HTTPS
+  // request can fail transiently (slow/round-robin IP), which previously left
+  // securityHeaders empty. Retry once, then fall back to http:// so header
+  // coverage still populates for reachable hosts.
+  const mainHttps =
+    (await httpGet(`https://${domain}`)) ||
+    (await httpGet(`https://${domain}`)) ||
+    (await httpGet(`http://${domain}`));
   if (mainHttps) {
     const headerChecks = checkSecurityHeaders(mainHttps.headers);
     const missingHeaders = headerChecks.filter(h => !h.present);
@@ -529,6 +567,112 @@ export async function runEASMScan(domain: string, onProgress?: ScanProgressCallb
     liveSubdomains: liveSubdomains.map(s => s.subdomain),
     danglingCnames: danglingCnames.map(d => ({ subdomain: d.subdomain, cname: d.dns.cnames[0] })),
   };
+
+  // Reverse-DNS (PTR) for resolved apex IPs — cheap, always run.
+  if (mainDns.ips.length > 0) {
+    try {
+      const ptr = await reverseDnsLookup(mainDns.ips.slice(0, 10));
+      if (Object.keys(ptr).length > 0) results.reconData.reverseDns = ptr;
+    } catch (err) {
+      log.warn({ err, domain }, "Reverse DNS lookup failed (non-fatal)");
+    }
+  }
+
+  // ── Advanced coverage (full-coverage modes: gold + safe) ──
+  // Cloud storage discovery, container/orchestration exposure, and banner-grab
+  // port scanning. Each is best-effort and fail-soft. All outbound HTTP is
+  // paced by the active stealth profile; the port scan concurrency is lowered
+  // in stealth mode so a full-coverage scan stays quiet.
+  if (gold) {
+    checkAborted(signal);
+    await report("Harvesting historical URLs (Wayback Machine)...", 86, "wayback_urls", 50);
+    try {
+      const wayback = await fetchWaybackUrls(domain, 2000);
+      if (wayback.length > 0) results.reconData.waybackUrls = wayback;
+    } catch (err) {
+      log.warn({ err, domain }, "Wayback URL harvest failed (non-fatal)");
+    }
+
+    checkAborted(signal);
+    await report("Discovering cloud assets (S3/GCS/Azure)...", 88, "cloud_discovery", 45);
+    try {
+      const cloud = await runCloudDiscovery(domain, signal);
+      if (cloud.buckets.length > 0 || cloud.cloudServices.length > 0) {
+        results.reconData.cloudDiscovery = { buckets: cloud.buckets, cloudServices: cloud.cloudServices };
+      }
+      for (const b of cloud.buckets) {
+        results.assets.push({ type: "cloud_bucket", value: b.url, tags: [b.provider, b.accessible ? "public" : "exists"] });
+      }
+      for (const f of cloud.findings) {
+        results.findings.push(toVerifiedFinding(f, [{
+          type: "cloud_asset", description: "Cloud storage discovery", source: "cloud-discovery", verifiedAt: now,
+        }]));
+      }
+    } catch (err) {
+      log.warn({ err, domain }, "Cloud discovery failed (non-fatal)");
+    }
+
+    checkAborted(signal);
+    await report("Probing for exposed container/orchestration endpoints...", 90, "container_detection", 40);
+    try {
+      const container = await runContainerDetection(domain, signal);
+      if (container.exposedEndpoints.length > 0) {
+        results.reconData.containerExposure = { exposedEndpoints: container.exposedEndpoints };
+        for (const ep of container.exposedEndpoints) {
+          results.assets.push({ type: "service", value: ep.url, tags: ["container", ep.type, ep.authenticated ? "auth" : "open"] });
+        }
+      }
+      for (const f of container.findings) {
+        results.findings.push(toVerifiedFinding(f, [{
+          type: "container_exposure", description: "Exposed container/orchestration endpoint", source: "container-detection", verifiedAt: now,
+        }]));
+      }
+    } catch (err) {
+      log.warn({ err, domain }, "Container detection failed (non-fatal)");
+    }
+
+    // Banner-grab the ports already found open by scanOpenPorts (above) — no
+    // need to re-scan the full port list, which would double the work and stall
+    // on filtered ports. Only open ports get a banner-grab connection.
+    const alreadyOpen = results.reconData.openPorts ?? [];
+    if (mainDns.ips.length > 0 && alreadyOpen.length > 0) {
+      checkAborted(signal);
+      await report("Banner-grabbing open ports on primary IP...", 92, "port_banner_scan", 20);
+      try {
+        const mainIp = mainDns.ips[0];
+        const portConcurrency = stealth ? profile.dnsConcurrency : 20;
+        const ps = await runPortScan(mainIp, alreadyOpen, signal, portConcurrency);
+        if (ps.openPorts.length > 0) {
+          results.reconData.portScan = { ...(results.reconData.portScan ?? {}), [mainIp]: ps.openPorts };
+        }
+        for (const f of ps.findings) {
+          results.findings.push(toVerifiedFinding(f, [{
+            type: "port_scan", description: "TCP port banner grab", source: "port-scan", verifiedAt: now,
+          }]));
+        }
+      } catch (err) {
+        log.warn({ err, domain }, "Banner-grab port scan failed (non-fatal)");
+      }
+    }
+
+    // Intrusive WAF-bypass testing — only in explicitly aggressive (gold) mode.
+    if (profile.allowIntrusive) {
+      checkAborted(signal);
+      await report("Testing WAF bypass techniques...", 93, "waf_bypass", 30);
+      try {
+        const allHeaders = results.reconData.serverInfo?.allHeaders;
+        const wafProvider = allHeaders ? (detectWAF(allHeaders).provider || null) : null;
+        const waf = await runWAFBypassTest(domain, wafProvider, signal);
+        for (const f of waf.findings) {
+          results.findings.push(toVerifiedFinding(f, [{
+            type: "waf_bypass", description: "WAF bypass technique test", source: "waf-bypass", verifiedAt: now,
+          }]));
+        }
+      } catch (err) {
+        log.warn({ err, domain }, "WAF bypass test failed (non-fatal)");
+      }
+    }
+  }
 
   // Subdomain takeover detection
   if (results.subdomains.length > 0) {

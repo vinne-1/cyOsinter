@@ -83,6 +83,21 @@ app.use((req, res, next) => {
 
 (async () => {
   await seedDatabase();
+
+  // Reconcile orphaned scans: any scan left "running"/"pending" by a previous
+  // process (crash, deploy, or container restart) can never resume and would
+  // otherwise block new scans for the same target forever. Mark them failed.
+  try {
+    const { rowCount } = await pool.query(
+      "UPDATE scans SET status = 'failed', error_message = 'Interrupted by server restart', completed_at = now() WHERE status IN ('running', 'pending')",
+    );
+    if (rowCount && rowCount > 0) {
+      createLogger("startup").info({ count: rowCount }, "Reconciled orphaned scans left running from a previous process");
+    }
+  } catch (err) {
+    createLogger("startup").error({ err }, "Failed to reconcile orphaned scans on startup");
+  }
+
   initNotifications(httpServer);
   registerScanTrigger(triggerScan);
   await registerRoutes(httpServer, app);

@@ -50,7 +50,7 @@ const formSchema = z.object({
     (val) => val.trim().split(/\s+/).length === 5,
     { message: "Invalid cron expression" }
   ),
-  mode: z.enum(["standard", "gold"]),
+  mode: z.enum(["standard", "gold", "safe"]),
 });
 
 function cronToHuman(cron: string): string {
@@ -165,7 +165,7 @@ function NewScheduledScanDialog() {
                     const p = profiles.find((pr) => pr.id === v);
                     if (p) {
                       form.setValue("scanType", p.scanType as "easm" | "osint" | "full" | "dast");
-                      form.setValue("mode", p.mode as "standard" | "gold");
+                      form.setValue("mode", p.mode as "standard" | "gold" | "safe");
                     }
                   }
                 }}>
@@ -196,10 +196,11 @@ function NewScheduledScanDialog() {
               </div>
               <div className="space-y-2">
                 <FormLabel>Mode</FormLabel>
-                <Select value={form.watch("mode")} onValueChange={(v) => form.setValue("mode", v as "standard" | "gold")}>
+                <Select value={form.watch("mode")} onValueChange={(v) => form.setValue("mode", v as "standard" | "gold" | "safe")}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="standard">Standard</SelectItem>
+                    <SelectItem value="safe">Safe (Stealth)</SelectItem>
                     <SelectItem value="gold">Gold</SelectItem>
                   </SelectContent>
                 </Select>

@@ -25,6 +25,13 @@ export { buildReconModules } from "./recon-builder.js";
 // Shared utility
 export { runWithConcurrency } from "./utils.js";
 
+// Stealth engine (rate limiting, pacing, UA rotation, scan profiles)
+export { resolveProfile, runWithStealth, getController, currentProfile, StealthController, stealthFetch, USER_AGENTS, DEFAULT_USER_AGENT } from "./stealth.js";
+export type { ScanMode, ScanProfile, NucleiProfile } from "./stealth.js";
+
+// Free passive OSINT sources
+export { fetchSubdomainsFromFreeSources, fetchWaybackUrls, reverseDnsLookup } from "./passive-sources.js";
+
 // Constants and types
 export type { ScanProgressCallback, ScanOptions, ScanResults, EvidenceItem, VerifiedFinding } from "./constants.js";
 
@@ -53,3 +60,4 @@ export type { WAFBypassResults } from "./waf-bypass.js";
 // Main scan orchestrators
 export { runEASMScan } from "./easm-scan.js";
 export { runOSINTScan } from "./osint-scan.js";
+export { runPassiveScan } from "./passive-scan.js";

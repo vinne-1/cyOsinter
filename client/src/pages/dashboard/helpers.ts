@@ -47,4 +47,5 @@ export const scanTypes = [
   { id: "full", label: "Full Scan (EASM + OSINT)", description: "Complete scan: subdomains, attack surface, email security, exposed content, and all recon modules" },
   { id: "easm", label: "Attack Surface (EASM)", description: "Discover subdomains, services, certificates, and exposed infrastructure" },
   { id: "osint", label: "OSINT Discovery", description: "Find leaked credentials, exposed documents, and public mentions" },
+  { id: "passive", label: "Passive OSINT (non-intrusive)", description: "Recon-only: DNS, WHOIS, crt.sh, Shodan, TLS cert, one homepage request. No brute-force, ports, Nuclei, or DAST — safe when only passive testing is authorized" },
 ];

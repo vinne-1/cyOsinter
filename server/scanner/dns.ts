@@ -3,26 +3,52 @@ import { createLogger } from "../logger.js";
 
 const log = createLogger("scanner");
 
+// Query public resolvers rather than the host's default DNS. Some environments
+// (and flaky/Cloudflare-fronted zones) return ETIMEOUT/ESERVFAIL from the local
+// resolver for names that public resolvers answer fine — which silently caused
+// real subdomains (e.g. mail., autodiscover.) to be missed during enumeration
+// and left dns_overview empty. 1.1.1.1 + 8.8.8.8 are fast and authoritative.
+const PUBLIC_DNS_SERVERS = ["1.1.1.1", "8.8.8.8"];
+
+function makeResolver(timeout: number, tries: number): dns.Resolver {
+  const r = new dns.Resolver({ timeout, tries });
+  try {
+    r.setServers(PUBLIC_DNS_SERVERS);
+  } catch {
+    /* keep system defaults if setServers is unavailable */
+  }
+  return r;
+}
+
+// Fast, bounded resolver for the subdomain-bruteforce hot path. Short timeout
+// keeps thousands of non-existent names from stalling gold scans; 2 tries
+// recovers real subdomains that would otherwise be dropped on a single
+// transient timeout (public DNS answers NXDOMAIN quickly, so the retry cost
+// only applies to the rare genuine timeout, not to every miss).
+const fastResolver = makeResolver(2500, 2);
+
+// More forgiving resolver for authoritative record lookups (A/MX/NS/TXT/SOA/CAA)
+// where completeness matters more than raw speed.
+const recordResolver = makeResolver(5000, 2);
+
 export async function resolveDNS(hostname: string): Promise<{ ips: string[]; cnames: string[] }> {
   const result = { ips: [] as string[], cnames: [] as string[] };
-  try {
-    const addresses = await dns.resolve4(hostname);
-    result.ips = addresses;
-  } catch (e) {
-    log.warn({ err: e, hostname }, "DNS lookup failed");
-  }
-  try {
-    const cnames = await dns.resolveCname(hostname);
-    result.cnames = cnames;
-  } catch (e) {
-    log.warn({ err: e, hostname }, "DNS lookup failed");
-  }
+  // Resolve A and CNAME concurrently — they are independent, so serializing
+  // them doubled per-host latency across the whole wordlist.
+  const [a, c] = await Promise.allSettled([
+    fastResolver.resolve4(hostname),
+    fastResolver.resolveCname(hostname),
+  ]);
+  if (a.status === "fulfilled") result.ips = a.value;
+  if (c.status === "fulfilled") result.cnames = c.value;
+  // Non-existent names are the overwhelmingly common case during bruteforce;
+  // logging each failure floods the logs and adds no signal, so stay silent.
   return result;
 }
 
 export async function getDNSTxtRecords(domain: string): Promise<string[][]> {
   try {
-    return await dns.resolveTxt(domain);
+    return await recordResolver.resolveTxt(domain);
   } catch (e) {
     log.warn({ err: e, domain }, "DNS lookup failed");
     return [];
@@ -31,7 +57,7 @@ export async function getDNSTxtRecords(domain: string): Promise<string[][]> {
 
 export async function getMXRecords(domain: string): Promise<Array<{ priority: number; exchange: string }>> {
   try {
-    return await dns.resolveMx(domain);
+    return await recordResolver.resolveMx(domain);
   } catch (e) {
     log.warn({ err: e, domain }, "DNS lookup failed");
     return [];
@@ -40,7 +66,7 @@ export async function getMXRecords(domain: string): Promise<Array<{ priority: nu
 
 export async function getNSRecords(domain: string): Promise<string[]> {
   try {
-    return await dns.resolveNs(domain);
+    return await recordResolver.resolveNs(domain);
   } catch (e) {
     log.warn({ err: e, domain }, "DNS lookup failed");
     return [];
@@ -58,15 +84,15 @@ export async function getFullDNSRecords(domain: string): Promise<{
   caa: Array<{ tag: string; value: string }>;
 }> {
   const out = { a: [] as string[], aaaa: [] as string[], cname: [] as string[], soa: null as any, txt: [] as string[][], mx: [] as Array<{ priority: number; exchange: string }>, ns: [] as string[], caa: [] as Array<{ tag: string; value: string }> };
-  try { out.a = await dns.resolve4(domain); } catch (e) { log.warn({ err: e, domain }, "DNS lookup failed"); }
-  try { out.aaaa = await dns.resolve6(domain); } catch (e) { log.warn({ err: e, domain }, "DNS lookup failed"); }
-  try { out.cname = await dns.resolveCname(domain); } catch (e) { log.warn({ err: e, domain }, "DNS lookup failed"); }
-  try { out.soa = await dns.resolveSoa(domain); } catch (e) { log.warn({ err: e, domain }, "DNS lookup failed"); }
-  try { out.txt = await dns.resolveTxt(domain); } catch (e) { log.warn({ err: e, domain }, "DNS lookup failed"); }
-  try { out.mx = await dns.resolveMx(domain); } catch (e) { log.warn({ err: e, domain }, "DNS lookup failed"); }
-  try { out.ns = await dns.resolveNs(domain); } catch (e) { log.warn({ err: e, domain }, "DNS lookup failed"); }
+  try { out.a = await recordResolver.resolve4(domain); } catch (e) { log.warn({ err: e, domain }, "DNS lookup failed"); }
+  try { out.aaaa = await recordResolver.resolve6(domain); } catch (e) { log.warn({ err: e, domain }, "DNS lookup failed"); }
+  try { out.cname = await recordResolver.resolveCname(domain); } catch (e) { log.warn({ err: e, domain }, "DNS lookup failed"); }
+  try { out.soa = await recordResolver.resolveSoa(domain); } catch (e) { log.warn({ err: e, domain }, "DNS lookup failed"); }
+  try { out.txt = await recordResolver.resolveTxt(domain); } catch (e) { log.warn({ err: e, domain }, "DNS lookup failed"); }
+  try { out.mx = await recordResolver.resolveMx(domain); } catch (e) { log.warn({ err: e, domain }, "DNS lookup failed"); }
+  try { out.ns = await recordResolver.resolveNs(domain); } catch (e) { log.warn({ err: e, domain }, "DNS lookup failed"); }
   try {
-    const resolveCaa = (dns as any).resolveCaa;
+    const resolveCaa = (recordResolver as any).resolveCaa?.bind(recordResolver);
     if (typeof resolveCaa === "function") {
       const caa = await resolveCaa(domain);
       if (Array.isArray(caa)) out.caa = caa.map((r: { tag: string; value: string }) => ({ tag: r.tag, value: r.value }));
@@ -78,7 +104,7 @@ export async function getFullDNSRecords(domain: string): Promise<{
 }
 
 export function checkDNSSEC(domain: string): Promise<{ soaPresent: boolean }> {
-  return dns.resolveSoa(domain).then(() => ({ soaPresent: true })).catch(() => ({ soaPresent: false }));
+  return recordResolver.resolveSoa(domain).then(() => ({ soaPresent: true })).catch(() => ({ soaPresent: false }));
 }
 
 export function analyzeSPF(txtRecords: string[][]): { found: boolean; record: string; issues: string[] } {

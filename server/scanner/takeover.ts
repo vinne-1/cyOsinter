@@ -7,7 +7,6 @@
  * 3. Checking for NXDOMAIN responses on CNAME targets
  */
 
-import dns from "dns/promises";
 import { createLogger } from "../logger.js";
 import { httpGet } from "./http.js";
 import { resolveDNS } from "./dns.js";
@@ -152,6 +151,7 @@ export interface TakeoverScanResults {
  */
 async function checkSubdomainTakeover(
   subdomain: string,
+  httpProbe = true,
 ): Promise<TakeoverResult | null> {
   try {
     const dnsResult = await resolveDNS(subdomain);
@@ -165,13 +165,11 @@ async function checkSubdomainTakeover(
       fp.cnames.some((c) => cnameLower.endsWith(c)),
     );
 
-    // Check if CNAME target resolves
-    let cnameResolves = true;
-    try {
-      await dns.resolve4(cname);
-    } catch {
-      cnameResolves = false;
-    }
+    // Check if the CNAME target resolves, via the reliable public resolver
+    // (resolveDNS). Using the flaky system resolver here risked a transient
+    // timeout being mis-read as NXDOMAIN → a false-positive CRITICAL takeover.
+    const cnameTargetDns = await resolveDNS(cname);
+    const cnameResolves = cnameTargetDns.ips.length > 0 || cnameTargetDns.cnames.length > 0;
 
     // If CNAME doesn't resolve (NXDOMAIN), it's a strong takeover signal
     if (!cnameResolves) {
@@ -185,8 +183,9 @@ async function checkSubdomainTakeover(
       };
     }
 
-    // If CNAME resolves but matches a known service, probe the HTTP response
-    if (matchedService && matchedService.bodyFingerprints.length > 0) {
+    // If CNAME resolves but matches a known service, probe the HTTP response.
+    // Skipped in passive mode — the DNS/NXDOMAIN signal above is fully passive.
+    if (httpProbe && matchedService && matchedService.bodyFingerprints.length > 0) {
       try {
         const httpResult = await httpGet(`https://${subdomain}`);
         if (httpResult) {
@@ -223,17 +222,19 @@ async function checkSubdomainTakeover(
 export async function scanSubdomainTakeover(
   subdomains: string[],
   signal?: AbortSignal,
+  opts?: { httpProbe?: boolean },
 ): Promise<TakeoverScanResults> {
   const findings: VerifiedFinding[] = [];
   const results: TakeoverResult[] = [];
   const now = new Date().toISOString();
+  const httpProbe = opts?.httpProbe ?? true;
 
   if (subdomains.length === 0) return { findings, results };
 
   const checked = await runWithConcurrency(
     subdomains,
     10,
-    checkSubdomainTakeover,
+    (subdomain) => checkSubdomainTakeover(subdomain, httpProbe),
     signal,
   );
 

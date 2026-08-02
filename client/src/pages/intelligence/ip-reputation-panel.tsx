@@ -29,6 +29,14 @@ export function IPReputationPanel() {
         country?: string;
         continent?: string;
       } | null;
+      shodanInternetDB?: {
+        ip?: string;
+        ports?: number[];
+        hostnames?: string[];
+        cpes?: string[];
+        tags?: string[];
+        vulns?: string[];
+      } | null;
     }>
   >({
     queryKey: [`/api/workspaces/${selectedWorkspaceId}/ip-enrichment`],
@@ -42,7 +50,7 @@ export function IPReputationPanel() {
           <div className="flex items-center justify-center w-9 h-9 rounded-md bg-primary/10 flex-shrink-0">
             <Shield className="w-5 h-5 text-primary" />
           </div>
-          <h3 className="text-base font-semibold">IP Reputation (AbuseIPDB / VirusTotal)</h3>
+          <h3 className="text-base font-semibold">IP Reputation (AbuseIPDB / VirusTotal / Shodan)</h3>
         </div>
         <Skeleton className="h-48 w-full" />
       </div>
@@ -55,7 +63,7 @@ export function IPReputationPanel() {
           <div className="flex items-center justify-center w-9 h-9 rounded-md bg-primary/10 flex-shrink-0">
             <Shield className="w-5 h-5 text-primary" />
           </div>
-          <h3 className="text-base font-semibold">IP Reputation (AbuseIPDB / VirusTotal)</h3>
+          <h3 className="text-base font-semibold">IP Reputation (AbuseIPDB / VirusTotal / Shodan)</h3>
         </div>
         <Card>
           <CardContent className="py-12 text-center">
@@ -76,12 +84,13 @@ export function IPReputationPanel() {
         <h3 className="text-base font-semibold">IP Reputation (AbuseIPDB / VirusTotal)</h3>
       </div>
       <p className="text-sm text-muted-foreground">
-        Threat intelligence from AbuseIPDB and VirusTotal for public IPs discovered in this workspace.
+        Threat intelligence for public IPs discovered in this workspace. Shodan InternetDB (open ports, hostnames, CVEs) works with no API key; AbuseIPDB and VirusTotal add reputation data when keys are configured.
       </p>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {entries.map(([ip, data]) => {
           const abuse = data?.abuseipdb;
           const vt = data?.virustotal;
+          const shodan = data?.shodanInternetDB;
           const score = abuse?.abuseConfidenceScore ?? -1;
           const scoreColor =
             score < 0 ? "" : score < 25 ? "bg-green-600/15 text-green-400" : score <= 75 ? "bg-yellow-600/15 text-yellow-400" : "bg-red-600/15 text-red-400";
@@ -99,6 +108,11 @@ export function IPReputationPanel() {
                     {vt && (vt.malicious !== undefined || vt.suspicious !== undefined) && (
                       <Badge variant="outline" className="text-xs border-0 no-default-hover-elevate no-default-active-elevate bg-slate-600/15">
                         VT: {vt.malicious ?? 0} mal / {vt.suspicious ?? 0} susp
+                      </Badge>
+                    )}
+                    {shodan && (shodan.vulns?.length ?? 0) > 0 && (
+                      <Badge variant="outline" className="text-xs border-0 no-default-hover-elevate no-default-active-elevate bg-red-600/15 text-red-400">
+                        Shodan: {shodan.vulns!.length} CVE{shodan.vulns!.length === 1 ? "" : "s"}
                       </Badge>
                     )}
                   </div>
@@ -129,7 +143,19 @@ export function IPReputationPanel() {
                     </div>
                   </div>
                 )}
-                {!abuse && !vt && (
+                {shodan && ((shodan.ports?.length ?? 0) > 0 || (shodan.hostnames?.length ?? 0) > 0 || (shodan.vulns?.length ?? 0) > 0 || (shodan.cpes?.length ?? 0) > 0) && (
+                  <div className="space-y-1">
+                    <h4 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Shodan InternetDB <span className="normal-case font-normal">(free · no key)</span></h4>
+                    <div className="space-y-1 text-sm">
+                      {(shodan.ports?.length ?? 0) > 0 && <div><span className="text-muted-foreground">Open ports:</span> <span className="font-mono">{shodan.ports!.join(", ")}</span></div>}
+                      {(shodan.hostnames?.length ?? 0) > 0 && <div className="break-all"><span className="text-muted-foreground">Hostnames:</span> {shodan.hostnames!.join(", ")}</div>}
+                      {(shodan.cpes?.length ?? 0) > 0 && <div className="break-all"><span className="text-muted-foreground">Tech (CPE):</span> {shodan.cpes!.join(", ")}</div>}
+                      {(shodan.tags?.length ?? 0) > 0 && <div><span className="text-muted-foreground">Tags:</span> {shodan.tags!.join(", ")}</div>}
+                      {(shodan.vulns?.length ?? 0) > 0 && <div className="break-all"><span className="text-muted-foreground text-red-400">Known CVEs:</span> <span className="font-mono">{shodan.vulns!.join(", ")}</span></div>}
+                    </div>
+                  </div>
+                )}
+                {!abuse && !vt && !shodan && (
                   <p className="text-xs text-muted-foreground">No enrichment data (configure API keys in Integrations)</p>
                 )}
               </CardContent>

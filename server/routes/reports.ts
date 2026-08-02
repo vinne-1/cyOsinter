@@ -74,8 +74,12 @@ reportsRouter.get("/workspaces/:workspaceId/reports/:reportId/export", wsAuth, a
     if (report.status !== "completed") return res.status(400).json({ message: "Report not yet completed" });
 
     const { data: allFindings } = await storage.getFindings(workspaceId);
+    // An empty/absent findingIds means "all findings" — this mirrors
+    // buildReportContent(). Filtering against an empty list here produced an
+    // empty findings table in exports while the summary still counted them all.
+    const includeAllFindings = (report.findingIds?.length ?? 0) === 0;
     const reportFindings = allFindings
-      .filter((f) => (report.findingIds || []).includes(f.id))
+      .filter((f) => includeAllFindings || report.findingIds!.includes(f.id))
       .map((f) => ({
         id: f.id,
         title: f.title,

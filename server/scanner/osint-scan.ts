@@ -3,7 +3,7 @@ import {
   DIRECTORY_WORDLIST_SOURCE, STANDARD_DIRECTORY_CAP, STANDARD_SITEMAP_LIMIT,
   GOLD_DIRECTORY_CAP, GOLD_SITEMAP_LIMIT, GOLD_PORTS, STANDARD_PORTS,
   OSINT_CREDENTIAL_PATHS, OSINT_DOCUMENT_PATHS, OSINT_INFRA_PATHS, DOCUMENT_EXTENSIONS,
-  isGold, checkAborted, loadDirectoryWordlist,
+  isFullCoverage, checkAborted, loadDirectoryWordlist,
   type ScanProgressCallback, type ScanOptions, type ScanResults,
 } from "./constants.js";
 import { getDNSTxtRecords, getMXRecords, getNSRecords, getFullDNSRecords, checkDNSSEC, analyzeSPF, analyzeDMARC, extractCloudProvidersFromSPF, extractEmailsFromDNS } from "./dns.js";
@@ -22,7 +22,8 @@ export async function runOSINTScan(domain: string, onProgress?: ScanProgressCall
   const DOMAIN_RE = /^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
   if (!domain || !DOMAIN_RE.test(domain)) throw new Error(`Invalid domain: ${domain}`);
   const signal = options?.signal;
-  const gold = isGold(options);
+  // Full-coverage breadth (gold + safe); safe mode differs only in pacing.
+  const gold = isFullCoverage(options);
   const results: ScanResults = { subdomains: [], assets: [], findings: [], reconData: {} };
   const now = new Date().toISOString();
   const report = async (msg: string, pct: number, step: string, eta?: number) => {

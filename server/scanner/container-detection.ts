@@ -1,5 +1,6 @@
 import { createLogger } from "../logger.js";
 import { runWithConcurrency } from "./utils.js";
+import { stealthFetch } from "./stealth.js";
 
 const log = createLogger("container-detection");
 
@@ -58,27 +59,14 @@ async function safeFetchGet(
   timeout: number,
   signal?: AbortSignal,
 ): Promise<{ status: number; headers: Record<string, string>; body: string } | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeout);
-
-  const onAbort = () => controller.abort();
-  signal?.addEventListener("abort", onAbort, { once: true });
-
   try {
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: { "User-Agent": "Cyshield-Scanner/1.0" },
-      redirect: "follow",
-    });
+    const res = await stealthFetch(url, { redirect: "follow", signal }, timeout);
     const headers: Record<string, string> = {};
     res.headers.forEach((v, k) => { headers[k] = v; });
     const body = (await res.text()).substring(0, 5000);
     return { status: res.status, headers, body };
   } catch {
     return null;
-  } finally {
-    clearTimeout(timer);
-    signal?.removeEventListener("abort", onAbort);
   }
 }
 

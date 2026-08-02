@@ -113,6 +113,19 @@ export interface ReconData {
     leakyPaths: string[];
     patternTypes: string[];
   };
+  // Phase 3: Advanced EASM coverage (cloud assets, container exposure, port banners)
+  cloudDiscovery?: {
+    buckets: Array<{ provider: string; name: string; url: string; accessible: boolean; status: number }>;
+    cloudServices: Array<{ provider: string; service: string; evidence: string }>;
+  };
+  containerExposure?: {
+    exposedEndpoints: Array<{ url: string; path: string; type: string; status: number; authenticated: boolean }>;
+  };
+  portScan?: Record<string, Array<{ port: number; service: string; banner?: string }>>;
+  // Phase 3: Free passive OSINT sources
+  passiveSources?: Record<string, number>;
+  reverseDns?: Record<string, string[]>;
+  waybackUrls?: string[];
 }
 
 export interface EvidenceItem {
@@ -148,7 +161,7 @@ export type ScanProgressCallback = (msg: string, percent: number, step: string, 
 
 export interface ScanOptions {
   signal?: AbortSignal;
-  mode?: "standard" | "gold";
+  mode?: "standard" | "gold" | "safe";
 }
 
 export interface NucleiHit {

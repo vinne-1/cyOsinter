@@ -106,8 +106,10 @@ describe("checkNuclei — timeout behaviour", () => {
     const scanPromise = runNucleiScan("example.com", []);
     const rejectedPromise = expect(scanPromise).rejects.toThrow("Nuclei is required");
 
-    // Advance past the 5-second checkNuclei timeout (called 3 times: nuclei, altPath, nuclei)
-    await vi.advanceTimersByTimeAsync(5000 * 3 + 500);
+    // Advance past the 5-second checkNuclei timeout for every probed candidate.
+    // Detection probes a deduped list (resolved path, "nuclei", go-bin variants),
+    // each with a 5s timeout, tried sequentially — advance generously to cover all.
+    await vi.advanceTimersByTimeAsync(5000 * 6 + 500);
 
     await rejectedPromise;
   });

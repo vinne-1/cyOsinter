@@ -20,11 +20,11 @@ export const createScanSchema = z.object({
     (val) => DOMAIN_REGEX.test(val.trim()),
     { message: "Target must be a valid domain name (e.g. example.com)" }
   ),
-  type: z.enum(["easm", "osint", "full", "dast"]),
+  type: z.enum(["easm", "osint", "full", "dast", "passive"]),
   status: z.enum(["pending", "running", "completed", "failed"]).default("pending"),
   workspaceId: z.string().optional(),
   autoGenerateReport: z.boolean().optional(),
-  mode: z.enum(["standard", "gold"]).optional(),
+  mode: z.enum(["standard", "gold", "safe"]).optional(),
   profileId: z.string().optional(),
 });
 
@@ -64,12 +64,12 @@ export const createScheduledScanSchema = z.object({
     (val) => DOMAIN_REGEX.test(val.trim()),
     { message: "Target must be a valid domain name (e.g. example.com)" }
   ),
-  scanType: z.enum(["easm", "osint", "full", "dast"]).default("full"),
+  scanType: z.enum(["easm", "osint", "full", "dast", "passive"]).default("full"),
   cronExpression: z.string().min(1, "Cron expression is required").refine(
     (val) => val.trim().split(/\s+/).length === 5,
     { message: "Cron expression must have exactly 5 fields (min hour dom mon dow)" }
   ),
-  mode: z.enum(["standard", "gold"]).default("standard"),
+  mode: z.enum(["standard", "gold", "safe"]).default("standard"),
   enabled: z.boolean().default(true),
 });
 
@@ -78,7 +78,7 @@ export const updateScheduledScanSchema = z.object({
     (val) => val.trim().split(/\s+/).length === 5,
     { message: "Cron expression must have exactly 5 fields" }
   ).optional(),
-  scanType: z.enum(["easm", "osint", "full", "dast"]).optional(),
-  mode: z.enum(["standard", "gold"]).optional(),
+  scanType: z.enum(["easm", "osint", "full", "dast", "passive"]).optional(),
+  mode: z.enum(["standard", "gold", "safe"]).optional(),
   enabled: z.boolean().optional(),
 });

@@ -153,6 +153,7 @@ const VIRUSTOTAL_DELAY_MS = 1500; // ~4 req/min for free tier
 interface CacheEntry {
   abuseipdb: AbuseIPDBResult | null;
   virustotal: VirusTotalResult | null;
+  shodanInternetDB: ShodanInternetDBResult | null;
   fetchedAt: number;
 }
 
@@ -279,34 +280,79 @@ export async function fetchVirusTotal(ip: string): Promise<VirusTotalResult | nu
   }
 }
 
+export interface ShodanInternetDBResult {
+  ip: string;
+  ports: number[];
+  hostnames: string[];
+  cpes: string[];
+  tags: string[];
+  vulns: string[];
+}
+
 export interface IPEnrichment {
   abuseipdb: AbuseIPDBResult | null;
   virustotal: VirusTotalResult | null;
+  shodanInternetDB: ShodanInternetDBResult | null;
+}
+
+/**
+ * Shodan InternetDB — a FREE, no-API-key endpoint returning Shodan's passive
+ * scan data for an IP: open ports, hostnames, CPEs, tags, and known CVEs.
+ * Unlike AbuseIPDB/VirusTotal it needs no credentials, so it enriches every
+ * scan out of the box. Returns null on 404 (no data) or any error.
+ * Docs: https://internetdb.shodan.io/
+ */
+async function fetchShodanInternetDB(ip: string): Promise<ShodanInternetDBResult | null> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    const res = await fetch(`https://internetdb.shodan.io/${encodeURIComponent(ip)}`, {
+      headers: { Accept: "application/json" },
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timeout));
+    if (!res.ok) return null; // 404 = no data indexed for this IP
+    const data = (await res.json()) as Partial<ShodanInternetDBResult>;
+    return {
+      ip: typeof data.ip === "string" ? data.ip : ip,
+      ports: Array.isArray(data.ports) ? data.ports : [],
+      hostnames: Array.isArray(data.hostnames) ? data.hostnames : [],
+      cpes: Array.isArray(data.cpes) ? data.cpes : [],
+      tags: Array.isArray(data.tags) ? data.tags : [],
+      vulns: Array.isArray(data.vulns) ? data.vulns : [],
+    };
+  } catch {
+    return null;
+  }
 }
 
 export async function enrichIP(ip: string): Promise<IPEnrichment> {
   if (isPrivateIP(ip)) {
-    return { abuseipdb: null, virustotal: null };
+    return { abuseipdb: null, virustotal: null, shodanInternetDB: null };
   }
 
   const cacheKey = ip;
   const cached = enrichmentCache.get(cacheKey);
   if (cached && Date.now() - cached.fetchedAt < CACHE_TTL_MS) {
-    return { abuseipdb: cached.abuseipdb, virustotal: cached.virustotal };
+    return { abuseipdb: cached.abuseipdb, virustotal: cached.virustotal, shodanInternetDB: cached.shodanInternetDB };
   }
 
-  const abuseipdb = await fetchAbuseIPDB(ip);
+  // AbuseIPDB and Shodan InternetDB have no shared rate limit — run concurrently.
+  const [abuseipdb, shodanInternetDB] = await Promise.all([
+    fetchAbuseIPDB(ip),
+    fetchShodanInternetDB(ip),
+  ]);
   await sleep(VIRUSTOTAL_DELAY_MS);
   const virustotal = await fetchVirusTotal(ip);
 
   const entry: CacheEntry = {
     abuseipdb,
     virustotal,
+    shodanInternetDB,
     fetchedAt: Date.now(),
   };
   enrichmentCache.set(cacheKey, entry);
 
-  return { abuseipdb, virustotal };
+  return { abuseipdb, virustotal, shodanInternetDB };
 }
 
 export async function enrichIPs(ips: string[]): Promise<Record<string, IPEnrichment>> {

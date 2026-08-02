@@ -70,7 +70,7 @@ interface ScanProfile {
 function NewOSINTScanDialog() {
   const [open, setOpen] = useState(false);
   const [scanType, setScanType] = useState<"osint" | "full" | "dast">("full");
-  const [scanMode, setScanMode] = useState<"standard" | "gold">("gold");
+  const [scanMode, setScanMode] = useState<"standard" | "gold" | "safe">("gold");
   const [selectedProfileId, setSelectedProfileId] = useState<string>("");
   const { toast } = useToast();
   const { selectedWorkspaceId, selectedWorkspace } = useDomain();
@@ -151,7 +151,7 @@ function NewOSINTScanDialog() {
                     const p = profiles.find((pr) => pr.id === v);
                     if (p) {
                       setScanType(p.scanType as "osint" | "full" | "dast");
-                      setScanMode(p.mode as "standard" | "gold");
+                      setScanMode(p.mode as "standard" | "gold" | "safe");
                     }
                   }
                 }}>
@@ -185,12 +185,13 @@ function NewOSINTScanDialog() {
             </div>
             <div className="space-y-2">
               <FormLabel>Scan Mode</FormLabel>
-              <Select value={scanMode} onValueChange={(v) => setScanMode(v as "standard" | "gold")}>
+              <Select value={scanMode} onValueChange={(v) => setScanMode(v as "standard" | "gold" | "safe")}>
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="gold">Gold (comprehensive, no limits)</SelectItem>
+                  <SelectItem value="safe">Safe (stealth — full coverage, low &amp; slow)</SelectItem>
                   <SelectItem value="standard">Standard (quick scan)</SelectItem>
                 </SelectContent>
               </Select>

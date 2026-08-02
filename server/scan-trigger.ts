@@ -1,8 +1,10 @@
 import { storage } from "./storage";
 import { createLogger } from "./logger";
-import { runEASMScan, runOSINTScan, runNucleiScan, buildReconModules, runDASTScan } from "./scanner";
+import { runEASMScan, runOSINTScan, runNucleiScan, buildReconModules, runDASTScan, runPassiveScan } from "./scanner";
+import { runWithStealth } from "./scanner/stealth.js";
 import { computeSecurityScore } from "@shared/scoring";
 import { fetchBGPViewForIPs } from "./api-integrations";
+import { correlateExploitability } from "./cve-service";
 import { enrichFinding } from "./ai-service";
 import { emitScanCompleted, emitScanFailed, emitNewCriticalFinding } from "./notifications";
 
@@ -11,7 +13,7 @@ const log = createLogger("scan-trigger");
 // ── Types ──
 
 type ProgressFn = (msg: string, percent: number, step: string, etaSeconds?: number) => Promise<void>;
-type ScanMode = "standard" | "gold";
+type ScanMode = "standard" | "gold" | "safe";
 
 interface ScanResults {
   easmResults: Awaited<ReturnType<typeof runEASMScan>> | null;
@@ -40,7 +42,18 @@ interface RawAsset {
 
 // ── Scanner Orchestration ──
 
-async function runScanners(
+function runScanners(
+  target: string,
+  type: string,
+  mode: ScanMode,
+  onProgress: ProgressFn,
+): Promise<ScanResults> {
+  // Wrap the entire scan in a stealth context so every downstream outbound
+  // request inherits the mode's pacing/concurrency/User-Agent profile.
+  return runWithStealth(mode, () => runScannersInner(target, type, mode, onProgress));
+}
+
+async function runScannersInner(
   target: string,
   type: string,
   mode: ScanMode,
@@ -91,6 +104,10 @@ async function runScanners(
       log.warn({ err: dastErr }, "DAST-Lite scan failed");
     }
     await onProgress("[DAST] Active testing complete", 100, "dast_done");
+  } else if (type === "passive") {
+    // Strictly non-intrusive recon — safe for targets where only passive
+    // OSINT is authorized. Populates the osintResults slot (no active EASM).
+    results.osintResults = await runPassiveScan(target, onProgress, scanOptions);
   } else {
     results.osintResults = await runOSINTScan(target, onProgress, scanOptions);
   }
@@ -281,6 +298,11 @@ async function createPostureSnapshot(
     const wafCoverage = totalHosts > 0 ? Math.round((assetInventory.filter((a) => a.waf).length / totalHosts) * 100) : null;
     const tlsPosture = attackSurface?.tlsPosture as { grade?: string } | undefined;
 
+    // Count distinct open ports across all discovered IPs (deduped per host:port).
+    const openPortsByIp = (attackSurface?.openPortsByIp || {}) as Record<string, number[]>;
+    const openPortsCount = Object.values(openPortsByIp)
+      .reduce((sum, ports) => sum + (Array.isArray(ports) ? ports.length : 0), 0);
+
     await storage.createPostureSnapshot({
       workspaceId, scanId, target,
       snapshotAt: new Date(),
@@ -290,7 +312,7 @@ async function createPostureSnapshot(
       findingsCount: allFindings.length,
       criticalCount: allFindings.filter((f) => f.severity === "critical").length,
       highCount: allFindings.filter((f) => f.severity === "high").length,
-      openPortsCount: 0,
+      openPortsCount,
       wafCoverage,
       metadata: { mode },
     });
@@ -331,8 +353,8 @@ async function runBackgroundEnrichment(workspaceId: string): Promise<void> {
  * Used by both the POST /api/scans route and the scan scheduler.
  */
 const DOMAIN_REGEX = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
-const VALID_SCAN_TYPES = ["full", "easm", "osint", "dast"];
-const VALID_SCAN_MODES: ScanMode[] = ["standard", "gold"];
+const VALID_SCAN_TYPES = ["full", "easm", "osint", "dast", "passive"];
+const VALID_SCAN_MODES: ScanMode[] = ["standard", "gold", "safe"];
 
 export async function triggerScan(
   target: string,
@@ -370,12 +392,22 @@ export async function triggerScan(
       const scanMode: ScanMode = VALID_SCAN_MODES.includes(mode as ScanMode) ? (mode as ScanMode) : "standard";
       const results = await runScanners(target, type, scanMode, onProgress);
 
-      const allFindings: RawFinding[] = [
+      const rawFindings: RawFinding[] = [
         ...(results.easmResults?.findings ?? []),
         ...(results.osintResults?.findings ?? []),
         ...(results.nucleiResults?.findings ?? []),
         ...(results.dastResults?.findings ?? []),
       ];
+      // Correlate against CISA KEV: any finding referencing an actively-exploited
+      // CVE is elevated to critical with exploitation evidence. This is the
+      // evidence-backed path to critical findings rather than static template
+      // severities. Best-effort — falls back to the raw findings on failure.
+      let allFindings: RawFinding[] = rawFindings;
+      try {
+        allFindings = await correlateExploitability(rawFindings);
+      } catch (err) {
+        log.warn({ err }, "CVE/KEV correlation failed — using un-elevated findings");
+      }
       const allAssets: RawAsset[] = [
         ...(results.easmResults?.assets ?? []),
         ...(results.osintResults?.assets ?? []),

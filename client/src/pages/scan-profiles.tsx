@@ -191,6 +191,7 @@ function ScanProfilesPage() {
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="standard">Standard</SelectItem>
+                    <SelectItem value="safe">Safe (Stealth)</SelectItem>
                     <SelectItem value="gold">Gold (Deep)</SelectItem>
                   </SelectContent>
                 </Select>
