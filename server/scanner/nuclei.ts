@@ -167,10 +167,12 @@ export async function runNucleiScan(
     // constant 50%, so sparse-finding scans froze the bar for minutes.) Ramps
     // 5→93% local against an expected duration; completion pushes it to 100.
     const nucleiStart = Date.now();
-    const expectedMs = Math.min(NUCLEI_MAX_DURATION_MS, 4 * 60 * 1000);
+    // Asymptotic ramp: rises fast early (≈61% by 90s, ≈82% by 3m) then keeps
+    // creeping toward 95% — always increasing, so a long/throttled run never
+    // hard-freezes and a fast run only makes a small forward jump at completion.
     let progressTimer: ReturnType<typeof setInterval> | null = setInterval(() => {
       const elapsed = Date.now() - nucleiStart;
-      const localPct = Math.min(93, 5 + Math.round((88 * elapsed) / expectedMs));
+      const localPct = Math.min(95, Math.round(5 + 90 * (1 - Math.exp(-elapsed / 90000))));
       report(`Nuclei scanning ${targetUrls.length} target(s) — ${templatesSeen} match(es) so far...`, localPct, "nuclei_scan").catch(() => {});
     }, 5000);
     const clearProgress = () => { if (progressTimer) { clearInterval(progressTimer); progressTimer = null; } };
