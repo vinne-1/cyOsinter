@@ -146,11 +146,12 @@ findingsRouter.post("/workspaces/:workspaceId/ai-insights/summary", wsAuth, asyn
     ]);
     const findings = findingsResult.data;
     const modules = modulesResult.data;
+    const wsTarget = ws.domain || ws.name;
     const [cveContext, webSearchContext] = await Promise.all([
       fetchCVEContextForInsights(findings, modules, 2),
-      searchThreatIntel(ws.name),
+      searchThreatIntel(wsTarget),
     ]);
-    const result = await generateWorkspaceInsights(findings, modules, ws.name, {
+    const result = await generateWorkspaceInsights(findings, modules, wsTarget, {
       cveContext,
       webSearchContext,
     });
@@ -166,7 +167,7 @@ findingsRouter.post("/workspaces/:workspaceId/ai-insights/summary", wsAuth, asyn
           storage.getFindings(workspaceId),
           storage.getReconModules(workspaceId),
         ]);
-        const fallback = buildFallbackInsights(fRes.data, mRes.data, ws.name);
+        const fallback = buildFallbackInsights(fRes.data, mRes.data, ws.domain || ws.name);
         const reason =
           errMsg === "Ollama AI is disabled"
             ? "ollama_disabled"

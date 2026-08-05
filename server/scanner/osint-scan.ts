@@ -14,6 +14,7 @@ import { runWithConcurrency } from "./utils.js";
 import { discoverAPIs } from "./api-discovery.js";
 import { scanSecrets } from "./secret-scanner.js";
 import { establishSoft404Fingerprint, classifyPathResults, buildExposedPathFindings } from "./osint-directory-scan.js";
+import { runWordPressChecks } from "./wordpress-checks.js";
 import { buildSPFFindings, buildDMARCFindings, processHarvestedEmails } from "./osint-email-dns.js";
 
 const log = createLogger("scanner");
@@ -536,6 +537,18 @@ export async function runOSINTScan(domain: string, onProgress?: ScanProgressCall
     }
   } catch (err) {
     log.warn({ err }, "Secret exposure scan failed");
+  }
+
+  // WordPress verification checks (user enumeration + XML-RPC)
+  try {
+    await report("Verifying WordPress exposure (user enumeration, XML-RPC)...", 98, "wordpress_checks");
+    const wp = await runWordPressChecks(domain, signal);
+    results.findings.push(...wp.findings);
+    if (wp.isWordPress || wp.users.length > 0) {
+      results.reconData.wordpress = { isWordPress: wp.isWordPress, users: wp.users, xmlrpcEnabled: wp.xmlrpcEnabled };
+    }
+  } catch (err) {
+    log.warn({ err }, "WordPress checks failed");
   }
 
   await report("OSINT scan complete.", 100, "build_modules", 0);

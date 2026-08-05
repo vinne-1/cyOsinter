@@ -171,36 +171,42 @@ async function checkCORSMisconfiguration(domain: string): Promise<DASTFinding[]>
 
 async function checkXSSReflection(domain: string): Promise<DASTFinding[]> {
   const findings: DASTFinding[] = [];
-  const canary = `csp_xss_${Date.now()}`;
-  const testPaths = [
-    `/?q=${encodeURIComponent(canary)}`,
-    `/search?query=${encodeURIComponent(canary)}`,
-    `/?search=${encodeURIComponent(canary)}`,
-    `/?name=${encodeURIComponent(canary)}`,
-  ];
+  // Inject an HTML-breaking payload and require it to reflect RAW (unencoded)
+  // on a 2xx page. Merely finding the canary text somewhere (e.g. HTML-encoded,
+  // or on a 404 error page) is NOT an exploitable reflection — that was a
+  // frequent false positive. We only report a genuine, rendered HTML injection.
+  const marker = `xqz${Date.now().toString(36)}`;
+  const rawPayload = `"><b>${marker}</b>`;
+  const rawNeedle = `<b>${marker}</b>`;
+  const testPaths = ["/?q=", "/search?query=", "/?search=", "/?s=", "/?name="].map(
+    (p) => `${p}${encodeURIComponent(rawPayload)}`,
+  );
 
   for (const path of testPaths) {
     const url = `https://${domain}${path}`;
     const res = await safeFetch(url);
     if (!res) continue;
+    // Reflected XSS only matters on a rendered (2xx) response, not an error page.
+    if (res.status < 200 || res.status >= 300) continue;
+    let body: string;
     try {
-      const body = await res.text();
-      if (body.includes(canary)) {
-        const csp = res.headers.get("content-security-policy") ?? "";
-        findings.push({
-          title: "Potential XSS Reflection Point",
-          description: `User input is reflected unencoded in the response body at ${path}. ${csp ? "CSP is present which may mitigate exploitation." : "No CSP header detected, increasing exploitability."}`,
-          severity: csp ? "medium" : "high",
-          category: "xss",
-          affectedAsset: domain,
-          evidence: [{ path, canary, reflected: true, cspPresent: !!csp, url }],
-          remediation: "Encode all user input before rendering in HTML. Implement a Content-Security-Policy.",
-        });
-        break; // one finding is enough
-      }
+      body = await res.text();
     } catch {
-      // body read failed
+      continue;
     }
+    const rawReflected = body.includes(rawNeedle);
+    if (!rawReflected) continue; // encoded (&lt;b&gt;) or absent => not exploitable
+    const csp = res.headers.get("content-security-policy") ?? "";
+    findings.push({
+      title: "Reflected XSS — Unencoded HTML Injection",
+      description: `An HTML-breaking payload injected via ${path} is reflected raw (unencoded) in the 2xx response body, confirming a cross-site scripting sink. ${csp ? "A CSP is present which may mitigate exploitation." : "No CSP header is present, increasing exploitability."}`,
+      severity: csp ? "medium" : "high",
+      category: "xss",
+      affectedAsset: domain,
+      evidence: [{ path, payload: rawPayload, rawReflected: true, statusCode: res.status, cspPresent: !!csp, url }],
+      remediation: "Contextually encode all user input before rendering in HTML; implement a strong Content-Security-Policy.",
+    });
+    break; // one confirmed finding is enough
   }
 
   return findings;
@@ -246,14 +252,37 @@ async function checkHTTPMethods(domain: string): Promise<DASTFinding[]> {
   for (const method of dangerousMethods) {
     const res = await safeFetch(url, { method });
     if (!res) continue;
-    if (res.status !== 405 && res.status !== 501 && res.status !== 403 && res.status < 400) {
+    // A generic 200 to PUT/DELETE usually means the server returned the normal
+    // page WITHOUT processing the method (a "soft 200") — not a real exposure.
+    // Require a strong signal that the method is actually honored:
+    //  - 201 Created / 204 No Content (the write actually took effect), or
+    //  - an Allow header that advertises the method, or
+    //  - for TRACE, the request being echoed back in the body (classic XST).
+    const allow = res.headers.get("allow") ?? "";
+    let confirmed = false;
+    let signal = `status ${res.status}`;
+    if (res.status === 201 || res.status === 204) {
+      confirmed = true;
+      signal = `status ${res.status} (${method} processed)`;
+    } else if (new RegExp(`\\b${method}\\b`, "i").test(allow)) {
+      confirmed = true;
+      signal = `Allow: ${allow}`;
+    } else if (method === "TRACE") {
+      let body = "";
+      try { body = await res.text(); } catch { /* ignore */ }
+      if (res.status === 200 && /TRACE\s+\/|X-Forwarded|Host:\s/i.test(body)) {
+        confirmed = true;
+        signal = "request echoed (Cross-Site Tracing)";
+      }
+    }
+    if (confirmed) {
       findings.push({
         title: `Dangerous HTTP Method Enabled: ${method}`,
-        description: `The server responds with status ${res.status} to ${method} requests, indicating the method is enabled.`,
+        description: `The server honors ${method} requests (${signal}), indicating the method is genuinely enabled.`,
         severity: method === "TRACE" ? "medium" : "low",
         category: "http_methods",
         affectedAsset: domain,
-        evidence: [{ method, statusCode: res.status, url }],
+        evidence: [{ method, statusCode: res.status, signal, allow, url }],
         remediation: `Disable the ${method} HTTP method on the web server unless explicitly required.`,
       });
     }

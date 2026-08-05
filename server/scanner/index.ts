@@ -32,6 +32,12 @@ export type { ScanMode, ScanProfile, NucleiProfile } from "./stealth.js";
 // Free passive OSINT sources
 export { fetchSubdomainsFromFreeSources, fetchWaybackUrls, reverseDnsLookup } from "./passive-sources.js";
 
+// Verified web-app + service-exposure detectors
+export { runWordPressChecks, parseWpUsers, slugFromAuthorRedirect } from "./wordpress-checks.js";
+export type { WordPressCheckResults, WordPressUser } from "./wordpress-checks.js";
+export { assessServiceExposure } from "./service-exposure.js";
+export type { OpenPortInfo } from "./service-exposure.js";
+
 // Constants and types
 export type { ScanProgressCallback, ScanOptions, ScanResults, EvidenceItem, VerifiedFinding } from "./constants.js";
 

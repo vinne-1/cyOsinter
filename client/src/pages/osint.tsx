@@ -85,10 +85,10 @@ function NewOSINTScanDialog() {
   });
 
   useEffect(() => {
-    if (open && selectedWorkspace?.name) {
-      form.setValue("target", selectedWorkspace.name);
+    if (open && (selectedWorkspace?.domain || selectedWorkspace?.name)) {
+      form.setValue("target", selectedWorkspace.domain ?? selectedWorkspace.name);
     }
-  }, [open, selectedWorkspace?.name]);
+  }, [open, selectedWorkspace?.domain, selectedWorkspace?.name]);
 
   const mutation = useMutation({
     mutationFn: async (data: { target: string }) => {

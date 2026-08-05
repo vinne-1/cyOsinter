@@ -119,6 +119,22 @@ reportsRouter.get("/workspaces/:workspaceId/reports/:reportId/export", wsAuth, a
       return;
     }
 
+    if (format === "docx" || format === "word") {
+      const { buildDocxInput } = await import("../report-docx-input.js");
+      const { generateReportDocx } = await import("../report-docx.js");
+      const withEvidence = req.query.evidence === "1" || req.query.evidence === "true";
+      const docxInput = await buildDocxInput(workspaceId, {
+        findingIds: report.findingIds ?? undefined,
+        scanMode: (report.content as Record<string, unknown> | null)?.scanMode as string | undefined,
+        captureEvidence: withEvidence,
+      });
+      const docxBuffer = await generateReportDocx(docxInput);
+      res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+      res.setHeader("Content-Disposition", `attachment; filename="${safeTitle}.docx"`);
+      res.send(docxBuffer);
+      return;
+    }
+
     const { generateReportPdfBuffer } = await import("../report-pdf.js");
     const pdfBuffer = generateReportPdfBuffer({
       ...exportInput,

@@ -201,6 +201,32 @@ function ReportDetailDialog({
                     >
                       Excel (.xlsx)
                     </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => {
+                        const safeTitle = (report.title || "security-report").replace(/[^a-zA-Z0-9-_]/g, "-").replace(/-+/g, "-").toLowerCase();
+                        const a = document.createElement("a");
+                        a.href = buildUrl(`/api/workspaces/${selectedWorkspaceId}/reports/${report.id}/export?format=docx`);
+                        a.download = `${safeTitle}.docx`;
+                        a.click();
+                      }}
+                      data-testid="button-export-docx"
+                    >
+                      <FileText className="w-4 h-4 mr-2" />
+                      Word (.docx)
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => {
+                        const safeTitle = (report.title || "security-report").replace(/[^a-zA-Z0-9-_]/g, "-").replace(/-+/g, "-").toLowerCase();
+                        const a = document.createElement("a");
+                        a.href = buildUrl(`/api/workspaces/${selectedWorkspaceId}/reports/${report.id}/export?format=docx&evidence=1`);
+                        a.download = `${safeTitle}.docx`;
+                        a.click();
+                      }}
+                      data-testid="button-export-docx-evidence"
+                    >
+                      <FileText className="w-4 h-4 mr-2" />
+                      Word + live evidence (.docx)
+                    </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
               )}

@@ -51,9 +51,9 @@ workspacesRouter.post("/", async (req, res) => {
     const parsed = createWorkspaceSchema.parse(req.body);
     const existing = await storage.getWorkspaceByName(parsed.name);
     if (existing) {
-      return res.status(409).json({ message: "A workspace with this domain already exists" });
+      return res.status(409).json({ message: "A workspace with this name already exists" });
     }
-    const ws = await storage.createWorkspace({ name: parsed.name, description: parsed.description || null, status: "active" });
+    const ws = await storage.createWorkspace({ name: parsed.name, domain: parsed.domain || null, description: parsed.description || null, status: "active" });
     // Add the creating user as the workspace owner
     await storage.addWorkspaceMember(ws.id, req.user!.id, "owner");
     res.status(201).json(ws);

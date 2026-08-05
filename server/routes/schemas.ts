@@ -36,13 +36,29 @@ export const createReportSchema = z.object({
   findingIds: z.array(z.string()).optional(),
 });
 
+const optionalDomain = z
+  .string()
+  .trim()
+  .optional()
+  .refine(
+    (val) => !val || DOMAIN_REGEX.test(val),
+    { message: "Target domain must be a valid domain name (e.g. example.com) or left blank" },
+  );
+
 export const createWorkspaceSchema = z.object({
-  name: z.string().min(1, "Domain name is required"),
+  // Free-text label — any workspace name is allowed.
+  name: z.string().min(1, "Workspace name is required"),
+  // Optional scan target; validated as a domain only when provided.
+  domain: optionalDomain,
   description: z.string().optional(),
 });
 
 export const updateWorkspaceSchema = z.object({
   name: z.string().min(1).optional(),
+  domain: z.string().trim().nullable().optional().refine(
+    (val) => val == null || val === "" || DOMAIN_REGEX.test(val),
+    { message: "Target domain must be a valid domain name (e.g. example.com) or left blank" },
+  ),
   description: z.string().nullable().optional(),
   status: z.enum(["active", "inactive"]).optional(),
 });

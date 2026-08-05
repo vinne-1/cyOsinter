@@ -20,6 +20,7 @@ import { runCloudDiscovery } from "./cloud-discovery.js";
 import { runContainerDetection } from "./container-detection.js";
 import { runWAFBypassTest } from "./waf-bypass.js";
 import { fetchSubdomainsFromFreeSources, fetchWaybackUrls, reverseDnsLookup } from "./passive-sources.js";
+import { assessServiceExposure } from "./service-exposure.js";
 
 /** CVSS score by severity band for findings produced by advanced sub-modules. */
 const SEVERITY_CVSS: Record<string, string> = { critical: "9.1", high: "7.5", medium: "5.3", low: "3.1", info: "0.0" };
@@ -650,6 +651,8 @@ export async function runEASMScan(domain: string, onProgress?: ScanProgressCallb
             type: "port_scan", description: "TCP port banner grab", source: "port-scan", verifiedAt: now,
           }]));
         }
+        // Elevate Internet-exposed databases to HIGH and flag outdated banners.
+        results.findings.push(...assessServiceExposure(mainIp, ps.openPorts));
       } catch (err) {
         log.warn({ err, domain }, "Banner-grab port scan failed (non-fatal)");
       }

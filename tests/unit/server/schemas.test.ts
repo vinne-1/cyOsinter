@@ -201,6 +201,26 @@ describe("createWorkspaceSchema", () => {
     });
     expect(result.success).toBe(true);
   });
+
+  it("accepts an arbitrary (non-domain) workspace name", () => {
+    expect(createWorkspaceSchema.safeParse({ name: "Acme Corp Q3 Assessment" }).success).toBe(true);
+    expect(createWorkspaceSchema.safeParse({ name: "客户 123 !@#" }).success).toBe(true);
+  });
+
+  it("accepts an optional valid target domain", () => {
+    const r = createWorkspaceSchema.safeParse({ name: "Acme", domain: "example.com" });
+    expect(r.success).toBe(true);
+  });
+
+  it("rejects an invalid target domain when provided", () => {
+    const r = createWorkspaceSchema.safeParse({ name: "Acme", domain: "not a domain" });
+    expect(r.success).toBe(false);
+  });
+
+  it("allows the target domain to be omitted or blank", () => {
+    expect(createWorkspaceSchema.safeParse({ name: "Acme" }).success).toBe(true);
+    expect(createWorkspaceSchema.safeParse({ name: "Acme", domain: "" }).success).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

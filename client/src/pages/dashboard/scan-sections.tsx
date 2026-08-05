@@ -236,14 +236,17 @@ export function ScanLauncher() {
   const [launchedScans, setLaunchedScans] = useState<Record<string, "pending" | "launched">>({});
   const [autoGenerateReport, setAutoGenerateReport] = useState(false);
 
+  // Prefer the workspace's explicit target domain; fall back to its name
+  // (backward compatible with workspaces created as a bare domain).
+  const workspaceTarget = selectedWorkspace?.domain || selectedWorkspace?.name;
   useEffect(() => {
-    if (selectedWorkspace?.name && !target.trim()) {
-      setTarget(selectedWorkspace.name);
+    if (workspaceTarget && !target.trim()) {
+      setTarget(workspaceTarget);
     }
     setLaunchedScans({});
-  }, [selectedWorkspace?.name, target]);
+  }, [workspaceTarget, target]);
 
-  const effectiveTarget = target.trim() || selectedWorkspace?.name || "";
+  const effectiveTarget = target.trim() || workspaceTarget || "";
   const domainError = effectiveTarget && !DOMAIN_REGEX.test(effectiveTarget)
     ? "Please enter a valid domain (e.g. example.com)"
     : null;

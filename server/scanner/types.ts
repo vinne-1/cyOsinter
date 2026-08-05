@@ -126,6 +126,12 @@ export interface ReconData {
   passiveSources?: Record<string, number>;
   reverseDns?: Record<string, string[]>;
   waybackUrls?: string[];
+  // Phase 4: Verified web-app checks
+  wordpress?: {
+    isWordPress: boolean;
+    users: Array<{ id?: number; name?: string; slug?: string }>;
+    xmlrpcEnabled: boolean;
+  };
 }
 
 export interface EvidenceItem {

@@ -53,6 +53,7 @@ export function DomainSelector() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [actionTargetWorkspace, setActionTargetWorkspace] = useState<Workspace | null>(null);
   const [newDomain, setNewDomain] = useState("");
+  const [newTargetDomain, setNewTargetDomain] = useState("");
   const [newDescription, setNewDescription] = useState("");
   const { toast } = useToast();
 
@@ -62,6 +63,7 @@ export function DomainSelector() {
     mutationFn: async () => {
       const res = await apiRequest("POST", "/api/workspaces", {
         name: newDomain,
+        domain: newTargetDomain.trim() || undefined,
         description: newDescription || undefined,
       });
       return res.json() as Promise<Workspace>;
@@ -71,6 +73,7 @@ export function DomainSelector() {
       setSelectedWorkspace(ws);
       setCreateOpen(false);
       setNewDomain("");
+      setNewTargetDomain("");
       setNewDescription("");
       toast({ title: "Workspace created", description: `Workspace for ${ws.name} is ready.` });
     },
@@ -250,18 +253,28 @@ export function DomainSelector() {
           <DialogHeader>
             <DialogTitle>Create Workspace</DialogTitle>
             <DialogDescription>
-              Create a new workspace for a target domain. All scans, findings, and reports will be organized here.
+              Give the workspace any name you like. Optionally set a target domain to scan — you can also enter the target when launching a scan.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 pt-2">
             <div className="space-y-2">
-              <label className="text-sm font-medium">Domain</label>
+              <label className="text-sm font-medium">Workspace name</label>
               <Input
-                placeholder="example.com"
+                placeholder="e.g. Acme Corp (any name)"
                 value={newDomain}
                 onChange={(e) => setNewDomain(e.target.value)}
                 data-testid="input-workspace-domain"
               />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Target domain (optional)</label>
+              <Input
+                placeholder="example.com"
+                value={newTargetDomain}
+                onChange={(e) => setNewTargetDomain(e.target.value)}
+                data-testid="input-workspace-target-domain"
+              />
+              <p className="text-xs text-muted-foreground">The domain scans run against. Leave blank to just organize findings, or set it later.</p>
             </div>
             <div className="space-y-2">
               <label className="text-sm font-medium">Description (optional)</label>

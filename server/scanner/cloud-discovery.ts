@@ -192,13 +192,18 @@ export async function runCloudDiscovery(
       const res = await safeFetch(target.url, HTTP_TIMEOUT_MS, signal);
       if (!res) return null;
 
-      // Extract cloud service indicators from headers
-      const headerServices = extractCloudServicesFromHeaders(res.headers, target.url);
+      // A bucket only truly EXISTS on 200 (public) or 403 (private). A 404 is
+      // "NoSuchBucket" — its response still carries generic provider headers
+      // (e.g. x-amz-request-id on every S3 reply), so extracting cloud-service
+      // indicators from a 404 produced false positives. Only mine headers when
+      // the bucket actually exists.
+      const accessible = res.status === 200 || res.status === 403;
+      const headerServices = accessible ? extractCloudServicesFromHeaders(res.headers, target.url) : [];
 
       return {
         target,
         status: res.status,
-        accessible: res.status === 200 || res.status === 403,
+        accessible,
         headerServices,
       };
     },

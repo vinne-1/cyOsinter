@@ -8,7 +8,11 @@ export const DOMAIN_REGEX = /^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.
 
 export const workspaces = pgTable("workspaces", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  // Free-text workspace label — any name the user chooses.
   name: text("name").notNull().unique(),
+  // Optional target domain used for scanning. When null, scan flows fall back
+  // to `name` (backward compatible with workspaces created as a bare domain).
+  domain: text("domain"),
   description: text("description"),
   status: text("status").notNull().default("active"),
   createdAt: timestamp("created_at").defaultNow(),
