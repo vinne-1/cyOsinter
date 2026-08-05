@@ -12,7 +12,7 @@ import { resolveDNS, getNSRecords } from "./dns.js";
 import { fetchJSON, httpHead, httpGet } from "./http.js";
 import { getCertificateInfo } from "./tls.js";
 import { scanOpenPorts, checkSecurityHeaders, detectServerInfo, detectWAF, detectCDN } from "./detection.js";
-import { runWithConcurrency } from "./utils.js";
+import { runWithConcurrency, makeConcurrencyProgress } from "./utils.js";
 import { scanSubdomainTakeover } from "./takeover.js";
 import { resolveProfile } from "./stealth.js";
 import { runPortScan } from "./port-scan.js";
@@ -55,6 +55,7 @@ async function enumerateSubdomainsBruteforce(
   concurrency = 20,
   signal?: AbortSignal,
   excludeIPs?: Set<string>,
+  onProgress?: (completed: number, total: number) => void,
 ): Promise<{ resolved: string[]; tried: number; wildcardDetected: boolean }> {
   const { isWildcard, wildcardIPs } = excludeIPs
     ? { isWildcard: excludeIPs.size > 0, wildcardIPs: excludeIPs }
@@ -80,6 +81,7 @@ async function enumerateSubdomainsBruteforce(
       return hostname;
     },
     signal,
+    onProgress,
   );
   for (const r of results) {
     if (r) resolved.push(r);
@@ -121,6 +123,11 @@ export async function runEASMScan(domain: string, onProgress?: ScanProgressCallb
     checkAborted(signal);
     if (onProgress) await onProgress(msg, pct, step, eta);
   };
+  // Fire-and-forget progress emitter for use inside long concurrent loops, so
+  // the bar advances smoothly instead of plateauing. Never throws (best-effort).
+  const emitProgress = (msg: string, pct: number, step: string, eta?: number) => {
+    if (onProgress) void Promise.resolve(onProgress(msg, pct, step, eta)).catch(() => {});
+  };
 
   const subdomainCap = gold ? GOLD_SUBDOMAIN_WORDLIST_CAP : STANDARD_SUBDOMAIN_WORDLIST_CAP;
   const probeBatchSize = gold ? GOLD_PROBE_BATCH : STANDARD_PROBE_BATCH;
@@ -131,12 +138,16 @@ export async function runEASMScan(domain: string, onProgress?: ScanProgressCallb
   log.info({ domain, mode: profile.mode, stealth }, "Starting EASM scan");
   await report("Enumerating subdomains (crt.sh + bruteforce)...", 0, "enumerate_subdomains", 180);
 
+  // Smooth 1→14% progress across the (long) subdomain brute-force DNS sweep.
+  const bruteProgress = makeConcurrencyProgress(1, 14, (pct, done, total) =>
+    emitProgress(`Enumerating subdomains — resolved ${done}/${total} candidates...`, pct, "enumerate_subdomains"));
+
   const [crtShSubdomains, mainDns, certInfo, nsRecords, bruteforceResult, passiveSources] = await Promise.all([
     enumerateSubdomainsCrtSh(domain),
     resolveDNS(domain),
     getCertificateInfo(domain),
     getNSRecords(domain),
-    enumerateSubdomainsBruteforce(domain, subdomainCap === 0 ? 99999 : subdomainCap, profile.dnsConcurrency, signal),
+    enumerateSubdomainsBruteforce(domain, subdomainCap === 0 ? 99999 : subdomainCap, profile.dnsConcurrency, signal, undefined, bruteProgress),
     // Free, keyless passive sources (CT mirrors, passive DNS, archives). Best-effort.
     fetchSubdomainsFromFreeSources(domain).catch(() => ({ subdomains: [] as string[], bySource: {} as Record<string, number> })),
   ]);
@@ -183,6 +194,8 @@ export async function runEASMScan(domain: string, onProgress?: ScanProgressCallb
       return { subdomain: sub, dns: subDns, httpResult, httpsResult };
     },
     signal,
+    makeConcurrencyProgress(16, 52, (pct, done, total) =>
+      emitProgress(`Probing subdomains for live hosts — ${done}/${total}...`, pct, "probe_subdomains")),
   );
 
   for (const r of probeResults) {

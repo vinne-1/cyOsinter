@@ -79,7 +79,10 @@ const STANDARD_PROFILE: ScanProfile = {
   httpConcurrency: 64,
   minDelayMs: 0,
   maxDelayMs: 0,
-  dnsConcurrency: 20,
+  // DNS brute-force resolves candidate hostnames against PUBLIC resolvers (not
+  // the target), so high concurrency is cheap and does not touch the target —
+  // this is the single biggest win against the multi-minute enumeration wait.
+  dnsConcurrency: 120,
   rotateUserAgent: false,
   allowIntrusive: false,
   nuclei: { rateLimit: 100, concurrency: 15, bulkSize: 15, maxDurationMs: 8 * 60 * 1000, allTemplates: false, jitterMs: 0 },
@@ -92,7 +95,7 @@ const GOLD_PROFILE: ScanProfile = {
   httpConcurrency: 64,
   minDelayMs: 0,
   maxDelayMs: 0,
-  dnsConcurrency: 40,
+  dnsConcurrency: 100,
   rotateUserAgent: false,
   allowIntrusive: true,
   nuclei: { rateLimit: 150, concurrency: 25, bulkSize: 25, maxDurationMs: 30 * 60 * 1000, allTemplates: true, jitterMs: 0 },

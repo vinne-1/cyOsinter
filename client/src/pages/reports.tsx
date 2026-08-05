@@ -200,6 +200,7 @@ function ReportDetailDialog({
                     <DropdownMenuItem
                       onClick={() => {
                         const safeTitle = (report.title || "security-report").replace(/[^a-zA-Z0-9-_]/g, "-").replace(/-+/g, "-").toLowerCase();
+                        toast({ title: "Preparing Word document…" });
                         downloadAuthed(`/api/workspaces/${selectedWorkspaceId}/reports/${report.id}/export?format=docx`, `${safeTitle}.docx`)
                           .catch((e) => toast({ title: "Export failed", description: e.message, variant: "destructive" }));
                       }}

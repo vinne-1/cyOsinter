@@ -104,19 +104,21 @@ function kvTable(rows: Array<[string, string]>): Table {
 }
 
 /** Read PNG width/height from the IHDR chunk for correct aspect scaling. */
+/** Read PNG dimensions from the IHDR chunk; null if not a valid PNG with real dimensions. */
 function pngSize(buf: Buffer): { w: number; h: number } | null {
   if (buf.length < 24 || buf.readUInt32BE(0) !== 0x89504e47) return null;
-  return { w: buf.readUInt32BE(16), h: buf.readUInt32BE(20) };
+  const w = buf.readUInt32BE(16), h = buf.readUInt32BE(20);
+  if (w <= 0 || h <= 0) return null;
+  return { w, h };
 }
 function imageParagraph(buf: Buffer, caption?: string): Paragraph[] {
   const size = pngSize(buf);
+  // Skip anything that isn't a well-formed PNG rather than emitting a broken image.
+  if (!size) return caption ? [new Paragraph({ alignment: AlignmentType.CENTER, children: [t(caption, { italics: true, size: 16, color: GREY })] })] : [];
   const maxW = 540;
-  let w = maxW, hgt = Math.round(maxW * 0.6);
-  if (size && size.w > 0) {
-    w = Math.min(maxW, size.w);
-    hgt = Math.round((size.h / size.w) * w);
-    if (hgt > 720) { hgt = 720; w = Math.round((size.w / size.h) * hgt); }
-  }
+  let w = Math.min(maxW, size.w);
+  let hgt = Math.round((size.h / size.w) * w);
+  if (hgt > 720) { hgt = 720; w = Math.round((size.w / size.h) * hgt); }
   const out: Paragraph[] = [new Paragraph({
     alignment: AlignmentType.CENTER,
     children: [new ImageRun({ type: "png", data: buf, transformation: { width: w, height: hgt } })],

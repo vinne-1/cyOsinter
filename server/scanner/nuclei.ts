@@ -162,7 +162,18 @@ export async function runNucleiScan(
     procRef = proc;
     let buffer = "";
     let templatesSeen = 0;
-    let lastProgressReport = Date.now();
+    // Smooth, elapsed-time progress heartbeat that fires regardless of findings.
+    // (The previous heartbeat lived inside the hit-parse block and reported a
+    // constant 50%, so sparse-finding scans froze the bar for minutes.) Ramps
+    // 5→93% local against an expected duration; completion pushes it to 100.
+    const nucleiStart = Date.now();
+    const expectedMs = Math.min(NUCLEI_MAX_DURATION_MS, 4 * 60 * 1000);
+    let progressTimer: ReturnType<typeof setInterval> | null = setInterval(() => {
+      const elapsed = Date.now() - nucleiStart;
+      const localPct = Math.min(93, 5 + Math.round((88 * elapsed) / expectedMs));
+      report(`Nuclei scanning ${targetUrls.length} target(s) — ${templatesSeen} match(es) so far...`, localPct, "nuclei_scan").catch(() => {});
+    }, 5000);
+    const clearProgress = () => { if (progressTimer) { clearInterval(progressTimer); progressTimer = null; } };
 
     proc.stdout?.on("data", (chunk: Buffer) => {
       buffer += chunk.toString();
@@ -187,13 +198,6 @@ export async function runNucleiScan(
           };
           nucleiResults.push(hit);
           templatesSeen++;
-
-          // Report progress every 30 seconds
-          const now2 = Date.now();
-          if (now2 - lastProgressReport > 30000) {
-            lastProgressReport = now2;
-            report(`Nuclei scanning... ${templatesSeen} template hit(s) so far on ${targetUrls.length} target(s)`, 50, "nuclei_scan").catch(() => {});
-          }
 
           const severityMap: Record<string, string> = {
             critical: "critical",
@@ -247,6 +251,7 @@ export async function runNucleiScan(
     });
 
     proc.on("close", (code, sig) => {
+      clearProgress();
       fs.unlink(tempFile).catch(() => {});
       if (signal?.aborted) {
         reject(new Error("Scan aborted"));
@@ -263,6 +268,7 @@ export async function runNucleiScan(
     });
 
     proc.on("error", (err) => {
+      clearProgress();
       fs.unlink(tempFile).catch(() => {});
       reject(err);
     });

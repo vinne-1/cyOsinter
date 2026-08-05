@@ -40,7 +40,10 @@ const DAST_TIMEOUT_MS = 8000;
 
 async function safeFetch(url: string, options: RequestInit = {}): Promise<Response | null> {
   try {
-    return await stealthFetch(url, { ...options, redirect: "manual" }, DAST_TIMEOUT_MS);
+    // Default to manual redirect (needed by the open-redirect test); callers
+    // evaluating headers/cookies/CORS pass redirect:"follow" so they assess the
+    // final 2xx response, not an apex->www redirect (a common false-positive).
+    return await stealthFetch(url, { ...options, redirect: options.redirect ?? "manual" }, DAST_TIMEOUT_MS);
   } catch {
     return null;
   }
@@ -49,7 +52,7 @@ async function safeFetch(url: string, options: RequestInit = {}): Promise<Respon
 async function checkSecurityHeaders(domain: string): Promise<DASTFinding[]> {
   const findings: DASTFinding[] = [];
   const url = `https://${domain}`;
-  const res = await safeFetch(url);
+  const res = await safeFetch(url, { redirect: "follow" });
   if (!res) return findings;
 
   const headers: SecurityHeaders = {
@@ -147,21 +150,29 @@ async function checkCORSMisconfiguration(domain: string): Promise<DASTFinding[]>
 
   // Test with arbitrary origin
   const evilOrigin = "https://evil.attacker.com";
-  const evilRes = await safeFetch(url, { headers: { Origin: evilOrigin } });
+  const evilRes = await safeFetch(url, { headers: { Origin: evilOrigin }, redirect: "follow" });
   if (evilRes) {
     const acao = evilRes.headers.get("access-control-allow-origin");
     if (acao === evilOrigin || acao === "*") {
       const acac = evilRes.headers.get("access-control-allow-credentials");
+      const isWildcard = acao === "*";
+      const withCreds = acac === "true";
+      // A bare `Access-Control-Allow-Origin: *` WITHOUT credentials is normal
+      // for public APIs/CDNs and not a vulnerability — only credentialed or
+      // reflected-origin CORS is genuinely exploitable.
+      const severity = withCreds ? "critical" : isWildcard ? "low" : "medium";
       findings.push({
-        title: acao === "*" ? "CORS Wildcard Origin" : "CORS Reflects Arbitrary Origin",
-        description: acao === "*"
-          ? "The server allows any origin via wildcard CORS. If credentials are also allowed, this is exploitable."
-          : "The server reflects untrusted origins in CORS headers, allowing cross-origin data theft.",
-        severity: acac === "true" ? "critical" : "high",
+        title: isWildcard ? "CORS Wildcard Origin" : "CORS Reflects Arbitrary Origin",
+        description: isWildcard
+          ? (withCreds
+              ? "The server allows any origin via wildcard CORS AND allows credentials — cross-origin credential theft is possible."
+              : "The server sends a wildcard CORS header (Access-Control-Allow-Origin: *) without credentials. Common for public resources; informational unless sensitive data is served here.")
+          : "The server reflects untrusted origins in CORS response headers, allowing cross-origin data theft.",
+        severity,
         category: "cors_misconfiguration",
         affectedAsset: domain,
         evidence: [{ origin: evilOrigin, acao, credentials: acac, url }],
-        remediation: "Implement a strict CORS whitelist. Never reflect arbitrary origins with credentials.",
+        remediation: "Implement a strict CORS allowlist of trusted origins. Never reflect arbitrary origins, and never combine a wildcard origin with credentials.",
       });
     }
   }
@@ -247,7 +258,10 @@ async function checkOpenRedirect(domain: string): Promise<DASTFinding[]> {
 async function checkHTTPMethods(domain: string): Promise<DASTFinding[]> {
   const findings: DASTFinding[] = [];
   const url = `https://${domain}`;
-  const dangerousMethods = ["PUT", "DELETE", "TRACE", "CONNECT"];
+  // TRACE/CONNECT are "forbidden" methods that the fetch API refuses to send
+  // (they throw), so testing them here is dead code. Only PUT/DELETE are
+  // testable via fetch; a raw-socket TRACE/XST test would be a separate feature.
+  const dangerousMethods = ["PUT", "DELETE"];
 
   for (const method of dangerousMethods) {
     const res = await safeFetch(url, { method });
@@ -294,7 +308,7 @@ async function checkHTTPMethods(domain: string): Promise<DASTFinding[]> {
 async function checkCookieSecurity(domain: string): Promise<DASTFinding[]> {
   const findings: DASTFinding[] = [];
   const url = `https://${domain}`;
-  const res = await safeFetch(url);
+  const res = await safeFetch(url, { redirect: "follow" });
   if (!res) return findings;
 
   const cookies = res.headers.getSetCookie?.() ?? [];

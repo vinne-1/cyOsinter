@@ -7,7 +7,54 @@
 
 import { describe, it, expect } from "vitest";
 
-import { runWithConcurrency } from "../../../server/scanner/utils";
+import { runWithConcurrency, makeConcurrencyProgress } from "../../../server/scanner/utils";
+
+describe("runWithConcurrency onProgress", () => {
+  it("reports completion count for every item, ending at total", async () => {
+    const calls: Array<[number, number]> = [];
+    await runWithConcurrency([1, 2, 3, 4, 5], 2, async (x) => x, undefined, (done, total) => calls.push([done, total]));
+    expect(calls).toHaveLength(5);
+    expect(calls.every(([, total]) => total === 5)).toBe(true);
+    expect(calls[calls.length - 1][0]).toBe(5);
+    // completion counts are monotonic 1..5
+    expect(calls.map(([d]) => d).sort((a, b) => a - b)).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it("still reports progress when items throw", async () => {
+    let last = 0;
+    await runWithConcurrency([1, 2, 3], 3, async (x) => { if (x === 2) throw new Error("boom"); return x; }, undefined, (done) => { last = done; });
+    expect(last).toBe(3);
+  });
+});
+
+describe("makeConcurrencyProgress", () => {
+  it("maps completion onto a [from,to] band and only fires on whole-percent increases", () => {
+    const pcts: number[] = [];
+    const cb = makeConcurrencyProgress(0, 14, (pct) => pcts.push(pct));
+    for (let i = 1; i <= 100; i++) cb(i, 100);
+    expect(pcts[0]).toBeGreaterThanOrEqual(0);
+    expect(pcts[pcts.length - 1]).toBe(14);
+    // strictly increasing, no duplicates (throttled)
+    for (let i = 1; i < pcts.length; i++) expect(pcts[i]).toBeGreaterThan(pcts[i - 1]);
+    // never exceeds the band
+    expect(Math.max(...pcts)).toBeLessThanOrEqual(14);
+  });
+
+  it("maps into a non-zero base band (e.g. 16→52)", () => {
+    const pcts: number[] = [];
+    const cb = makeConcurrencyProgress(16, 52, (pct) => pcts.push(pct));
+    cb(1, 10); cb(5, 10); cb(10, 10);
+    expect(pcts[0]).toBeGreaterThanOrEqual(16);
+    expect(pcts[pcts.length - 1]).toBe(52);
+  });
+
+  it("is a no-op when total is zero", () => {
+    let fired = false;
+    const cb = makeConcurrencyProgress(0, 14, () => { fired = true; });
+    cb(0, 0);
+    expect(fired).toBe(false);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // runWithConcurrency

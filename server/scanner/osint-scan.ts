@@ -10,7 +10,7 @@ import { getDNSTxtRecords, getMXRecords, getNSRecords, getFullDNSRecords, checkD
 import { httpGet, getRedirectChain, httpGetMainPage, parseSetCookie, parseSecurityTxt, fetchSitemapUrls } from "./http.js";
 import { detectTechStack, scanOpenPorts, parseSocialTags, validatePathResponse } from "./detection.js";
 import { extractEmailsFromText, generateBackupFilePaths, extractSensitiveRobotsPaths, extractEmailsFromWhois, checkHIBPPasswords, checkS3Buckets, searchPGPKeyServer, extractEmailsFromCrtSh, getServerLocation, getWhois } from "./osint-helpers.js";
-import { runWithConcurrency } from "./utils.js";
+import { runWithConcurrency, makeConcurrencyProgress } from "./utils.js";
 import { discoverAPIs } from "./api-discovery.js";
 import { scanSecrets } from "./secret-scanner.js";
 import { establishSoft404Fingerprint, classifyPathResults, buildExposedPathFindings } from "./osint-directory-scan.js";
@@ -30,6 +30,9 @@ export async function runOSINTScan(domain: string, onProgress?: ScanProgressCall
   const report = async (msg: string, pct: number, step: string, eta?: number) => {
     checkAborted(signal);
     if (onProgress) await onProgress(msg, pct, step, eta);
+  };
+  const emitProgress = (msg: string, pct: number, step: string, eta?: number) => {
+    if (onProgress) void Promise.resolve(onProgress(msg, pct, step, eta)).catch(() => {});
   };
 
   const directoryCap = gold ? GOLD_DIRECTORY_CAP : STANDARD_DIRECTORY_CAP;
@@ -80,6 +83,8 @@ export async function runOSINTScan(domain: string, onProgress?: ScanProgressCall
       return { path: p, label: p, result: res };
     },
     signal,
+    makeConcurrencyProgress(26, 64, (pct, done, total) =>
+      emitProgress(`Directory brute-force — checked ${done}/${total} paths...`, pct, "directory_bruteforce")),
   );
   const pathCheckResults = pathCheckResultsRaw.filter((r): r is { path: string; label: string; result: { status: number; headers: Record<string, string>; body: string; finalUrl: string } | null } => r != null);
   results.reconData.directoryBruteforce = {

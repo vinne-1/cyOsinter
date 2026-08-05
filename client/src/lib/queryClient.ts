@@ -129,6 +129,22 @@ export async function apiRequestNoParse(
   }
 }
 
+let sessionExpiryHandled = false;
+/**
+ * On session expiry (a 401 while a token is stored), clear the stale token and
+ * redirect to the sign-in page once. No-op if no token was present (e.g. a
+ * warmup probe) or already on the auth page, so it never interferes with login.
+ */
+function handleSessionExpiry(): void {
+  if (typeof window === "undefined" || sessionExpiryHandled) return;
+  const hadToken = !!localStorage.getItem("auth_token");
+  if (!hadToken || window.location.pathname.startsWith("/auth")) return;
+  sessionExpiryHandled = true;
+  localStorage.removeItem("auth_token");
+  localStorage.removeItem("refresh_token");
+  window.location.assign("/auth?expired=1");
+}
+
 type UnauthorizedBehavior = "returnNull" | "throw";
 export const getQueryFn: <T>(options: {
   on401: UnauthorizedBehavior;
@@ -154,8 +170,11 @@ export const getQueryFn: <T>(options: {
       credentials: "include",
     });
 
-    if (unauthorizedBehavior === "returnNull" && res.status === 401) {
-      return null;
+    if (res.status === 401) {
+      // A data query 401 while we hold a token means the session expired — send
+      // the user to sign-in instead of silently rendering blank empty states.
+      handleSessionExpiry();
+      if (unauthorizedBehavior === "returnNull") return null;
     }
 
     await throwIfResNotOk(res);
