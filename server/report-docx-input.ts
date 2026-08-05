@@ -14,6 +14,21 @@ function moduleData(modules: ReconModuleLike[], type: string): Record<string, un
   return modules.find((m) => m.moduleType === type)?.data;
 }
 
+/** First on-target http(s) URL found in a finding's evidence, for screenshotting. */
+function firstEvidenceUrl(evidence: unknown, domain: string): string | undefined {
+  if (!Array.isArray(evidence)) return undefined;
+  for (const e of evidence) {
+    const u = e && typeof e === "object" ? (e as Record<string, unknown>).url : undefined;
+    if (typeof u === "string" && /^https?:\/\//i.test(u)) {
+      try {
+        const h = new URL(u).hostname;
+        if (h === domain || h.endsWith(`.${domain}`)) return u;
+      } catch { /* bad url */ }
+    }
+  }
+  return undefined;
+}
+
 function evidenceToText(evidence: unknown): string | undefined {
   if (!Array.isArray(evidence)) return undefined;
   const lines = evidence
@@ -35,34 +50,6 @@ export async function buildDocxInput(
 
   const includeAll = (opts.findingIds?.length ?? 0) === 0;
   const selected = allFindings.filter((f) => includeAll || opts.findingIds!.includes(f.id));
-
-  // Optionally capture live screenshot evidence and key it to finding ids
-  // (fail-soft — no browser ⇒ empty map ⇒ text-only report).
-  const images: Record<string, Buffer> = { ...(opts.images ?? {}) };
-  if (opts.captureEvidence) {
-    try {
-      const { captureEvidence, evidenceKeyForFinding } = await import("./evidence/screenshot-service.js");
-      const shots = await captureEvidence(target, selected.map((f) => f.category));
-      for (const f of selected) {
-        const key = evidenceKeyForFinding(f.category, f.title);
-        if (key && shots[key] && !images[f.id]) images[f.id] = shots[key];
-      }
-    } catch {
-      /* evidence best-effort */
-    }
-  }
-
-  const findings: ReportFinding[] = selected.map((f) => ({
-    title: f.title,
-    severity: f.severity,
-    category: f.category,
-    affectedAsset: f.affectedAsset ?? target,
-    description: f.description,
-    cvssScore: f.cvssScore ?? undefined,
-    remediation: f.remediation ?? undefined,
-    evidenceText: evidenceToText(f.evidence),
-    evidenceImageKey: images[f.id] ? f.id : undefined,
-  }));
 
   // ── Recon mapping ──
   const attack = moduleData(mods, "attack_surface");
@@ -92,6 +79,38 @@ export async function buildDocxInput(
   const techStack = [...techFront, ...techBack];
 
   const em = email?.emailSecurity as Record<string, unknown> | undefined;
+
+  // Optionally capture live screenshot evidence, keyed per finding, so EVERY
+  // finding is illustrated (fail-soft — no browser ⇒ text-only report).
+  const images: Record<string, Buffer> = { ...(opts.images ?? {}) };
+  if (opts.captureEvidence) {
+    try {
+      const { captureEvidence } = await import("./evidence/screenshot-service.js");
+      const evFindings = selected.map((f) => ({
+        id: f.id,
+        category: f.category,
+        title: f.title,
+        affectedAsset: f.affectedAsset ?? undefined,
+        evidenceUrl: firstEvidenceUrl(f.evidence, target),
+      }));
+      const shots = await captureEvidence(target, evFindings, { ip: ips[0] });
+      for (const [id, buf] of Object.entries(shots)) if (!images[id]) images[id] = buf;
+    } catch {
+      /* evidence best-effort */
+    }
+  }
+
+  const findings: ReportFinding[] = selected.map((f) => ({
+    title: f.title,
+    severity: f.severity,
+    category: f.category,
+    affectedAsset: f.affectedAsset ?? target,
+    description: f.description,
+    cvssScore: f.cvssScore ?? undefined,
+    remediation: f.remediation ?? undefined,
+    evidenceText: evidenceToText(f.evidence),
+    evidenceImageKey: images[f.id] ? f.id : undefined,
+  }));
 
   return {
     target,
