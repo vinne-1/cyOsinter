@@ -53,6 +53,7 @@ export interface IStorage {
   getReconModule(id: string): Promise<ReconModule | undefined>;
   getReconModulesByType(workspaceId: string, moduleType: string): Promise<ReconModule[]>;
   createReconModule(mod: InsertReconModule): Promise<ReconModule>;
+  deleteReconModulesByScan(scanId: string): Promise<void>;
   updateReconModule(id: string, data: Partial<ReconModule>): Promise<ReconModule | undefined>;
 
   getContinuousMonitoringByWorkspace(workspaceId: string): Promise<ContinuousMonitoring | undefined>;
@@ -340,6 +341,10 @@ export class DatabaseStorage implements IStorage {
   async createReconModule(mod: InsertReconModule): Promise<ReconModule> {
     const [created] = await db.insert(reconModules).values(mod).returning();
     return created;
+  }
+
+  async deleteReconModulesByScan(scanId: string): Promise<void> {
+    await db.delete(reconModules).where(eq(reconModules.scanId, scanId));
   }
 
   async updateReconModule(id: string, data: Partial<ReconModule>): Promise<ReconModule | undefined> {

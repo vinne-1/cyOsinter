@@ -81,6 +81,25 @@ export async function apiRequest(
   return res;
 }
 
+/**
+ * Download a server-generated file (CSV/XLSX/DOCX export) with authentication.
+ * A plain <a href> navigation cannot send the Authorization header, so those
+ * downloads would 401; this fetches the file with auth, then triggers a
+ * client-side download from the blob.
+ */
+export async function downloadAuthed(path: string, filename: string, options?: ApiRequestOptions): Promise<void> {
+  const res = await apiRequest("GET", path, undefined, options);
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 /** Use for endpoints where we must not parse the body as JSON (e.g. purge). Consumes body and throws if it looks like HTML. */
 export async function apiRequestNoParse(
   method: string,

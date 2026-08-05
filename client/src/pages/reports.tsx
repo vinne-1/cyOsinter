@@ -57,7 +57,7 @@ import type { Report, Finding, ReconModule } from "@shared/schema";
 import { SeverityBadge } from "@/components/severity-badge";
 import { downloadReportPdf } from "@/lib/reportPdf";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { apiRequest, buildUrl, queryClient } from "@/lib/queryClient";
+import { apiRequest, downloadAuthed, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
 
 const moduleLabels: Record<string, string> = {
@@ -180,10 +180,8 @@ function ReportDetailDialog({
                     <DropdownMenuItem
                       onClick={() => {
                         const safeTitle = (report.title || "security-report").replace(/[^a-zA-Z0-9-_]/g, "-").replace(/-+/g, "-").toLowerCase();
-                        const a = document.createElement("a");
-                        a.href = buildUrl(`/api/workspaces/${selectedWorkspaceId}/reports/${report.id}/export?format=csv`);
-                        a.download = `${safeTitle}.csv`;
-                        a.click();
+                        downloadAuthed(`/api/workspaces/${selectedWorkspaceId}/reports/${report.id}/export?format=csv`, `${safeTitle}.csv`)
+                          .catch((e) => toast({ title: "Export failed", description: e.message, variant: "destructive" }));
                       }}
                       data-testid="button-export-csv"
                     >
@@ -192,10 +190,8 @@ function ReportDetailDialog({
                     <DropdownMenuItem
                       onClick={() => {
                         const safeTitle = (report.title || "security-report").replace(/[^a-zA-Z0-9-_]/g, "-").replace(/-+/g, "-").toLowerCase();
-                        const a = document.createElement("a");
-                        a.href = buildUrl(`/api/workspaces/${selectedWorkspaceId}/reports/${report.id}/export?format=xlsx`);
-                        a.download = `${safeTitle}.xlsx`;
-                        a.click();
+                        downloadAuthed(`/api/workspaces/${selectedWorkspaceId}/reports/${report.id}/export?format=xlsx`, `${safeTitle}.xlsx`)
+                          .catch((e) => toast({ title: "Export failed", description: e.message, variant: "destructive" }));
                       }}
                       data-testid="button-export-excel"
                     >
@@ -204,10 +200,8 @@ function ReportDetailDialog({
                     <DropdownMenuItem
                       onClick={() => {
                         const safeTitle = (report.title || "security-report").replace(/[^a-zA-Z0-9-_]/g, "-").replace(/-+/g, "-").toLowerCase();
-                        const a = document.createElement("a");
-                        a.href = buildUrl(`/api/workspaces/${selectedWorkspaceId}/reports/${report.id}/export?format=docx`);
-                        a.download = `${safeTitle}.docx`;
-                        a.click();
+                        downloadAuthed(`/api/workspaces/${selectedWorkspaceId}/reports/${report.id}/export?format=docx`, `${safeTitle}.docx`)
+                          .catch((e) => toast({ title: "Export failed", description: e.message, variant: "destructive" }));
                       }}
                       data-testid="button-export-docx"
                     >
@@ -217,10 +211,9 @@ function ReportDetailDialog({
                     <DropdownMenuItem
                       onClick={() => {
                         const safeTitle = (report.title || "security-report").replace(/[^a-zA-Z0-9-_]/g, "-").replace(/-+/g, "-").toLowerCase();
-                        const a = document.createElement("a");
-                        a.href = buildUrl(`/api/workspaces/${selectedWorkspaceId}/reports/${report.id}/export?format=docx&evidence=1`);
-                        a.download = `${safeTitle}.docx`;
-                        a.click();
+                        toast({ title: "Generating report with live evidence…", description: "Capturing screenshots — this can take up to a minute." });
+                        downloadAuthed(`/api/workspaces/${selectedWorkspaceId}/reports/${report.id}/export?format=docx&evidence=1`, `${safeTitle}.docx`, { timeoutMs: 180000 })
+                          .catch((e) => toast({ title: "Export failed", description: e.message, variant: "destructive" }));
                       }}
                       data-testid="button-export-docx-evidence"
                     >

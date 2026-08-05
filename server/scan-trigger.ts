@@ -42,15 +42,19 @@ interface RawAsset {
 
 // ── Scanner Orchestration ──
 
+/** Called after each scan phase completes so results can be persisted live. */
+type PhaseFn = (results: ScanResults) => Promise<void>;
+
 function runScanners(
   target: string,
   type: string,
   mode: ScanMode,
   onProgress: ProgressFn,
+  onPhase?: PhaseFn,
 ): Promise<ScanResults> {
   // Wrap the entire scan in a stealth context so every downstream outbound
   // request inherits the mode's pacing/concurrency/User-Agent profile.
-  return runWithStealth(mode, () => runScannersInner(target, type, mode, onProgress));
+  return runWithStealth(mode, () => runScannersInner(target, type, mode, onProgress, onPhase));
 }
 
 async function runScannersInner(
@@ -58,6 +62,7 @@ async function runScannersInner(
   type: string,
   mode: ScanMode,
   onProgress: ProgressFn,
+  onPhase?: PhaseFn,
 ): Promise<ScanResults> {
   const results: ScanResults = {
     easmResults: null,
@@ -72,10 +77,12 @@ async function runScannersInner(
     const easmProgress: ProgressFn = (m, p, s, e) =>
       onProgress(`[EASM] ${m}`, Math.round(Math.min(40, (p * 40) / 100)), `easm_${s}`, e ? Math.ceil(e * 0.4) : undefined);
     results.easmResults = await runEASMScan(target, easmProgress, scanOptions);
+    await onPhase?.(results); // persist EASM results live
 
     const osintProgress: ProgressFn = (m, p, s, e) =>
       onProgress(`[OSINT] ${m}`, Math.round(40 + (p * 40) / 100), `osint_${s}`, e ? Math.ceil(e * 0.4) : undefined);
     results.osintResults = await runOSINTScan(target, osintProgress, scanOptions);
+    await onPhase?.(results); // persist OSINT results live
 
     const nucleiUrls = buildNucleiUrls(target, results.easmResults, gold);
     const nucleiProgress: ProgressFn = (m, p, s, e) =>
@@ -86,6 +93,7 @@ async function runScannersInner(
       log.warn({ err: nucleiErr }, "Nuclei scan unavailable (non-fatal) — install nuclei for full vulnerability scanning");
       results.nucleiResults = { findings: [], nucleiResults: [], skipped: true, reason: String(nucleiErr instanceof Error ? nucleiErr.message : nucleiErr) };
     }
+    await onPhase?.(results); // persist Nuclei results live
 
     await onProgress("[DAST] Running active security tests...", 92, "dast_start");
     try {
@@ -94,8 +102,10 @@ async function runScannersInner(
       log.warn({ err: dastErr }, "DAST-Lite scan failed (non-fatal)");
     }
     await onProgress("[DAST] Active testing complete", 97, "dast_done");
+    await onPhase?.(results); // persist DAST results live
   } else if (type === "easm") {
     results.easmResults = await runEASMScan(target, onProgress, scanOptions);
+    await onPhase?.(results);
   } else if (type === "dast") {
     await onProgress("[DAST] Running active security tests...", 10, "dast_start");
     try {
@@ -104,12 +114,15 @@ async function runScannersInner(
       log.warn({ err: dastErr }, "DAST-Lite scan failed");
     }
     await onProgress("[DAST] Active testing complete", 100, "dast_done");
+    await onPhase?.(results);
   } else if (type === "passive") {
     // Strictly non-intrusive recon — safe for targets where only passive
     // OSINT is authorized. Populates the osintResults slot (no active EASM).
     results.osintResults = await runPassiveScan(target, onProgress, scanOptions);
+    await onPhase?.(results);
   } else {
     results.osintResults = await runOSINTScan(target, onProgress, scanOptions);
+    await onPhase?.(results);
   }
 
   return results;
@@ -177,6 +190,15 @@ async function storeReconModules(
   results: ScanResults,
   type: string,
 ): Promise<void> {
+  // Recon modules are rebuilt from the full accumulated results on each call
+  // (findings/assets/recon populate live as each scan phase completes), so
+  // clear this scan's prior modules first to avoid duplicates.
+  try {
+    await storage.deleteReconModulesByScan(scanId);
+  } catch (err) {
+    log.warn({ err }, "Failed to clear prior recon modules");
+  }
+
   // Core recon modules from EASM + OSINT
   let reconMods: Awaited<ReturnType<typeof buildReconModules>> = [];
   try {
@@ -390,61 +412,81 @@ export async function triggerScan(
   (async () => {
     try {
       const scanMode: ScanMode = VALID_SCAN_MODES.includes(mode as ScanMode) ? (mode as ScanMode) : "standard";
-      const results = await runScanners(target, type, scanMode, onProgress);
 
-      const rawFindings: RawFinding[] = [
-        ...(results.easmResults?.findings ?? []),
-        ...(results.osintResults?.findings ?? []),
-        ...(results.nucleiResults?.findings ?? []),
-        ...(results.dastResults?.findings ?? []),
-      ];
-      // Correlate against CISA KEV: any finding referencing an actively-exploited
-      // CVE is elevated to critical with exploitation evidence. This is the
-      // evidence-backed path to critical findings rather than static template
-      // severities. Best-effort — falls back to the raw findings on failure.
-      let allFindings: RawFinding[] = rawFindings;
-      try {
-        allFindings = await correlateExploitability(rawFindings);
-      } catch (err) {
-        log.warn({ err }, "CVE/KEV correlation failed — using un-elevated findings");
+      // ── Live persistence ──
+      // Persist findings/assets/recon after EACH scan phase so the dashboard
+      // fills up in real time instead of only at completion. persistFindings
+      // dedups and storeReconModules replaces this scan's modules, so repeated
+      // calls with the growing result set are idempotent.
+      const createdFindingIds = new Set<string>();
+      let lastFindings: RawFinding[] = [];
+      let lastAssets: RawAsset[] = [];
+      const persistProgress: PhaseFn = async (partial) => {
+        const rawFindings: RawFinding[] = [
+          ...(partial.easmResults?.findings ?? []),
+          ...(partial.osintResults?.findings ?? []),
+          ...(partial.nucleiResults?.findings ?? []),
+          ...(partial.dastResults?.findings ?? []),
+        ];
+        let allFindings: RawFinding[] = rawFindings;
+        try {
+          // Elevate KEV-referenced findings to critical (evidence-backed).
+          allFindings = await correlateExploitability(rawFindings);
+        } catch (err) {
+          log.warn({ err }, "CVE/KEV correlation failed — using un-elevated findings");
+        }
+        lastFindings = allFindings;
+        lastAssets = [
+          ...(partial.easmResults?.assets ?? []),
+          ...(partial.osintResults?.assets ?? []),
+        ];
+        try {
+          await persistAssets(workspaceId, lastAssets);
+          const ids = await persistFindings(workspaceId, scan.id, allFindings);
+          ids.forEach((id) => createdFindingIds.add(id));
+          await storeReconModules(workspaceId, scan.id, target, partial, type);
+          await storage.updateScan(scan.id, { findingsCount: createdFindingIds.size });
+        } catch (err) {
+          log.warn({ err }, "Incremental persist failed (will retry next phase)");
+        }
+      };
+
+      const results = await runScanners(target, type, scanMode, onProgress, persistProgress);
+
+      // Safety net in case no phase fired the callback.
+      if (createdFindingIds.size === 0 && lastFindings.length === 0) {
+        await persistProgress(results);
       }
-      const allAssets: RawAsset[] = [
-        ...(results.easmResults?.assets ?? []),
-        ...(results.osintResults?.assets ?? []),
-      ];
+
       const mergedSubdomains = Array.from(new Set([
         ...(results.easmResults?.subdomains ?? []),
         ...(results.osintResults?.subdomains ?? []),
       ]));
 
-      await persistAssets(workspaceId, allAssets);
-      const createdFindingIds = await persistFindings(workspaceId, scan.id, allFindings);
-      await storeReconModules(workspaceId, scan.id, target, results, type);
-
       await storage.updateScan(scan.id, {
         status: "completed",
         completedAt: new Date(),
-        findingsCount: createdFindingIds.length,
+        findingsCount: createdFindingIds.size,
         progressMessage: null,
         progressPercent: null,
         currentStep: null,
         estimatedSecondsRemaining: null,
         summary: {
-          assetsDiscovered: allAssets.length,
-          findingsGenerated: createdFindingIds.length,
-          criticalCount: allFindings.filter((f) => f.severity === "critical").length,
-          highCount: allFindings.filter((f) => f.severity === "high").length,
+          assetsDiscovered: lastAssets.length,
+          findingsGenerated: createdFindingIds.size,
+          criticalCount: lastFindings.filter((f) => f.severity === "critical").length,
+          highCount: lastFindings.filter((f) => f.severity === "high").length,
           subdomainsFound: mergedSubdomains.length,
           verifiedOnly: true,
           mode: scanMode,
         },
       });
 
-      await createPostureSnapshot(workspaceId, scan.id, target, scanMode, allFindings);
+      await createPostureSnapshot(workspaceId, scan.id, target, scanMode, lastFindings);
 
       const updatedScan = await storage.getScan(scan.id);
       if (updatedScan) {
-        emitScanCompleted(updatedScan, createdFindingIds.length).catch((err) =>
+        emitScanCompleted(updatedScan, createdFindingIds.size).catch((err) =>
           log.warn({ err }, "Failed to emit scan completed alert"));
       }
 
