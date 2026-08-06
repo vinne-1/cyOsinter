@@ -29,5 +29,7 @@ COPY shared ./shared
 EXPOSE 5000
 ENV NODE_ENV=production
 
-# Run schema push on startup, then start server
-CMD ["sh", "-c", "npm run db:push || echo '[startup] db:push failed, continuing...' && node dist/index.cjs"]
+# Apply the DB schema NON-INTERACTIVELY on startup (drizzle-kit push --force
+# never prompts, so it can't hang the container), then start the server. The
+# server starts regardless of the push result.
+CMD ["sh", "-c", "npx drizzle-kit push --force || echo '[startup] schema push failed, continuing...'; node dist/index.cjs"]

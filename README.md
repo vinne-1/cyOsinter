@@ -169,18 +169,37 @@ npm run dev       # start dev server → http://localhost:5000
 
 ## Production Deployment
 
+### One command (recommended) — full stack, zero config
+
+```bash
+docker compose up -d --build
+```
+
+That's it. This builds the app image (Node + Nuclei + Chromium for report
+evidence), starts PostgreSQL and Ollama, **applies the database schema
+automatically**, and seeds a default admin. Then open:
+
+> **http://localhost:5050**
+>
+> Sign in with **`admin@cyshield.local`** / **`ChangeMe123!`** (change these via
+> `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`, or just register your own account).
+
+No manual `db:push`, no port juggling — the container listens on 5000 internally
+and is published on host port **5050** (override with `APP_HOST_PORT`). The
+database is published on **5433** (override with `DB_HOST_PORT`) to avoid clashing
+with a local Postgres. Stop with `docker compose stop`; reset everything
+(including data) with `docker compose down -v`.
+
+Optional API keys (AbuseIPDB, VirusTotal, Tavily, NVD) enrich the intelligence
+and reports — add them to a `.env` file and uncomment the `env_file:` lines in
+`docker-compose.yml`.
+
+### Manual (without Docker)
+
 ```bash
 npm run build          # compile server + bundle client → dist/
 npm run start          # run production server
 ```
-
-Or with Docker Compose (full stack — app + database + Ollama):
-
-```bash
-docker compose up -d
-```
-
-The app will be available at **http://localhost:5000**.
 
 ---
 
