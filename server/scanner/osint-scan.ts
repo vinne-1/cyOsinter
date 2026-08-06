@@ -15,7 +15,7 @@ import { discoverAPIs } from "./api-discovery.js";
 import { scanSecrets } from "./secret-scanner.js";
 import { establishSoft404Fingerprint, classifyPathResults, buildExposedPathFindings } from "./osint-directory-scan.js";
 import { runWordPressChecks } from "./wordpress-checks.js";
-import { buildSPFFindings, buildDMARCFindings, processHarvestedEmails } from "./osint-email-dns.js";
+import { buildSPFFindings, buildDMARCFindings, deriveMailContext, processHarvestedEmails } from "./osint-email-dns.js";
 
 const log = createLogger("scanner");
 
@@ -59,9 +59,10 @@ export async function runOSINTScan(domain: string, onProgress?: ScanProgressCall
 
   const spfAnalysis = analyzeSPF(txtRecords);
   const dmarcAnalysis = analyzeDMARC(dmarcTxt);
+  const mailContext = await deriveMailContext(domain, mxRecords, getDNSTxtRecords);
 
-  results.findings.push(...buildSPFFindings(domain, spfAnalysis, txtRecords, now));
-  results.findings.push(...buildDMARCFindings(domain, dmarcAnalysis, now));
+  results.findings.push(...buildSPFFindings(domain, spfAnalysis, txtRecords, now, mailContext));
+  results.findings.push(...buildDMARCFindings(domain, dmarcAnalysis, now, mailContext));
 
   checkAborted(signal);
   await report("Analyzed SPF/DMARC. Running directory bruteforce...", 25, "dns_email", 90);

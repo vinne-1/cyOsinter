@@ -20,6 +20,50 @@ interface DMARCAnalysis {
 }
 
 /**
+ * Mail-context signals that determine whether a missing SPF/DMARC record is a
+ * material spoofing risk. A web-only subdomain with no MX whose organizational
+ * domain already publishes DMARC is effectively covered and should not be flagged
+ * (or only informationally), which is where SPF/DMARC false positives come from.
+ */
+export interface MailContext {
+  /** MX records for the domain (empty ⇒ the host is not a mail domain). */
+  hasMx?: boolean;
+  /** True when `domain` is a subdomain (not the registrable/organizational apex). */
+  isSubdomain?: boolean;
+  /** True when the organizational (parent) domain publishes a DMARC record. */
+  orgDmarcFound?: boolean;
+}
+
+/**
+ * Derive the mail context for a domain: whether it has MX, whether it is a subdomain,
+ * and whether its organizational (parent) domain publishes DMARC. Used to suppress /
+ * downgrade SPF/DMARC findings that are false positives on non-mail subdomains.
+ *
+ * `lookupTxt` is injected so this module stays free of a direct DNS dependency.
+ */
+export async function deriveMailContext(
+  domain: string,
+  mxRecords: Array<{ exchange: string }> | undefined,
+  lookupTxt: (name: string) => Promise<string[][]>,
+): Promise<MailContext> {
+  const labels = domain.split(".").filter(Boolean);
+  // Heuristic apex detection: 2 labels ⇒ apex. Multipart TLDs (co.uk) may be
+  // misclassified, but the hasMx/orgDmarc gates keep that harmless (a real apex has MX).
+  const isSubdomain = labels.length > 2;
+  let orgDmarcFound = false;
+  if (isSubdomain) {
+    const parent = labels.slice(1).join(".");
+    try {
+      const txt = await lookupTxt(`_dmarc.${parent}`);
+      orgDmarcFound = txt.flat().some((r) => /v=DMARC1/i.test(r));
+    } catch {
+      /* parent lookup best-effort */
+    }
+  }
+  return { hasMx: (mxRecords?.length ?? 0) > 0, isSubdomain, orgDmarcFound };
+}
+
+/**
  * Generate findings for SPF record issues.
  */
 export function buildSPFFindings(
@@ -27,10 +71,34 @@ export function buildSPFFindings(
   spfAnalysis: SPFAnalysis,
   txtRecords: string[][],
   now: string,
+  mail: MailContext = {},
 ): VerifiedFinding[] {
   const findings: VerifiedFinding[] = [];
 
   if (!spfAnalysis.found) {
+    // A missing SPF record on a host that neither receives (no MX) nor is the
+    // organizational apex is low-value: spoofing of a non-mail subdomain is already
+    // constrained by the org domain's DMARC policy. Downgrade rather than cry medium.
+    const nonMailSubdomain = mail.isSubdomain === true && mail.hasMx === false;
+    if (nonMailSubdomain) {
+      findings.push({
+        title: `No SPF Record on Non-Mail Subdomain ${domain}`,
+        description: `${domain} has no SPF record. This subdomain has no MX records and does not appear to send or receive mail, so the practical spoofing risk is limited${mail.orgDmarcFound ? " and the organizational domain already publishes a DMARC policy that governs its subdomains" : ""}. Publishing an explicit "v=spf1 -all" record is still recommended as defence-in-depth.`,
+        severity: "info",
+        category: "dns_misconfiguration",
+        affectedAsset: domain,
+        cvssScore: "1.0",
+        remediation: `Optionally add a hard-fail SPF record ("v=spf1 -all") to ${domain} to explicitly disallow mail from this non-sending host.`,
+        evidence: [{
+          type: "dns_query",
+          description: "DNS TXT/MX lookup: no SPF and no MX on this host",
+          snippet: `Domain: ${domain}\nSPF Record: Not Found\nMX Records: none\nOrg DMARC present: ${mail.orgDmarcFound ? "yes" : "unknown"}`,
+          source: "DNS TXT/MX record lookup",
+          verifiedAt: now,
+        }],
+      });
+      return findings;
+    }
     findings.push({
       title: `No SPF Record Found for ${domain}`,
       description: `The domain ${domain} does not have an SPF (Sender Policy Framework) DNS record. This means any server can send emails claiming to be from ${domain}, enabling email spoofing attacks.`,
@@ -76,22 +144,32 @@ export function buildDMARCFindings(
   domain: string,
   dmarcAnalysis: DMARCAnalysis,
   now: string,
+  mail: MailContext = {},
 ): VerifiedFinding[] {
   const findings: VerifiedFinding[] = [];
 
   if (!dmarcAnalysis.found) {
+    // DMARC is published at the organizational domain and applies to its subdomains
+    // (via the `sp` tag / policy inheritance). If the parent domain already publishes
+    // DMARC, a subdomain lacking its own _dmarc record is NOT a finding — reporting it
+    // is a false positive. Suppress it entirely.
+    if (mail.isSubdomain === true && mail.orgDmarcFound === true) {
+      return findings;
+    }
+    // Non-mail subdomain with no parent DMARC signal: informational, not medium.
+    const lowValue = mail.isSubdomain === true && mail.hasMx === false;
     findings.push({
       title: `No DMARC Record Found for ${domain}`,
-      description: `The domain ${domain} does not have a DMARC (Domain-based Message Authentication) DNS record at _dmarc.${domain}. Without DMARC, there is no policy to handle emails that fail SPF/DKIM checks.`,
-      severity: "medium",
+      description: `The domain ${domain} does not have a DMARC (Domain-based Message Authentication) DNS record at _dmarc.${domain}. Without DMARC, there is no policy to handle emails that fail SPF/DKIM checks.${lowValue ? " Note: this is a non-mail subdomain; the organizational domain's DMARC policy typically governs it." : ""}`,
+      severity: lowValue ? "info" : "medium",
       category: "dns_misconfiguration",
       affectedAsset: domain,
-      cvssScore: "5.3",
-      remediation: `Add a DMARC TXT record at _dmarc.${domain} with at least a 'p=quarantine' policy.`,
+      cvssScore: lowValue ? "1.0" : "5.3",
+      remediation: `Add a DMARC TXT record at _dmarc.${domain} with at least a 'p=quarantine' policy${lowValue ? ", or rely on the organizational domain's policy with an appropriate 'sp' tag" : ""}.`,
       evidence: [{
         type: "dns_query",
         description: "DNS TXT record lookup for _dmarc subdomain returned no DMARC record",
-        snippet: `Domain: _dmarc.${domain}\nQuery: TXT records\nDMARC Record: Not Found`,
+        snippet: `Domain: _dmarc.${domain}\nQuery: TXT records\nDMARC Record: Not Found\nMX Records: ${mail.hasMx ? "present" : "none"}\nOrg DMARC present: ${mail.orgDmarcFound ? "yes" : "no/unknown"}`,
         source: "DNS TXT record lookup",
         verifiedAt: now,
       }],

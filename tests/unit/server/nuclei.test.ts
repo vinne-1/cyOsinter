@@ -249,3 +249,25 @@ describe("runNucleiScan — abort signal", () => {
     ).rejects.toThrow("Scan aborted");
   });
 });
+
+describe("classifyNucleiFinding", () => {
+  it("drops pure-recon enumeration (cert details, tech detection) — misclassification fix", async () => {
+    const { classifyNucleiFinding } = await import("../../../server/scanner/nuclei");
+    expect(classifyNucleiFinding("ssl-dns-names", "SSL DNS Names", "info", false)).toEqual({ category: "informational", skip: true });
+    expect(classifyNucleiFinding("ssl-issuer", "Detect SSL Certificate Issuer", "info", false)).toEqual({ category: "informational", skip: true });
+    expect(classifyNucleiFinding("tech-detect", "Technology Detection", "info", false).skip).toBe(true);
+  });
+
+  it("routes header/cookie/cors templates to verifiable categories (so the gate re-checks them)", async () => {
+    const { classifyNucleiFinding } = await import("../../../server/scanner/nuclei");
+    expect(classifyNucleiFinding("http-missing-security-headers", "HTTP Missing Security Headers", "info", false)).toEqual({ category: "security_headers", skip: false });
+    expect(classifyNucleiFinding("cookie-samesite", "Missing Cookie SameSite Strict", "info", false)).toEqual({ category: "cookie_security", skip: false });
+    expect(classifyNucleiFinding("cors-misconfig", "CORS Misconfiguration", "low", false)).toEqual({ category: "cors_misconfiguration", skip: false });
+  });
+
+  it("keeps CVE-backed and graded templates as vulnerabilities", async () => {
+    const { classifyNucleiFinding } = await import("../../../server/scanner/nuclei");
+    expect(classifyNucleiFinding("CVE-2021-44228", "Log4j RCE", "critical", true)).toEqual({ category: "vulnerability", skip: false });
+    expect(classifyNucleiFinding("apache-struts-rce", "Struts RCE", "high", false)).toEqual({ category: "vulnerability", skip: false });
+  });
+});

@@ -42,8 +42,21 @@ export async function buildDocxInput(
   opts: { findingIds?: string[]; images?: Record<string, Buffer>; scanMode?: string; falsePositives?: ReportDocxInput["falsePositives"]; captureEvidence?: boolean } = {},
 ): Promise<ReportDocxInput> {
   const ws = await storage.getWorkspace(workspaceId);
-  // Prefer the explicit scan target domain; fall back to the workspace name.
-  const target = ((ws as { domain?: string | null } | undefined)?.domain || ws?.name || "unknown").toLowerCase();
+  // The most recent (completed) scan is authoritative for the report's target
+  // and mode: the workspace name may be an arbitrary label, and the scan target
+  // is the domain actually scanned (e.g. a specific subdomain).
+  const { data: scans } = await storage.getScans(workspaceId, { limit: 25, offset: 0 });
+  const latestScan = scans.find((s) => s.status === "completed") ?? scans[0];
+  const scanTarget = latestScan?.target?.trim().toLowerCase();
+  const scanModeRaw = (latestScan?.summary as Record<string, unknown> | undefined)?.mode as string | undefined;
+  const MODE_LABEL: Record<string, string> = {
+    gold: "Gold (comprehensive, full coverage)",
+    safe: "Safe / stealth (rate-limited, low-and-slow)",
+    standard: "Standard (fast)",
+  };
+  const scanMode = opts.scanMode ?? (scanModeRaw ? (MODE_LABEL[scanModeRaw] ?? scanModeRaw) : undefined);
+  const withheldCount = (latestScan?.summary as Record<string, unknown> | undefined)?.withheldCount as number | undefined;
+  const target = scanTarget || ((ws as { domain?: string | null } | undefined)?.domain || ws?.name || "unknown").toLowerCase();
   const { data: allFindings } = await storage.getFindings(workspaceId, { limit: 2000, offset: 0 });
   const { data: modules } = await storage.getReconModules(workspaceId, { limit: 200, offset: 0 });
   const mods = modules as unknown as ReconModuleLike[];
@@ -117,7 +130,7 @@ export async function buildDocxInput(
     org: ws?.name ?? target,
     ipAddress: ips[0],
     generatedAt: new Date().toISOString(),
-    scanMode: opts.scanMode,
+    scanMode,
     recon: {
       ips,
       ns,
@@ -135,5 +148,6 @@ export async function buildDocxInput(
     findings,
     falsePositives: opts.falsePositives,
     images: Object.keys(images).length ? images : undefined,
+    withheldCount,
   };
 }

@@ -392,15 +392,37 @@ export async function runEASMScan(domain: string, onProgress?: ScanProgressCallb
     const missingHeaders = headerChecks.filter(h => !h.present);
     const serverLeaks = detectServerInfo(mainHttps.headers);
 
-    if (missingHeaders.length >= 3) {
+    // Severity is driven only by the headers that materially reduce risk. Optional
+    // / deprecated headers (Permissions-Policy, X-XSS-Protection, COEP/COOP/CORP,
+    // X-DNS-Prefetch-Control) do not by themselves justify a medium finding — a site
+    // with all critical headers present but a few optional ones missing is low/info,
+    // not "Multiple Missing Security Headers (medium)".
+    const CRITICAL_HEADER_LABELS = new Set([
+      "Strict-Transport-Security (HSTS)",
+      "Content-Security-Policy (CSP)",
+      "X-Frame-Options",
+      "X-Content-Type-Options",
+    ]);
+    const missingCritical = missingHeaders.filter(h => CRITICAL_HEADER_LABELS.has(h.header));
+
+    // Only surface a finding when a critical header is missing, OR when a large
+    // number of headers are absent (a hardening gap worth an informational note).
+    if (missingCritical.length >= 1 || missingHeaders.length >= 5) {
+      const severity = missingCritical.length >= 2 ? "medium" : missingCritical.length === 1 ? "low" : "info";
+      const cvssScore = missingCritical.length >= 2 ? "5.0" : missingCritical.length === 1 ? "3.5" : "1.0";
+      const criticalNote = missingCritical.length > 0
+        ? ` Critical headers missing: ${missingCritical.map(h => h.header).join(", ")}.`
+        : " All critical headers (HSTS, CSP, X-Frame-Options, X-Content-Type-Options) are present; only optional hardening headers are missing.";
       results.findings.push({
-        title: `Multiple Missing Security Headers on ${domain}`,
-        description: `${missingHeaders.length} security headers are missing from the HTTP response on ${domain}. Missing headers: ${missingHeaders.map(h => h.header).join(", ")}.`,
-        severity: missingHeaders.length >= 5 ? "medium" : "low",
+        title: `Missing Security Headers on ${domain}`,
+        description: `${missingHeaders.length} of the ${headerChecks.length} checked security headers are missing from the HTTP response on ${domain}.${criticalNote} Missing headers: ${missingHeaders.map(h => h.header).join(", ")}.`,
+        severity,
         category: "security_headers",
         affectedAsset: domain,
-        cvssScore: missingHeaders.length >= 5 ? "5.0" : "3.5",
-        remediation: "Configure the web server to include the missing security headers.",
+        cvssScore,
+        remediation: missingCritical.length > 0
+          ? "Configure the web server to add the missing critical security headers (HSTS, CSP, X-Frame-Options, X-Content-Type-Options), then the optional hardening headers."
+          : "Optional hardening only: add the remaining headers (e.g. Permissions-Policy, Referrer-Policy) to further reduce attack surface. Not a material vulnerability.",
         evidence: [
           {
             type: "http_headers",

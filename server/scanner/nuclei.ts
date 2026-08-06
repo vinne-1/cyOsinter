@@ -56,6 +56,41 @@ function checkAborted(signal?: AbortSignal): void {
   if (signal?.aborted) throw new Error("Scan aborted");
 }
 
+/**
+ * Map a Nuclei match to an accurate finding category (Nuclei itself tags everything
+ * "vulnerability"). Header/cookie/CORS templates are routed to their real categories
+ * so the verification gate actively re-checks them; pure-recon enumeration templates
+ * (certificate details, technology/version detection, favicon/screenshot metadata)
+ * are dropped — they are recon, not security findings, and reporting them as
+ * vulnerabilities is a misclassification.
+ */
+export function classifyNucleiFinding(
+  templateId: string,
+  name: string,
+  severity: string,
+  isCve: boolean,
+): { category: string; skip: boolean } {
+  const hay = `${templateId} ${name}`.toLowerCase();
+  const actionable = isCve || ["low", "medium", "high", "critical"].includes(severity);
+
+  // Hardening categories the gate can actively verify (both info and actionable).
+  if (/missing.*security.*header|security-headers|http-missing-security/.test(hay)) return { category: "security_headers", skip: false };
+  if (/cookie/.test(hay)) return { category: "cookie_security", skip: false };
+  if (/\bcors\b/.test(hay)) return { category: "cors_misconfiguration", skip: false };
+
+  // Genuine vulnerabilities (CVE-backed or graded low+).
+  if (actionable) return { category: "vulnerability", skip: false };
+
+  // Info-severity pure enumeration / detection recon → not a security finding.
+  if (/ssl|tls|certificate|dns-names|issuer|version|tech[-_]?detect|-detect$|detect-|waf-detect|favicon|screenshot|metadata|wappalyzer|fingerprint|whois|dns-?record|http-title|form-detection/.test(hay)) {
+    return { category: "informational", skip: true };
+  }
+
+  // Remaining info templates (e.g. flagged exposures) — keep, but as an accurate
+  // informational observation rather than a "vulnerability".
+  return { category: "informational", skip: false };
+}
+
 export async function runNucleiScan(
   domain: string,
   urls: string[],
@@ -212,19 +247,37 @@ export async function runNucleiScan(
           // Many Nuclei template IDs encode the CVE directly, e.g. "CVE-2021-44228"
           const cveMatch = templateId.match(/\b(CVE-\d{4}-\d+)\b/i);
           const detectedCveId = cveMatch ? cveMatch[1].toUpperCase() : undefined;
+
+          // Classify accurately: Nuclei tags every match "vulnerability" by default,
+          // but many templates are informational enumeration (cert details, tech
+          // detection) — labelling those as vulnerabilities is a misclassification.
+          // Header/cookie/CORS templates are routed to their real categories so the
+          // verification gate actively re-checks them (and dedups against our own
+          // detectors); pure-recon enumeration templates are dropped from findings.
+          const cls = classifyNucleiFinding(templateId, (info?.name as string) ?? "", severity, !!detectedCveId);
+          if (cls.skip) continue;
+          // Expose the matched URL so the fail-closed gate can re-probe the finding.
+          const matchedUrl = hit.matchedAt && /^https?:\/\//i.test(hit.matchedAt) ? hit.matchedAt : undefined;
+          const cvssScore = severity === "critical" ? "9.0" : severity === "high" ? "7.5"
+            : severity === "medium" ? "5.5" : severity === "low" ? "3.0" : "1.0";
           findings.push({
             title: `${(info?.name as string) ?? templateId} on ${hit.host}`,
             description: (info?.description as string) ?? `Nuclei template ${templateId} matched at ${hit.host}`,
             severity,
-            category: "vulnerability",
+            category: cls.category,
             affectedAsset: hit.host,
-            cvssScore: severity === "critical" ? "9.0" : severity === "high" ? "7.5" : severity === "medium" ? "5.5" : "3.0",
-            remediation: "Review the vulnerability and apply patches or mitigations as recommended by the template.",
+            cvssScore,
+            remediation: cls.category === "vulnerability"
+              ? "Review the vulnerability and apply patches or mitigations as recommended by the template."
+              : cls.category === "informational"
+                ? "Informational observation — no action required beyond awareness."
+                : "Review and apply the recommended hardening for this issue.",
             evidence: [
               {
                 type: "nuclei",
                 description: `Nuclei template ${templateId} matched`,
                 snippet: hit.matchedAt ? `Matched at: ${hit.matchedAt}` : hit.templateName ?? templateId,
+                ...(matchedUrl ? { url: matchedUrl } : {}),
                 source: "Nuclei scanner",
                 verifiedAt: now,
                 ...(detectedCveId ? { cveId: detectedCveId } : {}),

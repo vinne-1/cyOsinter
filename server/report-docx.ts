@@ -49,6 +49,8 @@ export interface ReportDocxInput {
   findings: ReportFinding[];
   falsePositives?: Array<{ claim: string; result: string; verdict: string }>;
   images?: Record<string, Buffer>;
+  /** Count of detected candidates the live verification gate withheld (fail-closed). */
+  withheldCount?: number;
 }
 
 const SEV_COLOR: Record<string, string> = {
@@ -180,7 +182,7 @@ export async function generateReportDocx(input: ReportDocxInput): Promise<Buffer
     rows: ([
       ["Target", input.ipAddress ? `${input.target} (${input.ipAddress})` : input.target],
       ["Assessment type", "Passive OSINT + External Attack Surface Management (EASM)"],
-      ["Scan mode", input.scanMode ?? "Safe / stealth"],
+      ["Scan mode", input.scanMode ?? "Standard"],
       ["Date", gen.slice(0, 10)],
       ["Classification", "CONFIDENTIAL — Authorized security assessment"],
     ] as Array<[string, string]>).map(([k, v]) => new TableRow({
@@ -197,7 +199,10 @@ export async function generateReportDocx(input: ReportDocxInput): Promise<Buffer
 
   // ── 2. Methodology ──
   children.push(h1("2.  Methodology"));
-  children.push(p("Reconnaissance was performed with the Cyber-Shield-Pro EASM/OSINT scanner. Every material finding is automatically re-tested against the live target with strict verification logic (raw-reflection checks for XSS, method-honored checks for HTTP verbs, existence checks for cloud buckets, content checks for exposed files) so scanner noise and false positives are filtered before reporting. Findings that do not reproduce are listed as verified false positives. Only free/open sources are used."));
+  children.push(p("Reconnaissance was performed with the Cyber-Shield-Pro EASM/OSINT scanner. Every candidate finding passes through a fail-closed verification gate before it is recorded: the gate re-issues a live probe that must reproduce the finding's evidence at report time (raw-reflection checks for XSS, redirect-honored checks for open redirects, method-honored checks for HTTP verbs, live TCP reachability for exposed services, dangling-CNAME plus takeover-fingerprint checks for subdomain takeover, and 2xx-plus-content-marker checks for exposed files and secrets). Any candidate the probe cannot reproduce — including probe errors and timeouts — is withheld and never recorded. As a result, every finding in this report was re-confirmed live; the report contains no unverified findings. Only free/open sources are used."));
+  if ((input.withheldCount ?? 0) > 0) {
+    children.push(p(`Verification gate: ${input.withheldCount} additional candidate(s) were detected during scanning but withheld from this report because a live re-probe could not reproduce their evidence (fail-closed policy).`, { italics: true, color: GREY }));
+  }
 
   // ── 3. Target info ──
   children.push(h1("3.  Target Information"));
@@ -319,7 +324,7 @@ export async function generateReportDocx(input: ReportDocxInput): Promise<Buffer
   children.push(kvTable([
     ["Target", input.ipAddress ? `${input.target} (${input.ipAddress})` : input.target],
     ["Assessment date", gen.slice(0, 10)],
-    ["Scan mode", input.scanMode ?? "Safe / stealth"],
+    ["Scan mode", input.scanMode ?? "Standard"],
     ["Verification", "Automated live re-testing of each finding; false positives filtered"],
     ["Paid APIs used", "None — open-source / free sources only"],
   ]));

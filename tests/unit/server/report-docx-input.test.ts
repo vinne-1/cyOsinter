@@ -7,11 +7,13 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const getWorkspace = vi.fn();
 const getFindings = vi.fn();
 const getReconModules = vi.fn();
+const getScans = vi.fn();
 vi.mock("../../../server/storage", () => ({
   storage: {
     getWorkspace: (...a: unknown[]) => getWorkspace(...a),
     getFindings: (...a: unknown[]) => getFindings(...a),
     getReconModules: (...a: unknown[]) => getReconModules(...a),
+    getScans: (...a: unknown[]) => getScans(...a),
   },
 }));
 
@@ -21,10 +23,16 @@ beforeEach(() => {
   getWorkspace.mockReset();
   getFindings.mockReset();
   getReconModules.mockReset();
+  getScans.mockReset();
+  // Default: no scans → callers fall back to workspace domain/name for the target.
+  getScans.mockResolvedValue({ data: [] });
 });
 
 function seed() {
   getWorkspace.mockResolvedValue({ id: "ws1", name: "example.com" });
+  getScans.mockResolvedValue({
+    data: [{ id: "s1", status: "completed", target: "example.com", summary: { mode: "gold" } }],
+  });
   getFindings.mockResolvedValue({
     data: [
       { id: "f1", title: "MySQL exposed", severity: "high", category: "network_exposure", affectedAsset: "1.2.3.4:3306", description: "3306 open", cvssScore: "7.5", remediation: "Firewall", evidence: [{ snippet: "1.2.3.4:3306 MySQL" }] },
@@ -47,6 +55,8 @@ describe("buildDocxInput", () => {
     seed();
     const input = await buildDocxInput("ws1", {});
     expect(input.target).toBe("example.com");
+    // Mode + target are derived from the latest completed scan, not hardcoded.
+    expect(input.scanMode).toBe("Gold (comprehensive, full coverage)");
     expect(input.findings).toHaveLength(2);
     expect(input.findings[0]).toMatchObject({ title: "MySQL exposed", severity: "high", cvssScore: "7.5" });
     expect(input.findings[0].evidenceText).toContain("1.2.3.4:3306");

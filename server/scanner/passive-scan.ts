@@ -10,7 +10,7 @@ import { checkSecurityHeaders, detectServerInfo, detectTechStack, parseSocialTag
 import {
   getWhois, extractEmailsFromWhois, extractEmailsFromText, extractEmailsFromCrtSh, getServerLocation,
 } from "./osint-helpers.js";
-import { buildSPFFindings, buildDMARCFindings, processHarvestedEmails } from "./osint-email-dns.js";
+import { buildSPFFindings, buildDMARCFindings, deriveMailContext, processHarvestedEmails } from "./osint-email-dns.js";
 import { scanSubdomainTakeover } from "./takeover.js";
 import { fetchSubdomainsFromFreeSources, fetchWaybackUrls, reverseDnsLookup } from "./passive-sources.js";
 import { enrichIP } from "../api-integrations.js";
@@ -72,8 +72,9 @@ export async function runPassiveScan(
 
   const spfAnalysis = analyzeSPF(txtRecords);
   const dmarcAnalysis = analyzeDMARC(dmarcTxt);
-  results.findings.push(...buildSPFFindings(domain, spfAnalysis, txtRecords, now));
-  results.findings.push(...buildDMARCFindings(domain, dmarcAnalysis, now));
+  const mailContext = await deriveMailContext(domain, mxRecords, getDNSTxtRecords);
+  results.findings.push(...buildSPFFindings(domain, spfAnalysis, txtRecords, now, mailContext));
+  results.findings.push(...buildDMARCFindings(domain, dmarcAnalysis, now, mailContext));
 
   const dkimRecord = dkimTxt?.flat().find((r) => r.startsWith("v=DKIM1") || r.includes("p="));
   const cloudProviders = extractCloudProvidersFromSPF(spfAnalysis.record, mxRecords);
