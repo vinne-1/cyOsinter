@@ -22,9 +22,17 @@ declare module "http" {
   }
 }
 
-// Security headers — disable CSP in dev (Vite HMR needs full access), enforce in production
+// Security headers — disable CSP in dev (Vite HMR needs full access), enforce in production.
+// NOTE: helmet injects `upgrade-insecure-requests` into its default CSP. This app is
+// self-hosted and routinely served over plain HTTP on a LAN IP/host, where that directive
+// forces the browser to fetch same-origin assets over HTTPS (which the HTTP server can't
+// answer) → ERR_SSL_PROTOCOL_ERROR and a blank page. `localhost` is exempt; a bare IP is
+// not. We disable that one directive (set to null) so the rest of the CSP still applies.
+// HSTS is likewise disabled: over HTTP it's ignored anyway, and it would pin HTTPS on hosts
+// that have no TLS. Front this app with a TLS-terminating reverse proxy for HTTPS in prod.
 app.use(
   helmet({
+    hsts: false,
     contentSecurityPolicy: process.env.NODE_ENV === "production" ? {
       directives: {
         defaultSrc: ["'self'"],
@@ -33,6 +41,7 @@ app.use(
         scriptSrc: ["'self'"],
         imgSrc: ["'self'", "data:", "blob:"],
         connectSrc: ["'self'", "ws:", "wss:"],
+        upgradeInsecureRequests: null,
       },
     } : false,
   }),
