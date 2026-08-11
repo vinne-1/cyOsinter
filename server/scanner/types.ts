@@ -134,6 +134,11 @@ export interface ReconData {
     users: Array<{ id?: number; name?: string; slug?: string }>;
     xmlrpcEnabled: boolean;
   };
+  // Keyless people/employee-exposure OSINT (org-scoped, public data only).
+  peopleExposure?: {
+    people: Array<{ name?: string; email?: string; emailInferred?: boolean; source: string; gravatar?: { displayName?: string; location?: string; accounts?: string[]; profileUrl?: string } }>;
+    emailFormat?: string;
+  };
 }
 
 export interface EvidenceItem {

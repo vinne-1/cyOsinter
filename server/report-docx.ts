@@ -63,6 +63,11 @@ export interface ReportDocxInput {
     redirectChain?: Array<{ status: number; url: string; location?: string }>;
     /** Reverse-IP: other domains co-hosted on the same IP (Record<ip, hostnames[]>). */
     coHostedDomains?: Record<string, string[]>;
+    /** Keyless people/employee exposure (org-scoped, public data only). */
+    people?: {
+      emailFormat?: string;
+      list: Array<{ name?: string; email?: string; emailInferred?: boolean; source: string; gravatar?: { profileUrl?: string; accounts?: string[] } }>;
+    };
   };
   findings: ReportFinding[];
   falsePositives?: Array<{ claim: string; result: string; verdict: string }>;
@@ -366,6 +371,30 @@ export async function generateReportDocx(input: ReportDocxInput): Promise<Buffer
         children.push(p(`${ip} — ${hosts.length} domain(s):`, { bold: true, spacingAfter: 40 }));
         children.push(p(hosts.slice(0, 60).join(", "), { size: 16, color: GREY }));
       }
+    }
+  }
+
+  // ── People / employee exposure (keyless, org-scoped, public data) ──
+  const people = recon.people;
+  if (people && people.list.length) {
+    const observed = people.list.filter((x) => !x.emailInferred);
+    if (observed.length) {
+      children.push(sec("People / Employee Exposure"));
+      children.push(p(`${observed.length} employee identit${observed.length === 1 ? "y is" : "ies are"} discoverable from public sources (git commit metadata, email harvesting${people.list.some((x) => x.gravatar) ? ", Gravatar" : ""})${people.emailFormat ? `, and the organization's email format appears to be "${people.emailFormat}"` : ""}. This is phishing-relevant exposure, not a system vulnerability — it informs user-awareness and email-hardening decisions.`));
+      children.push(new Table({
+        width: { size: 100, type: WidthType.PERCENTAGE },
+        rows: [
+          new TableRow({ children: ["Name", "Email", "Source", "Linked accounts"].map((h, i) =>
+            cell([new Paragraph({ children: [t(h, { bold: true, size: 15 })] })], { width: [24, 34, 20, 22][i] })) }),
+          ...people.list.slice(0, 40).map((x) => new TableRow({ children: [
+            cell([new Paragraph({ children: [t(x.name ?? "-", { size: 15 })] })], { width: 24 }),
+            cell([new Paragraph({ children: [t((x.email ?? "-") + (x.emailInferred ? " (inferred)" : ""), { size: 15, color: x.emailInferred ? GREY : undefined })] })], { width: 34 }),
+            cell([new Paragraph({ children: [t(x.source, { size: 14 })] })], { width: 20 }),
+            cell([new Paragraph({ children: [t(x.gravatar?.accounts?.length ? x.gravatar.accounts.slice(0, 3).join(", ") : (x.gravatar?.profileUrl ?? "-"), { size: 13 })] })], { width: 22 }),
+          ] })),
+        ],
+      }));
+      children.push(p("Addresses marked \"(inferred)\" were derived from the detected email format for a known name and are unverified.", { italics: true, size: 15, color: GREY }));
     }
   }
 

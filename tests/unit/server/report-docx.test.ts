@@ -87,6 +87,10 @@ describe("generateReportDocx", () => {
         geo: { country: "US", city: "Mountain View", org: "Google LLC" },
         redirectChain: [{ status: 301, url: "http://example.com", location: "https://example.com" }, { status: 200, url: "https://example.com" }],
         coHostedDomains: { "1.2.3.4": ["neighbour-one.com", "neighbour-two.org"] },
+        people: { emailFormat: "first.last", list: [
+          { name: "Jane Doe", email: "jane.doe@example.com", source: "github-commit", gravatar: { accounts: ["https://twitter.com/jane"] } },
+          { name: "Bob Roe", email: "bob.roe@example.com", emailInferred: true, source: "inferred" },
+        ] },
       },
     };
     const text = await docText(await generateReportDocx(rich));
@@ -109,6 +113,10 @@ describe("generateReportDocx", () => {
     // Co-hosted domains (reverse IP)
     expect(text).toContain("Co-hosted Domains (Reverse IP)");
     expect(text).toContain("neighbour-one.com");
+    // People / employee exposure
+    expect(text).toContain("People / Employee Exposure");
+    expect(text).toContain("jane.doe@example.com");
+    expect(text).toContain("(inferred)"); // Bob's permuted address is labelled
   });
 
   it("omits the new sections entirely when their data is absent (no empty tables)", async () => {
@@ -118,5 +126,6 @@ describe("generateReportDocx", () => {
     expect(text).not.toContain("IP Reputation & Hosting");
     expect(text).not.toContain("HTTP Redirect Chain");
     expect(text).not.toContain("Co-hosted Domains (Reverse IP)");
+    expect(text).not.toContain("People / Employee Exposure");
   });
 });

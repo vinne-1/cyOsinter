@@ -74,6 +74,7 @@ export async function buildDocxInput(
   const domainInfoMod = moduleData(mods, "domain_info");
   const redirectMod = moduleData(mods, "redirect_chain");
   const websiteMod = moduleData(mods, "website_overview");
+  const peopleMod = moduleData(mods, "people_exposure");
 
   const ips = ((attack?.dns as Record<string, unknown> | undefined)?.ips as string[] | undefined)
     ?? ((dnsOv?.dnsRecords as Record<string, unknown> | undefined)?.a as string[] | undefined) ?? [];
@@ -101,6 +102,11 @@ export async function buildDocxInput(
   const ptr = (attack?.reverseDns as Record<string, string[]> | undefined);
   // Reverse-IP co-hosted domains: Record<ip, string[]>
   const coHostedDomains = (attack?.coHostedDomains as Record<string, string[]> | undefined);
+  // People / employee exposure (keyless, org-scoped).
+  const peopleList = peopleMod?.people as NonNullable<NonNullable<ReportDocxInput["recon"]>["people"]>["list"] | undefined;
+  const people = peopleList && peopleList.length
+    ? { emailFormat: peopleMod?.emailFormat as string | undefined, list: peopleList }
+    : undefined;
   // Full DNS record set + DNSSEC from the dns_overview module.
   const dnsRecords = dnsOv?.dnsRecords as NonNullable<ReportDocxInput["recon"]>["dnsRecords"];
   const dnssec = dnsOv?.dnssec as { soaPresent?: boolean } | undefined;
@@ -192,6 +198,7 @@ export async function buildDocxInput(
       geo,
       redirectChain: redirectChain && redirectChain.length ? redirectChain : undefined,
       coHostedDomains: coHostedDomains && Object.keys(coHostedDomains).length ? coHostedDomains : undefined,
+      people,
     },
     findings,
     falsePositives: opts.falsePositives,

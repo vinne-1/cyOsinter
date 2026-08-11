@@ -16,6 +16,7 @@ import { scanSecrets } from "./secret-scanner.js";
 import { establishSoft404Fingerprint, classifyPathResults, buildExposedPathFindings } from "./osint-directory-scan.js";
 import { runWordPressChecks } from "./wordpress-checks.js";
 import { runGithubDorks } from "./github-dork.js";
+import { runPeopleOsint } from "./people-osint.js";
 import { buildSPFFindings, buildDMARCFindings, deriveMailContext, processHarvestedEmails } from "./osint-email-dns.js";
 
 const log = createLogger("scanner");
@@ -556,6 +557,18 @@ export async function runOSINTScan(domain: string, onProgress?: ScanProgressCall
     }
   } catch (err) {
     log.warn({ err }, "WordPress checks failed");
+  }
+
+  // People / employee-exposure OSINT — keyless, org-scoped, public data only.
+  try {
+    await report("Mapping employee / people exposure (public sources)...", 99, "people_osint");
+    const people = await runPeopleOsint(domain, Array.from(domainEmails.keys()), now, {});
+    results.findings.push(...people.findings);
+    if (people.people.length > 0) {
+      results.reconData.peopleExposure = { people: people.people, emailFormat: people.emailFormat };
+    }
+  } catch (err) {
+    log.warn({ err }, "People OSINT failed");
   }
 
   // GitHub code dorking — optional, key-gated (GITHUB_TOKEN). No-op without a token.

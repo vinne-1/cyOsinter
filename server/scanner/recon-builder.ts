@@ -370,6 +370,21 @@ export async function buildReconModules(
         },
       });
     }
+
+    // People / employee-exposure (keyless, org-scoped) — surfaced for the dashboard.
+    if (w.peopleExposure && w.peopleExposure.people.length > 0) {
+      modules.push({
+        moduleType: "people_exposure",
+        confidence: 80,
+        data: {
+          source: "GitHub commit metadata + email harvesting + Gravatar (public, keyless)",
+          people: w.peopleExposure.people,
+          emailFormat: w.peopleExposure.emailFormat,
+          observedCount: w.peopleExposure.people.filter((p) => !p.emailInferred).length,
+          verifiedAt: new Date().toISOString(),
+        },
+      });
+    }
   }
 
   // Phase 2: Advanced detection recon modules
