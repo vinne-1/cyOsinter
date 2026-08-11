@@ -99,6 +99,8 @@ export async function buildDocxInput(
   // ── Previously-collected-but-dropped lookups, now surfaced ──
   // Reverse DNS (PTR): Record<ip, string[]>
   const ptr = (attack?.reverseDns as Record<string, string[]> | undefined);
+  // Reverse-IP co-hosted domains: Record<ip, string[]>
+  const coHostedDomains = (attack?.coHostedDomains as Record<string, string[]> | undefined);
   // Full DNS record set + DNSSEC from the dns_overview module.
   const dnsRecords = dnsOv?.dnsRecords as NonNullable<ReportDocxInput["recon"]>["dnsRecords"];
   const dnssec = dnsOv?.dnssec as { soaPresent?: boolean } | undefined;
@@ -189,6 +191,7 @@ export async function buildDocxInput(
       ipReputation: ipReputation && ipReputation.length ? ipReputation : undefined,
       geo,
       redirectChain: redirectChain && redirectChain.length ? redirectChain : undefined,
+      coHostedDomains: coHostedDomains && Object.keys(coHostedDomains).length ? coHostedDomains : undefined,
     },
     findings,
     falsePositives: opts.falsePositives,

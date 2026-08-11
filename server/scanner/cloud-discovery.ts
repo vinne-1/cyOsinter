@@ -74,7 +74,7 @@ interface BucketCheckTarget {
   url: string;
 }
 
-function buildBucketTargets(domain: string): BucketCheckTarget[] {
+export function buildBucketTargets(domain: string): BucketCheckTarget[] {
   const baseName = domain.replace(/\./g, "-");
   const dotName = domain;
   const suffixes = ["", "-backup", "-assets", "-static", "-media", "-logs", "-dev", "-staging", "-prod"];
@@ -99,6 +99,14 @@ function buildBucketTargets(domain: string): BucketCheckTarget[] {
     if (name !== dotVariant) {
       targets.push({ provider: "GCP", name: dotVariant, url: `https://storage.googleapis.com/${dotVariant}` });
     }
+
+    // DigitalOcean Spaces (S3-compatible, region-scoped). A few common regions.
+    for (const region of ["nyc3", "sfo3", "ams3"]) {
+      targets.push({ provider: "DigitalOcean", name, url: `https://${name}.${region}.digitaloceanspaces.com` });
+    }
+
+    // Firebase Realtime Database — publicly-readable DB check (/.json returns data).
+    targets.push({ provider: "Firebase", name, url: `https://${name}.firebaseio.com/.json` });
   }
 
   return targets;

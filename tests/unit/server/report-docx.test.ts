@@ -86,6 +86,7 @@ describe("generateReportDocx", () => {
         ipReputation: [{ ip: "1.2.3.4", abuseScore: 42, totalReports: 7, vtMalicious: 3, asn: 15169, asnName: "GOOGLE", country: "US", city: "Mountain View", ptr: "host.example.net" }],
         geo: { country: "US", city: "Mountain View", org: "Google LLC" },
         redirectChain: [{ status: 301, url: "http://example.com", location: "https://example.com" }, { status: 200, url: "https://example.com" }],
+        coHostedDomains: { "1.2.3.4": ["neighbour-one.com", "neighbour-two.org"] },
       },
     };
     const text = await docText(await generateReportDocx(rich));
@@ -105,6 +106,9 @@ describe("generateReportDocx", () => {
     expect(text).toContain("host.example.net");
     // Redirect chain
     expect(text).toContain("HTTP Redirect Chain");
+    // Co-hosted domains (reverse IP)
+    expect(text).toContain("Co-hosted Domains (Reverse IP)");
+    expect(text).toContain("neighbour-one.com");
   });
 
   it("omits the new sections entirely when their data is absent (no empty tables)", async () => {
@@ -113,5 +117,6 @@ describe("generateReportDocx", () => {
     expect(text).not.toContain("Domain Registration (WHOIS)");
     expect(text).not.toContain("IP Reputation & Hosting");
     expect(text).not.toContain("HTTP Redirect Chain");
+    expect(text).not.toContain("Co-hosted Domains (Reverse IP)");
   });
 });

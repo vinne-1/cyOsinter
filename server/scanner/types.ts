@@ -125,6 +125,8 @@ export interface ReconData {
   // Phase 3: Free passive OSINT sources
   passiveSources?: Record<string, number>;
   reverseDns?: Record<string, string[]>;
+  /** Reverse-IP: other domains co-hosted on the same IP (Record<ip, hostnames[]>). */
+  coHostedDomains?: Record<string, string[]>;
   waybackUrls?: string[];
   // Phase 4: Verified web-app checks
   wordpress?: {

@@ -253,3 +253,42 @@ export async function reverseDnsLookup(ips: string[]): Promise<Record<string, st
   }
   return out;
 }
+
+/**
+ * Reverse-IP lookup: OTHER domains hosted on the same IP address (virtual-host
+ * neighbours), via HackerTarget's free keyless reverse-IP endpoint. This is
+ * distinct from reverse DNS (PTR): it surfaces co-hosted sites that share the
+ * target's server — useful for shared-hosting attack-surface expansion and for
+ * spotting unexpected neighbours on a supposedly dedicated host.
+ *
+ * Fail-soft: a rate-limited / errored source contributes nothing. Results are
+ * capped and IP-literals / the target's own apex are filtered out.
+ */
+export async function reverseIpLookup(
+  ips: string[],
+  targetDomain: string,
+  perIpCap = 100,
+): Promise<Record<string, string[]>> {
+  const out: Record<string, string[]> = {};
+  const apex = targetDomain.toLowerCase();
+  for (const ip of ips) {
+    try {
+      const text = await fetchText(`https://api.hackertarget.com/reverseiplookup/?q=${encodeURIComponent(ip)}`, 15000);
+      if (!text) continue;
+      // The API returns an error sentence (e.g. "API count exceeded", "No DNS A
+      // records found") rather than a hostname list when it has nothing useful.
+      if (/error|api count|no records|no dns|not found|invalid/i.test(text) && !text.includes("\n") && !HOSTNAME_RE.test(text.trim())) continue;
+      const hosts = Array.from(new Set(
+        text.split(/\r?\n/)
+          .map((l) => l.trim().toLowerCase())
+          .filter((h) => HOSTNAME_RE.test(h))
+          // Exclude the target's own apex/subdomains — those are already ours.
+          .filter((h) => h !== apex && !h.endsWith(`.${apex}`)),
+      )).slice(0, perIpCap);
+      if (hosts.length > 0) out[ip] = hosts;
+    } catch {
+      /* reverse-IP source unavailable — skip */
+    }
+  }
+  return out;
+}

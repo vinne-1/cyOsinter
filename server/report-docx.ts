@@ -61,6 +61,8 @@ export interface ReportDocxInput {
     geo?: { country?: string; region?: string; city?: string; org?: string };
     /** HTTP redirect chain observed for the primary domain. */
     redirectChain?: Array<{ status: number; url: string; location?: string }>;
+    /** Reverse-IP: other domains co-hosted on the same IP (Record<ip, hostnames[]>). */
+    coHostedDomains?: Record<string, string[]>;
   };
   findings: ReportFinding[];
   falsePositives?: Array<{ claim: string; result: string; verdict: string }>;
@@ -350,6 +352,21 @@ export async function generateReportDocx(input: ReportDocxInput): Promise<Buffer
         ] })),
       ],
     }));
+  }
+
+  // ── Co-hosted domains (reverse IP) ──
+  const coHosted = recon.coHostedDomains;
+  if (coHosted && Object.keys(coHosted).length) {
+    const totalCo = Object.values(coHosted).reduce((n, hs) => n + hs.length, 0);
+    if (totalCo > 0) {
+      children.push(sec("Co-hosted Domains (Reverse IP)"));
+      children.push(p("Other domains observed sharing the target's resolved IP address(es). On dedicated infrastructure these are additional attack surface for the same owner; on shared hosting they are unrelated neighbours (noted for context)."));
+      for (const [ip, hosts] of Object.entries(coHosted)) {
+        if (!hosts.length) continue;
+        children.push(p(`${ip} — ${hosts.length} domain(s):`, { bold: true, spacingAfter: 40 }));
+        children.push(p(hosts.slice(0, 60).join(", "), { size: 16, color: GREY }));
+      }
+    }
   }
 
   // ── Ports ──

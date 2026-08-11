@@ -19,7 +19,7 @@ import { runPortScan } from "./port-scan.js";
 import { runCloudDiscovery } from "./cloud-discovery.js";
 import { runContainerDetection } from "./container-detection.js";
 import { runWAFBypassTest } from "./waf-bypass.js";
-import { fetchSubdomainsFromFreeSources, fetchWaybackUrls, reverseDnsLookup } from "./passive-sources.js";
+import { fetchSubdomainsFromFreeSources, fetchWaybackUrls, reverseDnsLookup, reverseIpLookup } from "./passive-sources.js";
 import { assessServiceExposure } from "./service-exposure.js";
 
 /** CVSS score by severity band for findings produced by advanced sub-modules. */
@@ -611,6 +611,13 @@ export async function runEASMScan(domain: string, onProgress?: ScanProgressCallb
       if (Object.keys(ptr).length > 0) results.reconData.reverseDns = ptr;
     } catch (err) {
       log.warn({ err, domain }, "Reverse DNS lookup failed (non-fatal)");
+    }
+    // Reverse-IP: other domains co-hosted on the same IP (shared-hosting neighbours).
+    try {
+      const coHosted = await reverseIpLookup(mainDns.ips.slice(0, 5), domain);
+      if (Object.keys(coHosted).length > 0) results.reconData.coHostedDomains = coHosted;
+    } catch (err) {
+      log.warn({ err, domain }, "Reverse IP lookup failed (non-fatal)");
     }
   }
 

@@ -15,6 +15,7 @@ import { discoverAPIs } from "./api-discovery.js";
 import { scanSecrets } from "./secret-scanner.js";
 import { establishSoft404Fingerprint, classifyPathResults, buildExposedPathFindings } from "./osint-directory-scan.js";
 import { runWordPressChecks } from "./wordpress-checks.js";
+import { runGithubDorks } from "./github-dork.js";
 import { buildSPFFindings, buildDMARCFindings, deriveMailContext, processHarvestedEmails } from "./osint-email-dns.js";
 
 const log = createLogger("scanner");
@@ -555,6 +556,15 @@ export async function runOSINTScan(domain: string, onProgress?: ScanProgressCall
     }
   } catch (err) {
     log.warn({ err }, "WordPress checks failed");
+  }
+
+  // GitHub code dorking — optional, key-gated (GITHUB_TOKEN). No-op without a token.
+  try {
+    await report("Dorking public GitHub code for leaked secrets...", 99, "github_dork");
+    const ghFindings = await runGithubDorks(domain, now, { signal });
+    results.findings.push(...ghFindings);
+  } catch (err) {
+    log.warn({ err }, "GitHub dorking failed");
   }
 
   await report("OSINT scan complete.", 100, "build_modules", 0);

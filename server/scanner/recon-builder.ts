@@ -180,6 +180,7 @@ export async function buildReconModules(
           // Persist lookups that were previously collected then dropped, so they
           // survive to the DB, dashboard, and report (reverse DNS + IP reputation).
           reverseDns: easmResults.reconData.reverseDns || {},
+          coHostedDomains: easmResults.reconData.coHostedDomains || {},
           ipReputation: easmResults.reconData.threatIntel || {},
           waybackUrls: easmResults.reconData.waybackUrls || [],
           verifiedAt: new Date().toISOString(),
