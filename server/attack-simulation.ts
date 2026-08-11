@@ -41,28 +41,28 @@ const PLAYBOOKS: readonly Playbook[] = [
         order: 1,
         action: "Identify injectable parameter",
         description: "Locate input fields or API parameters vulnerable to SQL injection.",
-        findingCategories: ["sql-injection", "injection", "sqli"],
+        findingCategories: ["sql-injection", "injection", "sqli", "vulnerability"],
         severity: "critical",
       },
       {
         order: 2,
         action: "Extract database schema",
         description: "Use UNION-based or error-based techniques to enumerate tables and columns.",
-        findingCategories: ["sql-injection", "information-disclosure", "error-handling"],
+        findingCategories: ["sql-injection", "information-disclosure", "error-handling", "vulnerability", "information_disclosure"],
         severity: "high",
       },
       {
         order: 3,
         action: "Dump sensitive data",
         description: "Extract credentials, PII, or other sensitive records from the database.",
-        findingCategories: ["sql-injection", "sensitive-data", "data-exposure"],
+        findingCategories: ["sql-injection", "sensitive-data", "data-exposure", "data_leak", "leaked_credential", "secret_exposure", "information_disclosure"],
         severity: "critical",
       },
       {
         order: 4,
         action: "Escalate via database functions",
         description: "Use xp_cmdshell, LOAD_FILE, or similar to gain OS-level access.",
-        findingCategories: ["sql-injection", "privilege-escalation", "rce"],
+        findingCategories: ["sql-injection", "privilege-escalation", "rce", "vulnerability"],
         severity: "critical",
       },
     ],
@@ -92,7 +92,7 @@ const PLAYBOOKS: readonly Playbook[] = [
         order: 3,
         action: "Impersonate victim user",
         description: "Use stolen session to access the victim account and perform actions.",
-        findingCategories: ["session-management", "authentication", "access-control"],
+        findingCategories: ["session-management", "authentication", "access-control", "cookie_security"],
         severity: "critical",
       },
     ],
@@ -108,28 +108,28 @@ const PLAYBOOKS: readonly Playbook[] = [
         order: 1,
         action: "Identify SSRF endpoint",
         description: "Find a server-side endpoint that fetches user-supplied URLs.",
-        findingCategories: ["ssrf", "server-side-request-forgery", "url-redirect"],
+        findingCategories: ["ssrf", "server-side-request-forgery", "url-redirect", "open_redirect", "vulnerability"],
         severity: "high",
       },
       {
         order: 2,
         action: "Access cloud metadata service",
         description: "Request http://169.254.169.254/latest/meta-data/ to access instance metadata.",
-        findingCategories: ["ssrf", "cloud-misconfiguration", "metadata-exposure"],
+        findingCategories: ["ssrf", "cloud-misconfiguration", "metadata-exposure", "cloud_exposure", "container_exposure"],
         severity: "critical",
       },
       {
         order: 3,
         action: "Extract IAM credentials",
         description: "Retrieve temporary security credentials from the metadata endpoint.",
-        findingCategories: ["ssrf", "credential-exposure", "cloud-misconfiguration"],
+        findingCategories: ["ssrf", "credential-exposure", "cloud-misconfiguration", "secret_exposure", "leaked_credential", "cloud_exposure"],
         severity: "critical",
       },
       {
         order: 4,
         action: "Pivot to cloud resources",
         description: "Use stolen IAM credentials to access S3 buckets, databases, or other cloud services.",
-        findingCategories: ["cloud-misconfiguration", "privilege-escalation", "lateral-movement"],
+        findingCategories: ["cloud-misconfiguration", "privilege-escalation", "lateral-movement", "cloud_exposure", "container_exposure", "infrastructure_disclosure"],
         severity: "critical",
       },
     ],
@@ -152,7 +152,7 @@ const PLAYBOOKS: readonly Playbook[] = [
         order: 2,
         action: "Verify service is claimable",
         description: "Confirm the target service (S3, Azure, Heroku, etc.) can be registered by an attacker.",
-        findingCategories: ["subdomain-takeover", "cloud-misconfiguration"],
+        findingCategories: ["subdomain-takeover", "cloud-misconfiguration", "cloud_exposure"],
         severity: "high",
       },
       {
@@ -175,21 +175,21 @@ const PLAYBOOKS: readonly Playbook[] = [
         order: 1,
         action: "Discover unprotected endpoints",
         description: "Identify API endpoints missing authentication or authorization checks.",
-        findingCategories: ["broken-authentication", "missing-auth", "api-security", "idor"],
+        findingCategories: ["broken-authentication", "missing-auth", "api-security", "idor", "api_exposure", "information_disclosure"],
         severity: "high",
       },
       {
         order: 2,
         action: "Enumerate sensitive resources",
         description: "Access user data, admin panels, or internal APIs without credentials.",
-        findingCategories: ["broken-authentication", "access-control", "idor", "information-disclosure"],
+        findingCategories: ["broken-authentication", "access-control", "idor", "information-disclosure", "api_exposure", "data_leak"],
         severity: "high",
       },
       {
         order: 3,
         action: "Extract or modify data",
         description: "Read sensitive information or perform unauthorized mutations.",
-        findingCategories: ["data-exposure", "access-control", "api-security"],
+        findingCategories: ["data-exposure", "access-control", "api-security", "data_leak", "api_exposure", "leaked_credential", "secret_exposure"],
         severity: "critical",
       },
     ],
@@ -205,28 +205,28 @@ const PLAYBOOKS: readonly Playbook[] = [
         order: 1,
         action: "Gain initial low-privilege access",
         description: "Obtain a valid low-privilege account through credential stuffing, default creds, or registration.",
-        findingCategories: ["default-credentials", "weak-password", "broken-authentication"],
+        findingCategories: ["default-credentials", "weak-password", "broken-authentication", "leaked_credential", "secret_exposure", "information_disclosure"],
         severity: "medium",
       },
       {
         order: 2,
         action: "Identify privilege boundaries",
         description: "Map role differences and find endpoints that check roles client-side only.",
-        findingCategories: ["access-control", "idor", "broken-access-control", "missing-authorization"],
+        findingCategories: ["access-control", "idor", "broken-access-control", "missing-authorization", "api_exposure", "information_disclosure"],
         severity: "high",
       },
       {
         order: 3,
         action: "Bypass authorization checks",
         description: "Manipulate requests to access admin functions (parameter tampering, JWT manipulation).",
-        findingCategories: ["privilege-escalation", "access-control", "jwt-vulnerability", "broken-access-control"],
+        findingCategories: ["privilege-escalation", "access-control", "jwt-vulnerability", "broken-access-control", "vulnerability", "api_exposure"],
         severity: "critical",
       },
       {
         order: 4,
         action: "Achieve full administrative access",
         description: "Take over admin account or grant self elevated permissions.",
-        findingCategories: ["privilege-escalation", "account-takeover", "access-control"],
+        findingCategories: ["privilege-escalation", "account-takeover", "access-control", "leaked_credential", "vulnerability"],
         severity: "critical",
       },
     ],
@@ -237,12 +237,15 @@ export function getPlaybooks(): Playbook[] {
   return [...PLAYBOOKS];
 }
 
+/** Normalize a category so hyphen/underscore/space and case differences don't matter
+ *  (e.g. "cookie-security", "cookie_security", "Cookie Security" all compare equal). */
+function normalizeCategory(c: string): string {
+  return c.toLowerCase().replace(/[-_\s]+/g, "");
+}
+
 function doesStepMatch(step: PlaybookStep, allFindings: readonly Finding[]): Finding[] {
-  const categorySet = new Set(step.findingCategories.map((c) => c.toLowerCase()));
-  return allFindings.filter((f) => {
-    const findingCategory = (f.category ?? "").toLowerCase();
-    return categorySet.has(findingCategory);
-  });
+  const categorySet = new Set(step.findingCategories.map(normalizeCategory));
+  return allFindings.filter((f) => categorySet.has(normalizeCategory(f.category ?? "")));
 }
 
 function buildRecommendations(
