@@ -144,6 +144,15 @@ export function setApiKey(provider: ApiKeyProvider, key: string): void {
     delete apiKeysFromUI[provider];
   }
   saveIntegrationsConfig();
+  // A changed key invalidates cached (possibly keyless / stale) enrichment results,
+  // so subsequent lookups — including auto re-enrichment — fetch with the new key.
+  clearEnrichmentCaches();
+}
+
+/** Clear IP-enrichment + BGP caches (called when a key changes). */
+export function clearEnrichmentCaches(): void {
+  enrichmentCache.clear();
+  bgpViewCache.clear();
 }
 
 export function getTavilyKey(): string | undefined {

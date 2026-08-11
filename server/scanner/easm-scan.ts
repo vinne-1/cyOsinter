@@ -566,7 +566,7 @@ export async function runEASMScan(domain: string, onProgress?: ScanProgressCallb
         if (shodan && (shodan.ports.length > 0 || shodan.vulns.length > 0)) {
           const hasVulns = shodan.vulns.length > 0;
           results.findings.push({
-            title: `Shodan-indexed exposure for ${mainIp}${hasVulns ? ` — ${shodan.vulns.length} known CVE(s)` : ""}`,
+            title: `Shodan-indexed exposure for ${mainIp}`,
             description: `Shodan has indexed ${mainIp} (${domain}) with ${shodan.ports.length} open port(s)${shodan.products.length ? ` running ${shodan.products.slice(0, 8).join(", ")}` : ""}.${hasVulns ? ` Shodan associates ${shodan.vulns.length} known CVE(s) with this host: ${shodan.vulns.slice(0, 15).join(", ")}.` : ""} This reflects the host's internet-facing footprint as seen by external scanners.`,
             severity: hasVulns ? "high" : "info",
             category: hasVulns ? "vulnerability" : "network_exposure",

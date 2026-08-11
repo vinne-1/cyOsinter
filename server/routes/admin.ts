@@ -7,6 +7,7 @@ import { createLogger } from "../logger";
 import { computeSecurityScore } from "@shared/scoring";
 import { startMonitoring, stopMonitoring, getMonitoringStatus } from "../continuous-monitoring";
 import { enrichIPs, getIntegrationsStatus, setApiKey, setOllamaConfig } from "../api-integrations";
+import { reEnrichRecentWorkspaces } from "../enrichment-service";
 import { getOllamaStatus } from "../ai-service";
 import { requireAdmin } from "./middleware";
 import { requireWorkspaceRole } from "./auth-middleware";
@@ -51,11 +52,21 @@ export function createAdminRouter(httpServer: Server): Router {
   adminRouter.post("/integrations", adminSettingsGuard, (req, res) => {
     try {
       const body = integrationsBodySchema.parse(req.body ?? {});
+      let threatKeyAdded = false;
       for (const provider of ["abuseipdb", "virustotal", "tavily", "shodan"] as const) {
-        if (body[provider] !== undefined) setApiKey(provider, body[provider] as string);
+        if (body[provider] !== undefined) {
+          setApiKey(provider, body[provider] as string);
+          // A non-empty threat-intel key was just added → trigger auto re-enrichment.
+          if (provider !== "tavily" && (body[provider] as string).trim()) threatKeyAdded = true;
+        }
       }
       if (body.ollamaBaseUrl !== undefined || body.ollamaModel !== undefined || body.ollamaEnabled !== undefined) {
         setOllamaConfig({ baseUrl: body.ollamaBaseUrl, model: body.ollamaModel, enabled: body.ollamaEnabled });
+      }
+      // Retroactively enrich workspaces with running / recently-completed scans so a
+      // key saved during or right after a scan takes effect without a re-scan.
+      if (threatKeyAdded) {
+        reEnrichRecentWorkspaces().catch((err) => routeLog.warn({ err }, "Auto re-enrichment (on key save) failed"));
       }
       res.json(getIntegrationsStatus());
     } catch (err) {
