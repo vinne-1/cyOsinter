@@ -177,6 +177,11 @@ export async function buildReconModules(
           perAssetHeaders: perAssetHeaders || {},
           perAssetLeaks: perAssetLeaks || {},
           assetInventory,
+          // Persist lookups that were previously collected then dropped, so they
+          // survive to the DB, dashboard, and report (reverse DNS + IP reputation).
+          reverseDns: easmResults.reconData.reverseDns || {},
+          ipReputation: easmResults.reconData.threatIntel || {},
+          waybackUrls: easmResults.reconData.waybackUrls || [],
           verifiedAt: new Date().toISOString(),
         },
       });

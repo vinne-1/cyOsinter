@@ -71,6 +71,9 @@ export async function buildDocxInput(
   const web = moduleData(mods, "web_presence");
   const dnsOv = moduleData(mods, "dns_overview");
   const tech = moduleData(mods, "tech_stack");
+  const domainInfoMod = moduleData(mods, "domain_info");
+  const redirectMod = moduleData(mods, "redirect_chain");
+  const websiteMod = moduleData(mods, "website_overview");
 
   const ips = ((attack?.dns as Record<string, unknown> | undefined)?.ips as string[] | undefined)
     ?? ((dnsOv?.dnsRecords as Record<string, unknown> | undefined)?.a as string[] | undefined) ?? [];
@@ -92,6 +95,41 @@ export async function buildDocxInput(
   const techStack = [...techFront, ...techBack];
 
   const em = email?.emailSecurity as Record<string, unknown> | undefined;
+
+  // ── Previously-collected-but-dropped lookups, now surfaced ──
+  // Reverse DNS (PTR): Record<ip, string[]>
+  const ptr = (attack?.reverseDns as Record<string, string[]> | undefined);
+  // Full DNS record set + DNSSEC from the dns_overview module.
+  const dnsRecords = dnsOv?.dnsRecords as NonNullable<ReportDocxInput["recon"]>["dnsRecords"];
+  const dnssec = dnsOv?.dnssec as { soaPresent?: boolean } | undefined;
+  // WHOIS / domain registration.
+  const whois = domainInfoMod?.domainInfo as Record<string, string> | undefined;
+  // Server geolocation (from website_overview.serverLocation).
+  const geo = websiteMod?.serverLocation as { country?: string; region?: string; city?: string; org?: string } | undefined;
+  // Redirect chain.
+  const redirectChain = redirectMod?.redirectChain as Array<{ status: number; url: string; location?: string }> | undefined;
+  // IP reputation: flatten threatIntel Record<ip,{abuseipdb,virustotal,bgp}> → rows.
+  const threat = attack?.ipReputation as Record<string, { abuseipdb?: Record<string, unknown> | null; virustotal?: Record<string, unknown> | null; bgp?: Record<string, unknown> | null }> | undefined;
+  const ipReputation = threat
+    ? Object.entries(threat).map(([ip, t]) => {
+        const abuse = t.abuseipdb as { abuseConfidenceScore?: number; totalReports?: number; isp?: string; countryName?: string } | null | undefined;
+        const vt = t.virustotal as { malicious?: number; as_owner?: string; country?: string } | null | undefined;
+        const bgp = t.bgp as { prefixes?: Array<{ asn?: { asn?: number; name?: string; country_code?: string } }>; maxmind?: { city?: string | null; country_code?: string }; ptr_record?: string | null } | null | undefined;
+        const asnObj = bgp?.prefixes?.[0]?.asn;
+        return {
+          ip,
+          abuseScore: abuse?.abuseConfidenceScore,
+          totalReports: abuse?.totalReports,
+          vtMalicious: vt?.malicious,
+          asn: asnObj?.asn,
+          asnName: asnObj?.name ?? vt?.as_owner,
+          isp: abuse?.isp,
+          country: abuse?.countryName ?? vt?.country ?? bgp?.maxmind?.country_code,
+          city: bgp?.maxmind?.city ?? undefined,
+          ptr: bgp?.ptr_record ?? ptr?.[ip]?.[0],
+        };
+      }).filter((r) => r.abuseScore != null || r.vtMalicious != null || r.asn != null || r.ptr)
+    : undefined;
 
   // Optionally capture live screenshot evidence, keyed per finding, so EVERY
   // finding is illustrated (fail-soft — no browser ⇒ text-only report).
@@ -134,16 +172,23 @@ export async function buildDocxInput(
     recon: {
       ips,
       ns,
+      ptr,
       subdomains,
       ssl: attack?.ssl as NonNullable<ReportDocxInput["recon"]>["ssl"],
       emailSecurity: em ? {
         spf: em.spf as { found?: boolean; record?: string } | undefined,
         dmarc: em.dmarc as { found?: boolean; record?: string } | undefined,
-        dkim: em.dkim as { found?: boolean } | undefined,
+        dkim: em.dkim as { found?: boolean; selector?: string; record?: string } | undefined,
         mx: em.mx as Array<{ exchange: string }> | undefined,
       } : undefined,
       ports: ports.length ? ports : undefined,
       techStack: techStack.length ? techStack : undefined,
+      dnsRecords,
+      dnssec,
+      whois,
+      ipReputation: ipReputation && ipReputation.length ? ipReputation : undefined,
+      geo,
+      redirectChain: redirectChain && redirectChain.length ? redirectChain : undefined,
     },
     findings,
     falsePositives: opts.falsePositives,
