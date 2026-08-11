@@ -86,9 +86,10 @@ export async function buildDocxInput(
   const liveSubs = (web?.liveSubdomains as string[] | undefined) ?? [];
   const subdomains = Array.from(new Set([...discovered, ...liveSubs])).filter(Boolean);
 
-  // Ports from port_services.portScan (Record<ip, [{port,service,banner}]>)
+  // Ports from port_services.portScan (Record<ip, [{port,service,banner}]>) — keep the
+  // IP with each port so the report shows exposure per resolved IP, not just aggregate.
   const portScan = (portSvc?.portScan as Record<string, Array<{ port: number; service?: string; banner?: string }>> | undefined) ?? {};
-  const ports = Object.values(portScan).flat();
+  const ports = Object.entries(portScan).flatMap(([ip, list]) => list.map((p) => ({ ...p, ip })));
 
   // Tech stack (frontend + backend)
   const techFront = (tech?.frontend as Array<{ name: string; source?: string }> | undefined) ?? [];

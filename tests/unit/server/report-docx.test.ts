@@ -87,6 +87,10 @@ describe("generateReportDocx", () => {
         geo: { country: "US", city: "Mountain View", org: "Google LLC" },
         redirectChain: [{ status: 301, url: "http://example.com", location: "https://example.com" }, { status: 200, url: "https://example.com" }],
         coHostedDomains: { "1.2.3.4": ["neighbour-one.com", "neighbour-two.org"] },
+        ports: [
+          { ip: "1.2.3.4", port: 443, service: "https", banner: "nginx" },
+          { ip: "5.6.7.8", port: 22, service: "ssh", banner: "OpenSSH 8.9" },
+        ],
         people: { emailFormat: "first.last", list: [
           { name: "Jane Doe", email: "jane.doe@example.com", source: "github-commit", gravatar: { accounts: ["https://twitter.com/jane"] } },
           { name: "Bob Roe", email: "bob.roe@example.com", emailInferred: true, source: "inferred" },
@@ -117,6 +121,10 @@ describe("generateReportDocx", () => {
     expect(text).toContain("People / Employee Exposure");
     expect(text).toContain("jane.doe@example.com");
     expect(text).toContain("(inferred)"); // Bob's permuted address is labelled
+    // Ports are shown per resolved IP (multi-IP coverage)
+    expect(text).toContain("Network Exposure");
+    expect(text).toContain("5.6.7.8"); // second IP's port row is present
+    expect(text).toContain("OpenSSH 8.9");
   });
 
   it("omits the new sections entirely when their data is absent (no empty tables)", async () => {

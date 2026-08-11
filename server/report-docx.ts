@@ -42,7 +42,7 @@ export interface ReportDocxInput {
       dkim?: { found?: boolean };
       mx?: Array<{ exchange: string }> | string[];
     };
-    ports?: Array<{ port: number; service?: string; banner?: string }>;
+    ports?: Array<{ port: number; service?: string; banner?: string; ip?: string }>;
     techStack?: Array<{ name: string; source?: string }>;
     wordpress?: { isWordPress: boolean; users: Array<{ id?: number; name?: string; slug?: string }>; xmlrpcEnabled: boolean };
     // Full DNS record set (surfaced so every lookup the pipeline performs is reported).
@@ -401,17 +401,25 @@ export async function generateReportDocx(input: ReportDocxInput): Promise<Buffer
   // ── Ports ──
   if (recon.ports?.length) {
     children.push(sec("Network Exposure — Open Ports & Services"));
+    const multiIp = new Set(recon.ports.map((p) => p.ip).filter(Boolean)).size > 1;
     children.push(new Table({
       width: { size: 100, type: WidthType.PERCENTAGE },
       rows: [
-        new TableRow({ children: [cell([new Paragraph({ children: [t("Port", { bold: true, size: 17 })] })], { width: 15 }), cell([new Paragraph({ children: [t("Service", { bold: true, size: 17 })] })], { width: 25 }), cell([new Paragraph({ children: [t("Banner / Note", { bold: true, size: 17 })] })], { width: 60 })] }),
+        new TableRow({ children: [
+          cell([new Paragraph({ children: [t("IP", { bold: true, size: 17 })] })], { width: 18 }),
+          cell([new Paragraph({ children: [t("Port", { bold: true, size: 17 })] })], { width: 12 }),
+          cell([new Paragraph({ children: [t("Service", { bold: true, size: 17 })] })], { width: 22 }),
+          cell([new Paragraph({ children: [t("Banner / Note", { bold: true, size: 17 })] })], { width: 48 }),
+        ] }),
         ...recon.ports.map((pt) => new TableRow({ children: [
-          cell([new Paragraph({ children: [t(String(pt.port), { bold: true, size: 16 })] })], { width: 15 }),
-          cell([new Paragraph({ children: [t(pt.service ?? "-", { size: 16 })] })], { width: 25 }),
-          cell([new Paragraph({ children: [t((pt.banner ?? "").slice(0, 90) || "-", { size: 15 })] })], { width: 60 }),
+          cell([new Paragraph({ children: [t(pt.ip ?? "-", { size: 15 })] })], { width: 18 }),
+          cell([new Paragraph({ children: [t(String(pt.port), { bold: true, size: 16 })] })], { width: 12 }),
+          cell([new Paragraph({ children: [t(pt.service ?? "-", { size: 16 })] })], { width: 22 }),
+          cell([new Paragraph({ children: [t((pt.banner ?? "").slice(0, 90) || "-", { size: 15 })] })], { width: 48 }),
         ] })),
       ],
     }));
+    if (multiIp) children.push(p("Ports are shown per resolved IP — the target resolves to multiple hosts, each scanned independently.", { italics: true, size: 15, color: GREY }));
   }
 
   // ── Web app / WordPress ──

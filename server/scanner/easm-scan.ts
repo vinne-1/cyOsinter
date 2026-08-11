@@ -537,90 +537,81 @@ export async function runEASMScan(domain: string, onProgress?: ScanProgressCallb
 
   if (mainDns.ips.length > 0) {
     const mainIp = mainDns.ips[0];
-    const openPorts = await scanOpenPorts(mainIp, portList);
-    results.reconData.openPorts = openPorts;
+    // Scan + enrich EVERY unique resolved IP: all apex A-records (both modes) plus
+    // subdomain IPs (gold). Previously standard mode only touched the first apex IP,
+    // missing load-balanced / multi-homed hosts.
+    const subIps = gold ? subdomainProbes.flatMap((p) => p.dns.ips) : [];
+    const IP_CAP = gold ? 20 : 8;
+    const allIps = Array.from(new Set([...mainDns.ips, ...subIps])).slice(0, IP_CAP);
 
-    if (gold) {
-      const allIps = Array.from(new Set(subdomainProbes.flatMap(p => p.dns.ips)));
-      const otherIps = allIps.filter(ip => ip !== mainIp);
-      const openPortsByIp: Record<string, number[]> = { [mainIp]: openPorts };
-      for (const ip of otherIps) {
-        openPortsByIp[ip] = await scanOpenPorts(ip, portList);
-      }
-      results.reconData.openPortsByIp = openPortsByIp;
+    // ── Port-scan every resolved IP (both modes) ──
+    const openPortsByIp: Record<string, number[]> = {};
+    for (const ip of allIps) {
+      openPortsByIp[ip] = await scanOpenPorts(ip, portList);
     }
+    results.reconData.openPorts = openPortsByIp[mainIp] ?? [];
+    results.reconData.openPortsByIp = openPortsByIp;
 
-    // Threat intel enrichment for the primary IP (and subdomain IPs in gold mode)
-    try {
-      const [abuseResult, bgpResult] = await Promise.all([
-        enrichIP(mainIp),
-        fetchBGPView(mainIp),
-      ]);
-      results.reconData.threatIntel = {
-        [mainIp]: { abuseipdb: abuseResult.abuseipdb, virustotal: abuseResult.virustotal, bgp: bgpResult },
-      };
-
-      // Shodan host enrichment (key-gated; no-op without a configured key).
+    // ── Threat-intel enrichment for every resolved IP (bounded; VT is rate-limited) ──
+    const ENRICH_CAP = gold ? 12 : 6;
+    const threatIntel: NonNullable<typeof results.reconData.threatIntel> = {};
+    for (const ip of allIps.slice(0, ENRICH_CAP)) {
       try {
-        const shodan = await shodanHostLookup(mainIp);
-        if (shodan && (shodan.ports.length > 0 || shodan.vulns.length > 0)) {
-          const hasVulns = shodan.vulns.length > 0;
+        const [abuse, bgp] = await Promise.all([enrichIP(ip), fetchBGPView(ip)]);
+        threatIntel[ip] = { abuseipdb: abuse.abuseipdb, virustotal: abuse.virustotal, bgp };
+
+        // Shodan host enrichment (key-gated; no-op without a configured key).
+        try {
+          const shodan = await shodanHostLookup(ip);
+          if (shodan && (shodan.ports.length > 0 || shodan.vulns.length > 0)) {
+            const hasVulns = shodan.vulns.length > 0;
+            results.findings.push({
+              title: `Shodan-indexed exposure for ${ip}`,
+              description: `Shodan has indexed ${ip} (${domain}) with ${shodan.ports.length} open port(s)${shodan.products.length ? ` running ${shodan.products.slice(0, 8).join(", ")}` : ""}.${hasVulns ? ` Shodan associates ${shodan.vulns.length} known CVE(s) with this host: ${shodan.vulns.slice(0, 15).join(", ")}.` : ""} This reflects the host's internet-facing footprint as seen by external scanners.`,
+              severity: hasVulns ? "high" : "info",
+              category: hasVulns ? "vulnerability" : "network_exposure",
+              affectedAsset: ip,
+              cvssScore: hasVulns ? "7.5" : "1.0",
+              remediation: hasVulns
+                ? "Review the CVEs Shodan associates with this host, patch affected services, and restrict unnecessary exposed ports."
+                : "Review whether all Shodan-indexed open ports are intended to be internet-facing; close or firewall any that are not.",
+              evidence: [{
+                type: "shodan",
+                description: "Shodan host lookup",
+                snippet: `IP: ${ip}\nPorts: ${shodan.ports.join(", ") || "none"}\nProducts: ${shodan.products.join(", ") || "n/a"}\nCVEs: ${shodan.vulns.join(", ") || "none"}\nOrg: ${shodan.org ?? "n/a"}`,
+                source: "Shodan API",
+                verifiedAt: now,
+              }],
+            });
+          }
+        } catch (err) {
+          log.warn({ err, ip }, "Shodan lookup failed (non-fatal)");
+        }
+
+        if (abuse.abuseipdb && abuse.abuseipdb.abuseConfidenceScore >= 50) {
+          const isPrimary = ip === mainIp;
           results.findings.push({
-            title: `Shodan-indexed exposure for ${mainIp}`,
-            description: `Shodan has indexed ${mainIp} (${domain}) with ${shodan.ports.length} open port(s)${shodan.products.length ? ` running ${shodan.products.slice(0, 8).join(", ")}` : ""}.${hasVulns ? ` Shodan associates ${shodan.vulns.length} known CVE(s) with this host: ${shodan.vulns.slice(0, 15).join(", ")}.` : ""} This reflects the host's internet-facing footprint as seen by external scanners.`,
-            severity: hasVulns ? "high" : "info",
-            category: hasVulns ? "vulnerability" : "network_exposure",
-            affectedAsset: mainIp,
-            cvssScore: hasVulns ? "7.5" : "1.0",
-            remediation: hasVulns
-              ? "Review the CVEs Shodan associates with this host, patch affected services, and restrict unnecessary exposed ports."
-              : "Review whether all Shodan-indexed open ports are intended to be internet-facing; close or firewall any that are not.",
+            title: `High Abuse Score for ${isPrimary ? "Primary " : ""}IP ${ip}`,
+            description: `The IP address ${ip}${isPrimary ? " (primary)" : ""} for ${domain} has an AbuseIPDB confidence score of ${abuse.abuseipdb.abuseConfidenceScore}% (${abuse.abuseipdb.totalReports} reports). This indicates the IP has been reported for malicious activity.`,
+            severity: abuse.abuseipdb.abuseConfidenceScore >= 80 ? "high" : "medium",
+            category: "threat_intelligence",
+            affectedAsset: ip,
+            cvssScore: abuse.abuseipdb.abuseConfidenceScore >= 80 ? "7.5" : "5.3",
+            remediation: "Investigate the reported abuse activity. Consider changing IP address or contacting the hosting provider.",
             evidence: [{
-              type: "shodan",
-              description: "Shodan host lookup",
-              snippet: `IP: ${mainIp}\nPorts: ${shodan.ports.join(", ") || "none"}\nProducts: ${shodan.products.join(", ") || "n/a"}\nCVEs: ${shodan.vulns.join(", ") || "none"}\nOrg: ${shodan.org ?? "n/a"}`,
-              source: "Shodan API",
+              type: "threat_intel",
+              description: "AbuseIPDB IP reputation check",
+              snippet: `IP: ${ip}\nAbuse Score: ${abuse.abuseipdb.abuseConfidenceScore}%\nTotal Reports: ${abuse.abuseipdb.totalReports}\nISP: ${abuse.abuseipdb.isp ?? "unknown"}\nCountry: ${abuse.abuseipdb.countryCode ?? "unknown"}`,
+              source: "AbuseIPDB API",
               verifiedAt: now,
             }],
           });
         }
       } catch (err) {
-        log.warn({ err, ip: mainIp }, "Shodan lookup failed (non-fatal)");
+        log.warn({ err, ip }, "Threat intel enrichment failed");
       }
-      if (abuseResult.abuseipdb && abuseResult.abuseipdb.abuseConfidenceScore >= 50) {
-        results.findings.push({
-          title: `High Abuse Score for Primary IP ${mainIp}`,
-          description: `The primary IP address ${mainIp} for ${domain} has an AbuseIPDB confidence score of ${abuseResult.abuseipdb.abuseConfidenceScore}% (${abuseResult.abuseipdb.totalReports} reports). This indicates the IP has been reported for malicious activity.`,
-          severity: abuseResult.abuseipdb.abuseConfidenceScore >= 80 ? "high" : "medium",
-          category: "threat_intelligence",
-          affectedAsset: mainIp,
-          cvssScore: abuseResult.abuseipdb.abuseConfidenceScore >= 80 ? "7.5" : "5.3",
-          remediation: "Investigate the reported abuse activity. Consider changing IP address or contacting the hosting provider.",
-          evidence: [
-            {
-              type: "threat_intel",
-              description: "AbuseIPDB IP reputation check",
-              snippet: `IP: ${mainIp}\nAbuse Score: ${abuseResult.abuseipdb.abuseConfidenceScore}%\nTotal Reports: ${abuseResult.abuseipdb.totalReports}\nISP: ${abuseResult.abuseipdb.isp ?? "unknown"}\nCountry: ${abuseResult.abuseipdb.countryCode ?? "unknown"}`,
-              source: "AbuseIPDB API",
-              verifiedAt: now,
-            },
-          ],
-        });
-      }
-      if (gold) {
-        const allSubIps = Array.from(new Set(subdomainProbes.flatMap(p => p.dns.ips))).filter(ip => ip !== mainIp).slice(0, 10);
-        for (const ip of allSubIps) {
-          try {
-            const [subAbuse, subBgp] = await Promise.all([enrichIP(ip), fetchBGPView(ip)]);
-            results.reconData.threatIntel![ip] = { abuseipdb: subAbuse.abuseipdb, virustotal: subAbuse.virustotal, bgp: subBgp };
-          } catch (err) {
-            log.warn({ err, ip }, "Threat intel enrichment failed");
-          }
-        }
-      }
-    } catch (err) {
-      log.warn({ err, ip: mainIp }, "Threat intel enrichment failed");
     }
+    if (Object.keys(threatIntel).length > 0) results.reconData.threatIntel = threatIntel;
   }
 
   results.reconData.dns = {
@@ -705,26 +696,31 @@ export async function runEASMScan(domain: string, onProgress?: ScanProgressCallb
     // Banner-grab the ports already found open by scanOpenPorts (above) — no
     // need to re-scan the full port list, which would double the work and stall
     // on filtered ports. Only open ports get a banner-grab connection.
-    const alreadyOpen = results.reconData.openPorts ?? [];
-    if (mainDns.ips.length > 0 && alreadyOpen.length > 0) {
+    // Banner-grab every resolved IP that has open ports (not just the primary), so
+    // the report's service/banner table and dangerous-service checks cover all hosts.
+    const openByIp: Record<string, number[]> = results.reconData.openPortsByIp
+      ?? (results.reconData.openPorts?.length ? { [mainDns.ips[0]]: results.reconData.openPorts } : {});
+    const ipsWithOpen = Object.entries(openByIp).filter(([, ports]) => ports.length > 0);
+    if (mainDns.ips.length > 0 && ipsWithOpen.length > 0) {
       checkAborted(signal);
-      await report("Banner-grabbing open ports on primary IP...", 92, "port_banner_scan", 20);
-      try {
-        const mainIp = mainDns.ips[0];
-        const portConcurrency = stealth ? profile.dnsConcurrency : 20;
-        const ps = await runPortScan(mainIp, alreadyOpen, signal, portConcurrency);
-        if (ps.openPorts.length > 0) {
-          results.reconData.portScan = { ...(results.reconData.portScan ?? {}), [mainIp]: ps.openPorts };
+      await report("Banner-grabbing open ports on resolved IPs...", 92, "port_banner_scan", 20);
+      const portConcurrency = stealth ? profile.dnsConcurrency : 20;
+      for (const [ip, ports] of ipsWithOpen) {
+        try {
+          const ps = await runPortScan(ip, ports, signal, portConcurrency);
+          if (ps.openPorts.length > 0) {
+            results.reconData.portScan = { ...(results.reconData.portScan ?? {}), [ip]: ps.openPorts };
+          }
+          for (const f of ps.findings) {
+            results.findings.push(toVerifiedFinding(f, [{
+              type: "port_scan", description: "TCP port banner grab", source: "port-scan", verifiedAt: now,
+            }]));
+          }
+          // Elevate Internet-exposed databases to HIGH and flag outdated banners.
+          results.findings.push(...assessServiceExposure(ip, ps.openPorts));
+        } catch (err) {
+          log.warn({ err, ip }, "Banner-grab port scan failed (non-fatal)");
         }
-        for (const f of ps.findings) {
-          results.findings.push(toVerifiedFinding(f, [{
-            type: "port_scan", description: "TCP port banner grab", source: "port-scan", verifiedAt: now,
-          }]));
-        }
-        // Elevate Internet-exposed databases to HIGH and flag outdated banners.
-        results.findings.push(...assessServiceExposure(mainIp, ps.openPorts));
-      } catch (err) {
-        log.warn({ err, domain }, "Banner-grab port scan failed (non-fatal)");
       }
     }
 
