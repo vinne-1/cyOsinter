@@ -91,10 +91,11 @@ export async function buildDocxInput(
   const portScan = (portSvc?.portScan as Record<string, Array<{ port: number; service?: string; banner?: string }>> | undefined) ?? {};
   const ports = Object.entries(portScan).flatMap(([ip, list]) => list.map((p) => ({ ...p, ip })));
 
-  // Tech stack (frontend + backend)
+  // Tech stack (frontend + backend) + embedded third-party services
   const techFront = (tech?.frontend as Array<{ name: string; source?: string }> | undefined) ?? [];
   const techBack = (tech?.backend as Array<{ name: string; source?: string }> | undefined) ?? [];
   const techStack = [...techFront, ...techBack];
+  const thirdPartyServices = (tech?.thirdParty as Array<{ name: string; category?: string }> | undefined) ?? [];
 
   const em = email?.emailSecurity as Record<string, unknown> | undefined;
 
@@ -192,6 +193,7 @@ export async function buildDocxInput(
       } : undefined,
       ports: ports.length ? ports : undefined,
       techStack: techStack.length ? techStack : undefined,
+      thirdPartyServices: thirdPartyServices.length ? thirdPartyServices : undefined,
       dnsRecords,
       dnssec,
       whois,

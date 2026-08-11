@@ -44,6 +44,8 @@ export interface ReportDocxInput {
     };
     ports?: Array<{ port: number; service?: string; banner?: string; ip?: string }>;
     techStack?: Array<{ name: string; source?: string }>;
+    /** Embedded third-party services (analytics, CDNs, chat, payment, captcha…). */
+    thirdPartyServices?: Array<{ name: string; category?: string }>;
     wordpress?: { isWordPress: boolean; users: Array<{ id?: number; name?: string; slug?: string }>; xmlrpcEnabled: boolean };
     // Full DNS record set (surfaced so every lookup the pipeline performs is reported).
     dnsRecords?: {
@@ -423,9 +425,10 @@ export async function generateReportDocx(input: ReportDocxInput): Promise<Buffer
   }
 
   // ── Web app / WordPress ──
-  if (recon.wordpress?.isWordPress || recon.techStack?.length) {
+  if (recon.wordpress?.isWordPress || recon.techStack?.length || recon.thirdPartyServices?.length) {
     children.push(sec("Web Application Surface"));
-    if (recon.techStack?.length) children.push(p(`Technology stack: ${recon.techStack.map((x) => x.name).join(", ")}.`));
+    if (recon.techStack?.length) children.push(p(`Technology stack (${recon.techStack.length}): ${recon.techStack.map((x) => x.name).join(", ")}.`));
+    if (recon.thirdPartyServices?.length) children.push(p(`Third-party services (${recon.thirdPartyServices.length}): ${recon.thirdPartyServices.map((x) => x.category ? `${x.name} (${x.category})` : x.name).join(", ")}.`));
     if (recon.wordpress?.isWordPress) {
       children.push(p(`WordPress detected. XML-RPC ${recon.wordpress.xmlrpcEnabled ? "enabled" : "not confirmed"}.${recon.wordpress.users.length ? ` Enumerable user(s): ${recon.wordpress.users.map((u) => u.slug || u.name).filter(Boolean).join(", ")}.` : ""}`));
     }

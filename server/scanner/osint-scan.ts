@@ -251,7 +251,7 @@ export async function runOSINTScan(domain: string, onProgress?: ScanProgressCall
   if (mainPage) {
     results.reconData.cookies = parseSetCookie(mainPage.setCookieStrings);
     results.reconData.responseHeaders = mainPage.headers;
-    results.reconData.techStack = detectTechStack(mainPage.body, mainPage.headers);
+    results.reconData.techStack = detectTechStack(mainPage.body, mainPage.headers, mainPage.setCookieStrings);
     results.reconData.socialTags = parseSocialTags(mainPage.body);
   }
 

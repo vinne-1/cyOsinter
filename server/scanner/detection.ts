@@ -1,5 +1,6 @@
 import net from "net";
 import { runWithConcurrency } from "./utils.js";
+import { detectTechnologies, type DetectedTech, type TechCategory } from "./tech-fingerprints.js";
 
 const SOFT_404_PATTERNS = /not found|404|page does not exist|file not found|does not exist/i;
 const FORBIDDEN_PATTERNS = /403|forbidden|access denied|permission denied/i;
@@ -78,71 +79,35 @@ export function validatePathResponse(
   return { responseType: "other", severity: "info", validated: false, confidence: "low" };
 }
 
-export function detectTechStack(html: string, headers: Record<string, string>): Array<{ name: string; source: string }> {
-  const techs: Array<{ name: string; source: string }> = [];
-  const seen = new Set<string>();
-  const add = (name: string, source: string) => {
-    const key = name.toLowerCase();
-    if (!seen.has(key)) {
-      seen.add(key);
-      techs.push({ name, source });
-    }
+/**
+ * Detect the technology stack + embedded third-party services from a page's HTML,
+ * response headers, and Set-Cookie names. Backed by the keyless fingerprint database
+ * in tech-fingerprints.ts, plus generic meta-generator / server-header fallbacks that
+ * catch tools not explicitly fingerprinted.
+ */
+export function detectTechStack(
+  html: string,
+  headers: Record<string, string>,
+  cookies: string[] = [],
+): DetectedTech[] {
+  const techs = detectTechnologies(html, headers, cookies);
+  const seen = new Set(techs.map((t) => t.name.toLowerCase()));
+  const add = (name: string, source: string, category: TechCategory, thirdParty = false) => {
+    const key = name.trim().toLowerCase();
+    if (key && !seen.has(key)) { seen.add(key); techs.push({ name: name.trim(), category, source, thirdParty }); }
   };
   const h = (k: string) => headers[k.toLowerCase()] ?? headers[k];
 
-  if (h("x-powered-by")) add(h("x-powered-by"), "X-Powered-By header");
-  if (h("server") && String(h("server")).toLowerCase() !== "cloudflare") add(h("server"), "Server header");
-  if (h("x-aspnet-version")) add(`ASP.NET ${h("x-aspnet-version")}`, "X-AspNet-Version header");
-  if (h("x-aspnetmvc-version")) add(`ASP.NET MVC ${h("x-aspnetmvc-version")}`, "X-AspNetMvc-Version header");
-  if (h("x-runtime")) add(h("x-runtime"), "X-Runtime header");
-  if (h("x-generator")) add(h("x-generator"), "X-Generator header");
-  if (h("x-drupal-cache")) add("Drupal", "X-Drupal-Cache header");
-  if (h("x-varnish")) add("Varnish", "X-Varnish header");
-  if (h("x-request-id")) add("Request ID", "X-Request-Id header");
-  if (h("cf-ray")) add("Cloudflare", "cf-ray header");
-  const amzHeader = Object.keys(headers).find((k) => k.toLowerCase().startsWith("x-amz-"));
-  if (amzHeader) add("AWS", "amz header");
-
+  // Generic meta-generator / app-name (captures arbitrary tools: Hugo, Jekyll, etc.).
   const gen = html.match(/<meta\s+name=["']generator["']\s+content=["']([^"']+)["']/i);
-  if (gen) add(gen[1], "meta generator");
-  const framework = html.match(/<meta\s+name=["']framework["']\s+content=["']([^"']+)["']/i);
-  if (framework) add(framework[1], "meta framework");
+  if (gen) add(gen[1], "meta generator", "cms");
   const appName = html.match(/<meta\s+name=["']application-name["']\s+content=["']([^"']+)["']/i);
-  if (appName) add(appName[1], "meta application-name");
-
-  if (/wp-includes|wp-content|wordpress/i.test(html)) add("WordPress", "HTML");
-  if (/__NEXT_DATA__/i.test(html)) add("Next.js", "HTML");
-  if (/__NUXT__/i.test(html)) add("Nuxt", "HTML");
-  if (/__sveltekit/i.test(html)) add("SvelteKit", "HTML");
-  if (/react|createelement/i.test(html)) add("React", "HTML");
-  if (/vue\.js|v-bind|v-model|vue/i.test(html)) add("Vue.js", "HTML");
-  if (/angular/i.test(html)) add("Angular", "HTML");
-  if (/jquery/i.test(html)) add("jQuery", "HTML");
-  if (/csrfmiddlewaretoken|django/i.test(html)) add("Django", "HTML");
-  if (/laravel_session|laravel/i.test(html)) add("Laravel", "HTML");
-  if (/express/i.test(html)) add("Express", "HTML");
-  if (/drupal/i.test(html)) add("Drupal", "HTML");
-  if (/joomla/i.test(html)) add("Joomla", "HTML");
-  if (/shopify/i.test(html)) add("Shopify", "HTML");
-  if (/ghost/i.test(html)) add("Ghost", "HTML");
-  if (/hugo/i.test(html)) add("Hugo", "HTML");
-  if (/gatsby/i.test(html)) add("Gatsby", "HTML");
-
-  const scriptSrc = html.match(/<script[^>]+src=["']([^"']+)["']/gi);
-  if (scriptSrc) {
-    for (const s of scriptSrc) {
-      const srcMatch = s.match(/src=["']([^"']+)["']/i);
-      const src = srcMatch?.[1] ?? "";
-      if (/react|react-dom/i.test(src)) add("React", "script src");
-      if (/vue/i.test(src)) add("Vue.js", "script src");
-      if (/angular/i.test(src)) add("Angular", "script src");
-      if (/jquery/i.test(src)) add("jQuery", "script src");
-      if (/bootstrap/i.test(src)) add("Bootstrap", "script src");
-      if (/tailwind/i.test(src)) add("Tailwind CSS", "script src");
-      if (/webpack/i.test(src)) add("Webpack", "script src");
-      if (/vite/i.test(src)) add("Vite", "script src");
-    }
-  }
+  if (appName) add(appName[1], "meta application-name", "framework");
+  // Raw header disclosures not already fingerprinted.
+  if (h("x-powered-by")) add(h("x-powered-by"), "X-Powered-By header", "backend");
+  if (h("x-generator")) add(h("x-generator"), "X-Generator header", "cms");
+  const server = h("server");
+  if (server && String(server).toLowerCase() !== "cloudflare") add(server, "Server header", "server");
 
   return techs;
 }

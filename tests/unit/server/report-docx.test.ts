@@ -91,6 +91,8 @@ describe("generateReportDocx", () => {
           { ip: "1.2.3.4", port: 443, service: "https", banner: "nginx" },
           { ip: "5.6.7.8", port: 22, service: "ssh", banner: "OpenSSH 8.9" },
         ],
+        techStack: [{ name: "Next.js" }, { name: "Bootstrap 5.0.2" }],
+        thirdPartyServices: [{ name: "Google Analytics", category: "analytics" }, { name: "Stripe", category: "payment" }],
         people: { emailFormat: "first.last", list: [
           { name: "Jane Doe", email: "jane.doe@example.com", source: "github-commit", gravatar: { accounts: ["https://twitter.com/jane"] } },
           { name: "Bob Roe", email: "bob.roe@example.com", emailInferred: true, source: "inferred" },
@@ -125,6 +127,11 @@ describe("generateReportDocx", () => {
     expect(text).toContain("Network Exposure");
     expect(text).toContain("5.6.7.8"); // second IP's port row is present
     expect(text).toContain("OpenSSH 8.9");
+    // Tech stack + third-party services
+    expect(text).toContain("Web Application Surface");
+    expect(text).toContain("Bootstrap 5.0.2");
+    expect(text).toContain("Third-party services");
+    expect(text).toContain("Google Analytics");
   });
 
   it("omits the new sections entirely when their data is absent (no empty tables)", async () => {

@@ -329,21 +329,36 @@ export async function buildReconModules(
     }
     const techStack = osintResults.reconData.techStack;
     if (techStack && techStack.length > 0) {
-      const frontendKeywords = /react|vue|angular|jquery|bootstrap|tailwind|next\.js|nuxt|svelte|gatsby|vite|webpack/i;
-      const backendKeywords = /django|laravel|express|wordpress|drupal|joomla|asp\.net|php|ruby|rails/i;
-      const frontend = techStack.filter((t) => frontendKeywords.test(t.name)).map((t) => ({ name: t.name, source: t.source, confidence: 85 }));
-      const backend = techStack.filter((t) => backendKeywords.test(t.name) || !frontendKeywords.test(t.name)).map((t) => ({ name: t.name, source: t.source, confidence: 85 }));
-      if (frontend.length > 0 || backend.length > 0) {
+      // Categorise using the fingerprint category (with a keyword fallback for the
+      // generic meta/header catches that carry no category).
+      const FRONTEND_CATS = new Set(["frontend", "framework", "ui"]);
+      const label = (t: { name: string; source: string; category?: string; version?: string; thirdParty?: boolean }) =>
+        ({ name: t.version ? `${t.name} ${t.version}` : t.name, source: t.source, confidence: 85 });
+      const stackTechs = techStack.filter((t) => !t.thirdParty);
+      const frontendKeywords = /react|vue|angular|jquery|bootstrap|tailwind|next|nuxt|svelte|gatsby|vite|webpack|alpine|ember|htmx|material|bulma|foundation|font awesome/i;
+      const frontend = stackTechs.filter((t) => (t.category ? FRONTEND_CATS.has(t.category) : frontendKeywords.test(t.name))).map(label);
+      const backend = stackTechs.filter((t) => (t.category ? !FRONTEND_CATS.has(t.category) : !frontendKeywords.test(t.name))).map(label);
+      const thirdParty = techStack.filter((t) => t.thirdParty).map((t) => ({ name: t.name, category: t.category ?? "service", source: t.source }));
+
+      // Basic risk flags from disclosed versions / risky patterns (informational).
+      const riskFlags: Array<{ tech: string; note: string }> = [];
+      for (const t of techStack) {
+        if (t.version && /(nginx|apache|microsoft iis|php|jquery)/i.test(t.name)) {
+          riskFlags.push({ tech: `${t.name} ${t.version}`, note: "Exact version disclosed — aids targeted exploitation; suppress version banners." });
+        }
+      }
+
+      if (frontend.length > 0 || backend.length > 0 || thirdParty.length > 0) {
         modules.push({
           moduleType: "tech_stack",
           confidence: 90,
           data: {
-            source: "HTTP headers + HTML analysis",
+            source: "HTTP headers + HTML + cookie fingerprinting (keyless)",
             frontend,
             backend,
             totalTechnologies: techStack.length,
-            thirdParty: [],
-            riskFlags: [],
+            thirdParty,
+            riskFlags,
             verifiedAt: new Date().toISOString(),
           },
         });

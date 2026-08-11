@@ -86,7 +86,7 @@ export interface ReconData {
   sitemapUrls?: string[];
   cookies?: Array<{ name: string; secure?: boolean; httpOnly?: boolean; sameSite?: string; path?: string }>;
   responseHeaders?: Record<string, string>;
-  techStack?: Array<{ name: string; source: string }>;
+  techStack?: Array<{ name: string; source: string; category?: string; version?: string; thirdParty?: boolean }>;
   socialTags?: Record<string, string>;
   serverLocation?: { country?: string; region?: string; city?: string; org?: string; lat?: number; lon?: number };
   dnssec?: { soaPresent: boolean };
