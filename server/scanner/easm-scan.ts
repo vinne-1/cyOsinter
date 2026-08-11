@@ -1,5 +1,5 @@
 import dns from "dns/promises";
-import { enrichIP, fetchBGPView } from "../api-integrations.js";
+import { enrichIP, fetchBGPView, shodanHostLookup } from "../api-integrations.js";
 import { createLogger } from "../logger.js";
 import {
   SUBDOMAIN_WORDLIST_SOURCE, STANDARD_SUBDOMAIN_WORDLIST_CAP, STANDARD_PROBE_BATCH,
@@ -559,6 +559,34 @@ export async function runEASMScan(domain: string, onProgress?: ScanProgressCallb
       results.reconData.threatIntel = {
         [mainIp]: { abuseipdb: abuseResult.abuseipdb, virustotal: abuseResult.virustotal, bgp: bgpResult },
       };
+
+      // Shodan host enrichment (key-gated; no-op without a configured key).
+      try {
+        const shodan = await shodanHostLookup(mainIp);
+        if (shodan && (shodan.ports.length > 0 || shodan.vulns.length > 0)) {
+          const hasVulns = shodan.vulns.length > 0;
+          results.findings.push({
+            title: `Shodan-indexed exposure for ${mainIp}${hasVulns ? ` — ${shodan.vulns.length} known CVE(s)` : ""}`,
+            description: `Shodan has indexed ${mainIp} (${domain}) with ${shodan.ports.length} open port(s)${shodan.products.length ? ` running ${shodan.products.slice(0, 8).join(", ")}` : ""}.${hasVulns ? ` Shodan associates ${shodan.vulns.length} known CVE(s) with this host: ${shodan.vulns.slice(0, 15).join(", ")}.` : ""} This reflects the host's internet-facing footprint as seen by external scanners.`,
+            severity: hasVulns ? "high" : "info",
+            category: hasVulns ? "vulnerability" : "network_exposure",
+            affectedAsset: mainIp,
+            cvssScore: hasVulns ? "7.5" : "1.0",
+            remediation: hasVulns
+              ? "Review the CVEs Shodan associates with this host, patch affected services, and restrict unnecessary exposed ports."
+              : "Review whether all Shodan-indexed open ports are intended to be internet-facing; close or firewall any that are not.",
+            evidence: [{
+              type: "shodan",
+              description: "Shodan host lookup",
+              snippet: `IP: ${mainIp}\nPorts: ${shodan.ports.join(", ") || "none"}\nProducts: ${shodan.products.join(", ") || "n/a"}\nCVEs: ${shodan.vulns.join(", ") || "none"}\nOrg: ${shodan.org ?? "n/a"}`,
+              source: "Shodan API",
+              verifiedAt: now,
+            }],
+          });
+        }
+      } catch (err) {
+        log.warn({ err, ip: mainIp }, "Shodan lookup failed (non-fatal)");
+      }
       if (abuseResult.abuseipdb && abuseResult.abuseipdb.abuseConfidenceScore >= 50) {
         results.findings.push({
           title: `High Abuse Score for Primary IP ${mainIp}`,

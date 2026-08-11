@@ -6,7 +6,7 @@ import { storage } from "../storage";
 import { createLogger } from "../logger";
 import { computeSecurityScore } from "@shared/scoring";
 import { startMonitoring, stopMonitoring, getMonitoringStatus } from "../continuous-monitoring";
-import { enrichIPs, getIntegrationsStatus } from "../api-integrations";
+import { enrichIPs, getIntegrationsStatus, setApiKey, setOllamaConfig } from "../api-integrations";
 import { getOllamaStatus } from "../ai-service";
 import { requireAdmin } from "./middleware";
 import { requireWorkspaceRole } from "./auth-middleware";
@@ -25,11 +25,47 @@ export function createAdminRouter(httpServer: Server): Router {
   const wsAuth = requireWorkspaceRole("owner", "admin", "analyst", "viewer");
   const wsOwnerAdmin = requireWorkspaceRole("owner", "admin");
 
-  adminRouter.get("/integrations/status", requireAdmin, (_req, res) => {
+  // User-facing settings (integrations keys, Ollama config) must work for an
+  // authenticated admin/superadmin over the network — not just localhost. Fall back
+  // to the localhost/ADMIN_API_KEY gate for unauthenticated/service callers.
+  const adminSettingsGuard = (req: import("express").Request, res: import("express").Response, next: import("express").NextFunction): void => {
+    if (req.user && (req.user.role === "superadmin" || req.user.role === "admin")) return next();
+    requireAdmin(req, res, next);
+  };
+
+  adminRouter.get("/integrations/status", adminSettingsGuard, (_req, res) => {
     res.json(getIntegrationsStatus());
   });
 
-  adminRouter.get("/ollama/status", requireAdmin, async (_req, res) => {
+  // POST /api/integrations — save threat-intel API keys and/or Ollama config.
+  // Each field is optional; an empty string removes that key. Returns updated status.
+  const integrationsBodySchema = z.object({
+    abuseipdb: z.string().max(200).optional(),
+    virustotal: z.string().max(200).optional(),
+    tavily: z.string().max(200).optional(),
+    shodan: z.string().max(200).optional(),
+    ollamaBaseUrl: z.string().max(500).optional(),
+    ollamaModel: z.string().max(200).optional(),
+    ollamaEnabled: z.boolean().optional(),
+  });
+  adminRouter.post("/integrations", adminSettingsGuard, (req, res) => {
+    try {
+      const body = integrationsBodySchema.parse(req.body ?? {});
+      for (const provider of ["abuseipdb", "virustotal", "tavily", "shodan"] as const) {
+        if (body[provider] !== undefined) setApiKey(provider, body[provider] as string);
+      }
+      if (body.ollamaBaseUrl !== undefined || body.ollamaModel !== undefined || body.ollamaEnabled !== undefined) {
+        setOllamaConfig({ baseUrl: body.ollamaBaseUrl, model: body.ollamaModel, enabled: body.ollamaEnabled });
+      }
+      res.json(getIntegrationsStatus());
+    } catch (err) {
+      if (err instanceof z.ZodError) return res.status(400).json({ message: err.errors[0]?.message || "Validation error" });
+      routeLog.error({ err }, "Failed to save integrations");
+      res.status(500).json({ message: "Internal server error" });
+    }
+  });
+
+  adminRouter.get("/ollama/status", adminSettingsGuard, async (_req, res) => {
     try {
       const status = await getOllamaStatus();
       res.json(status);

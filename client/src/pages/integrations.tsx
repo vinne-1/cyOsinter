@@ -14,7 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plug, Shield, CheckCircle2, XCircle, Loader2, Cpu, Search, PowerOff, TicketCheck, Github } from "lucide-react";
+import { Plug, Shield, CheckCircle2, XCircle, Loader2, Cpu, Search, PowerOff, TicketCheck, Github, Radar } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -32,6 +32,7 @@ interface IntegrationsStatus {
   abuseipdb: { configured: boolean };
   virustotal: { configured: boolean };
   tavily: { configured: boolean };
+  shodan: { configured: boolean };
   ollama: { configured: boolean; baseUrl: string; model: string; enabled: boolean };
 }
 
@@ -46,9 +47,11 @@ export default function Integrations() {
   const [abuseipdbKey, setAbuseipdbKey] = useState("");
   const [virustotalKey, setVirustotalKey] = useState("");
   const [tavilyKey, setTavilyKey] = useState("");
+  const [shodanKey, setShodanKey] = useState("");
   const [showAbuseipdbInput, setShowAbuseipdbInput] = useState(false);
   const [showVirustotalInput, setShowVirustotalInput] = useState(false);
   const [showTavilyInput, setShowTavilyInput] = useState(false);
+  const [showShodanInput, setShowShodanInput] = useState(false);
   const [ollamaBaseUrl, setOllamaBaseUrl] = useState("http://localhost:11434");
   const [ollamaModelSelect, setOllamaModelSelect] = useState<string>("tinyllama");
   const [ollamaModelCustom, setOllamaModelCustom] = useState("");
@@ -94,7 +97,7 @@ export default function Integrations() {
   }, [status]);
 
   const updateMutation = useMutation({
-    mutationFn: async (keys: { abuseipdb?: string; virustotal?: string; tavily?: string; ollamaBaseUrl?: string; ollamaModel?: string; ollamaEnabled?: boolean }) => {
+    mutationFn: async (keys: { abuseipdb?: string; virustotal?: string; tavily?: string; shodan?: string; ollamaBaseUrl?: string; ollamaModel?: string; ollamaEnabled?: boolean }) => {
       const res = await apiRequest("POST", "/api/integrations", keys);
       const text = await res.text();
       if (!text || text.trim() === "") return {} as IntegrationsStatus;
@@ -135,6 +138,10 @@ export default function Integrations() {
         setTavilyKey("");
         setShowTavilyInput(false);
       }
+      if (variables.shodan !== undefined) {
+        setShodanKey("");
+        setShowShodanInput(false);
+      }
     },
     onError: (err: Error) => {
       toast({ title: "Failed to save", description: err.message, variant: "destructive" });
@@ -165,9 +172,18 @@ export default function Integrations() {
     updateMutation.mutate({ tavily: tavilyKey.trim() });
   };
 
+  const handleSaveShodan = () => {
+    if (!shodanKey.trim()) {
+      toast({ title: "Enter API key", variant: "destructive" });
+      return;
+    }
+    updateMutation.mutate({ shodan: shodanKey.trim() });
+  };
+
   const handleRemoveAbuseipdb = () => updateMutation.mutate({ abuseipdb: "" });
   const handleRemoveVirustotal = () => updateMutation.mutate({ virustotal: "" });
   const handleRemoveTavily = () => updateMutation.mutate({ tavily: "" });
+  const handleRemoveShodan = () => updateMutation.mutate({ shodan: "" });
 
   const resolvedOllamaModel = ollamaModelSelect === "custom" ? ollamaModelCustom.trim() || "tinyllama" : ollamaModelSelect;
 
@@ -345,6 +361,77 @@ export default function Integrations() {
                         Cancel
                       </Button>
                       <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={handleRemoveVirustotal} disabled={isSaving}>
+                        Remove key
+                      </Button>
+                    </>
+                  )}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card data-testid="card-shodan">
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between gap-2">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Radar className="w-4 h-4" />
+                  Shodan
+                </CardTitle>
+                <Badge
+                  variant="outline"
+                  className={`text-xs border-0 no-default-hover-elevate no-default-active-elevate ${
+                    status?.shodan?.configured ? "bg-green-600/15 text-green-400" : "bg-slate-600/15 text-slate-400"
+                  }`}
+                >
+                  {status?.shodan?.configured ? (
+                    <>
+                      <CheckCircle2 className="w-3 h-3 mr-1" />
+                      Configured
+                    </>
+                  ) : (
+                    <>
+                      <XCircle className="w-3 h-3 mr-1" />
+                      Not configured
+                    </>
+                  )}
+                </Badge>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <p className="text-sm text-muted-foreground">
+                Internet-exposure intelligence: open ports, banners, and known CVEs per host for richer attack-surface enrichment.
+              </p>
+              {status?.shodan?.configured && !showShodanInput ? (
+                <div className="flex items-center gap-2">
+                  <p className="text-xs text-muted-foreground">Configured.</p>
+                  <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setShowShodanInput(true)}>
+                    Update key
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-2">
+                  <Input
+                    type="password"
+                    placeholder="Enter Shodan API key"
+                    value={shodanKey}
+                    onChange={(e) => setShodanKey(e.target.value)}
+                    className="flex-1 min-w-[200px] font-mono text-sm"
+                    data-testid="input-shodan-key"
+                  />
+                  <Button
+                    size="sm"
+                    onClick={handleSaveShodan}
+                    disabled={isSaving || !shodanKey.trim()}
+                    data-testid="button-save-shodan"
+                  >
+                    {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : "Save"}
+                  </Button>
+                  {status?.shodan?.configured && (
+                    <>
+                      <Button variant="ghost" size="sm" onClick={() => setShowShodanInput(false)}>
+                        Cancel
+                      </Button>
+                      <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={handleRemoveShodan} disabled={isSaving}>
                         Remove key
                       </Button>
                     </>

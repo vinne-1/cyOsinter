@@ -17,7 +17,9 @@ const INTEGRATIONS_CONFIG_PATH = join(process.cwd(), ".local", "integrations.jso
 const apiKeysFromUI: Record<string, string> = {};
 const ollamaConfigFromUI: { baseUrl?: string; model?: string; enabled?: boolean } = {};
 
-type ApiKeyProvider = "abuseipdb" | "virustotal" | "tavily";
+type ApiKeyProvider = "abuseipdb" | "virustotal" | "tavily" | "shodan";
+
+const API_KEY_PROVIDERS: ApiKeyProvider[] = ["abuseipdb", "virustotal", "tavily", "shodan"];
 
 function loadIntegrationsConfig(): void {
   try {
@@ -34,7 +36,7 @@ function loadIntegrationsConfig(): void {
       ollamaConfigFromUI.enabled = data.ollama.enabled !== undefined ? !!data.ollama.enabled : true;
     }
     if (data.apiKeys && typeof data.apiKeys === "object") {
-      for (const p of ["abuseipdb", "virustotal", "tavily"] as ApiKeyProvider[]) {
+      for (const p of API_KEY_PROVIDERS) {
         const v = data.apiKeys[p];
         if (typeof v === "string" && v.trim()) apiKeysFromUI[p] = v.trim();
       }
@@ -49,7 +51,7 @@ function saveIntegrationsConfig(): void {
     const dir = join(process.cwd(), ".local");
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
     const apiKeys: Record<string, string> = {};
-    for (const p of ["abuseipdb", "virustotal", "tavily"] as ApiKeyProvider[]) {
+    for (const p of API_KEY_PROVIDERS) {
       const v = apiKeysFromUI[p];
       if (v?.trim()) apiKeys[p] = v.trim();
     }
@@ -122,19 +124,19 @@ export function setOllamaConfig(config: { baseUrl?: string; model?: string; enab
   saveIntegrationsConfig();
 }
 
-function getApiKey(provider: "abuseipdb" | "virustotal" | "tavily"): string | undefined {
+function getApiKey(provider: ApiKeyProvider): string | undefined {
   const fromUI = apiKeysFromUI[provider]?.trim();
   if (fromUI) return fromUI;
-  const fromEnv =
-    provider === "abuseipdb"
-      ? process.env.ABUSEIPDB_API_KEY
-      : provider === "virustotal"
-        ? process.env.VIRUSTOTAL_API_KEY
-        : process.env.TAVILY_API_KEY;
-  return fromEnv?.trim();
+  const envMap: Record<ApiKeyProvider, string | undefined> = {
+    abuseipdb: process.env.ABUSEIPDB_API_KEY,
+    virustotal: process.env.VIRUSTOTAL_API_KEY,
+    tavily: process.env.TAVILY_API_KEY,
+    shodan: process.env.SHODAN_API_KEY,
+  };
+  return envMap[provider]?.trim();
 }
 
-export function setApiKey(provider: "abuseipdb" | "virustotal" | "tavily", key: string): void {
+export function setApiKey(provider: ApiKeyProvider, key: string): void {
   const trimmed = key?.trim();
   if (trimmed) {
     apiKeysFromUI[provider] = trimmed;
@@ -146,6 +148,47 @@ export function setApiKey(provider: "abuseipdb" | "virustotal" | "tavily", key: 
 
 export function getTavilyKey(): string | undefined {
   return getApiKey("tavily");
+}
+
+export function getShodanKey(): string | undefined {
+  return getApiKey("shodan");
+}
+
+export interface ShodanHostResult {
+  ip: string;
+  ports: number[];
+  vulns: string[];
+  hostnames: string[];
+  org?: string;
+  products: string[];
+}
+
+/**
+ * Shodan host lookup — open ports, service products, known CVEs, and reverse
+ * hostnames for an IP. Key-gated (getShodanKey); returns null without a key, for
+ * private IPs, or on any error (fail-soft). Purely additive enrichment.
+ */
+export async function shodanHostLookup(ip: string): Promise<ShodanHostResult | null> {
+  const key = getShodanKey();
+  if (!key || isPrivateIP(ip)) return null;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+    const res = await fetch(`https://api.shodan.io/shodan/host/${encodeURIComponent(ip)}?key=${encodeURIComponent(key)}`, { signal: controller.signal });
+    clearTimeout(timer);
+    if (!res.ok) return null;
+    const d = (await res.json()) as { ports?: number[]; vulns?: string[]; hostnames?: string[]; org?: string; data?: Array<{ product?: string }> };
+    return {
+      ip,
+      ports: Array.isArray(d.ports) ? d.ports : [],
+      vulns: Array.isArray(d.vulns) ? d.vulns : [],
+      hostnames: Array.isArray(d.hostnames) ? d.hostnames : [],
+      org: d.org,
+      products: Array.from(new Set((d.data ?? []).map((x) => x.product).filter((x): x is string => !!x))),
+    };
+  } catch {
+    return null;
+  }
 }
 const MAX_IPS_PER_BATCH = 10;
 const VIRUSTOTAL_DELAY_MS = 1500; // ~4 req/min for free tier
@@ -516,6 +559,7 @@ export function getIntegrationsStatus(): {
   abuseipdb: { configured: boolean };
   virustotal: { configured: boolean };
   tavily: { configured: boolean };
+  shodan: { configured: boolean };
   ollama: { configured: boolean; model: string; enabled: boolean };
 } {
   const ollama = getOllamaConfig();
@@ -523,6 +567,7 @@ export function getIntegrationsStatus(): {
     abuseipdb: { configured: !!getApiKey("abuseipdb") },
     virustotal: { configured: !!getApiKey("virustotal") },
     tavily: { configured: !!getApiKey("tavily") },
+    shodan: { configured: !!getApiKey("shodan") },
     ollama: { configured: true, model: ollama.model, enabled: ollama.enabled },
   };
 }
