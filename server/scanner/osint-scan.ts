@@ -21,6 +21,7 @@ import { buildSPFFindings, buildDMARCFindings, deriveMailContext, processHarvest
 import { analyseMailTransport, buildMailTransportFindings, mailTransportControls } from "./mail-transport-security.js";
 import { discoverSrvRecords, buildSrvFindings, summariseSrv } from "./srv-discovery.js";
 import { checkDnssec, buildDnssecFindings } from "./dnssec.js";
+import { checkZoneTransfer, buildZoneTransferFindings } from "./zone-transfer.js";
 
 const log = createLogger("scanner");
 
@@ -543,6 +544,20 @@ export async function runOSINTScan(domain: string, onProgress?: ScanProgressCall
   const dnssec = await checkDnssec(domain);
   results.reconData.dnssec = dnssec;
   results.findings.push(...buildDnssecFindings(domain, dnssec, now));
+
+  // Zone transfer. A nameserver that answers AXFR hands over every hostname in
+  // the zone in one request, which makes the subdomain enumeration above
+  // redundant — and there was no check for it at all.
+  if (nsRecords.length > 0) {
+    const zoneTransfers = await checkZoneTransfer(domain, nsRecords);
+    results.findings.push(...buildZoneTransferFindings(domain, zoneTransfers, now));
+    results.reconData.zoneTransfer = zoneTransfers.map((z) => ({
+      nameserver: z.nameserver,
+      transferred: z.transferred,
+      recordCount: z.recordCount,
+      detail: z.detail,
+    }));
+  }
 
   // API Security Discovery
   try {

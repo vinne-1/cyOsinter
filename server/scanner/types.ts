@@ -148,6 +148,12 @@ export interface ReconData {
     xmlrpcEnabled: boolean;
   };
   // Keyless people/employee-exposure OSINT (org-scoped, public data only).
+  /**
+   * AXFR result per authoritative nameserver. Recorded even when every server
+   * refuses, because "we checked and it is closed" is a different statement
+   * from "we never looked" — and only the first is worth anything in a report.
+   */
+  zoneTransfer?: Array<{ nameserver: string; transferred: boolean; recordCount: number; detail: string }>;
   /** Services the domain advertises via SRV records, grouped by service. */
   srvServices?: Array<{ service: string; description: string; exposure: string; targets: string[] }>;
   /**
