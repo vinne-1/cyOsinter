@@ -228,6 +228,15 @@ export async function buildReconModules(
         ? (gradeNum(spfGrade) + gradeNum(dmarcGrade)) / 2
         : (gradeNum(spfGrade) + gradeNum(dmarcGrade) + gradeNum(dkimGrade)) / 3;
       const overallGrade = overallNum >= 3.5 ? "A" : overallNum >= 2.5 ? "B" : overallNum >= 1.5 ? "C" : overallNum >= 0.5 ? "D" : "F";
+
+      // Transport posture. "n/a" rather than "none" when the domain has no MX:
+      // a host that cannot receive mail is not failing a mail control, and
+      // grading it F would be the same false positive the findings avoid.
+      const mt = osintResults.reconData.mailTransport;
+      const hasMx = (emailSec.mx?.length ?? 0) > 0;
+      const mtaStsStatus = !hasMx ? "n/a" : mt?.mtaStsMode === "enforce" ? "pass" : mt?.mtaStsMode ? "partial" : "none";
+      const tlsRptStatus = !hasMx ? "n/a" : (mt?.tlsRptDestinations?.length ?? 0) > 0 ? "pass" : "none";
+      const bimiStatus = !mt?.bimiLogoUrl ? "none" : mt?.bimiVmcUrl ? "pass" : "partial";
       modules.push({
         moduleType: "cloud_footprint",
         confidence: 90,
@@ -240,6 +249,20 @@ export async function buildReconModules(
             dkim: dkim ? { status: dkim.found ? "pass" : "none", selector: dkim.selector, record: dkim.record } : undefined,
             mx: emailSec.mx,
           },
+          // Transport security is kept separate from the SPF/DKIM/DMARC block
+          // because it answers a different question: those three establish that
+          // a message is authentic, these establish that the connection
+          // carrying it cannot be downgraded to cleartext. Collapsing them into
+          // one "email security" score hides which of the two is missing.
+          mailTransport: osintResults.reconData.mailTransport
+            ? {
+                ...osintResults.reconData.mailTransport,
+                mtaSts: mtaStsStatus,
+                tlsRpt: tlsRptStatus,
+                bimi: bimiStatus,
+              }
+            : undefined,
+          srvServices: osintResults.reconData.srvServices ?? [],
           cloudProviders,
           verifiedAt: new Date().toISOString(),
         },

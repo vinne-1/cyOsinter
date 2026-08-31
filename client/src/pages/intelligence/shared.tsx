@@ -3,6 +3,7 @@ import { Badge } from "@/components/ui/badge";
 import {
   CheckCircle2,
   XCircle,
+  MinusCircle,
   ExternalLink,
 } from "lucide-react";
 
@@ -18,9 +19,15 @@ export function ConfidenceBadge({ confidence }: { confidence: number }) {
 }
 
 export function GradeBadge({ grade }: { grade: string }) {
+  // "N/A" is not a failing grade. It means the check could not be made — DKIM,
+  // for instance, cannot be verified without knowing the selector — and every
+  // non-A/B/C value used to fall through to red. Telling a domain it failed a
+  // control nobody was able to test is the same false positive the scanner
+  // works to avoid, so it renders neutral.
   const color = grade.startsWith("A") ? "bg-green-600/15 text-green-400" :
     grade.startsWith("B") ? "bg-blue-600/15 text-blue-400" :
     grade.startsWith("C") ? "bg-yellow-600/15 text-yellow-400" :
+    /^(N\/A|n\/a|unknown|-)$/.test(grade) ? "bg-muted text-muted-foreground" :
     "bg-red-600/15 text-red-400";
   return (
     <Badge variant="outline" className={`${color} border-0 no-default-hover-elevate no-default-active-elevate font-mono`} data-testid="badge-grade">
@@ -37,7 +44,15 @@ export function SeverityDot({ severity }: { severity: string }) {
   return <div className={`w-2 h-2 rounded-full flex-shrink-0 ${color}`} />;
 }
 
-export function StatusIcon({ pass }: { pass: boolean }) {
+/**
+ * Pass / fail / not-determined.
+ *
+ * The third state is the point: a boolean can only say "good" or "bad", so an
+ * undetermined check (DKIM with no known selector, a mail control on a domain
+ * with no MX) was drawn with the same red cross as a genuine failure.
+ */
+export function StatusIcon({ pass, unknown = false }: { pass: boolean; unknown?: boolean }) {
+  if (unknown) return <MinusCircle className="w-4 h-4 text-muted-foreground flex-shrink-0" />;
   return pass ?
     <CheckCircle2 className="w-4 h-4 text-green-400 flex-shrink-0" /> :
     <XCircle className="w-4 h-4 text-red-400 flex-shrink-0" />;

@@ -370,16 +370,23 @@ export function ScanLauncher() {
                 onClick={() => { if (!status) toggleType(scan.id); }}
                 data-testid={`scan-type-${scan.id}`}
               >
+                {/* The visible label sits in a sibling element, so without these
+                    the checkbox reaches a screen reader as an unnamed button —
+                    "checkbox, unchecked" with no way to tell which scan it
+                    selects. Pointing at the existing text rather than repeating
+                    it in an aria-label keeps the two from drifting apart. */}
                 <Checkbox
                   checked={selectedTypes.includes(scan.id)}
                   onCheckedChange={() => { if (!status) toggleType(scan.id); }}
                   disabled={!!status}
                   className="mt-0.5"
+                  aria-labelledby={`scan-type-label-${scan.id}`}
+                  aria-describedby={`scan-type-desc-${scan.id}`}
                   data-testid={`checkbox-scan-${scan.id}`}
                 />
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-sm font-medium">{scan.label}</span>
+                    <span id={`scan-type-label-${scan.id}`} className="text-sm font-medium">{scan.label}</span>
                     {status === "launched" && (
                       <Badge variant="outline" className="text-xs bg-green-600/15 text-green-400 border-0 no-default-hover-elevate no-default-active-elevate">
                         <CheckCircle2 className="w-3 h-3 mr-1" />
@@ -393,7 +400,7 @@ export function ScanLauncher() {
                       </Badge>
                     )}
                   </div>
-                  <p className="text-xs text-muted-foreground mt-0.5">{scan.description}</p>
+                  <p id={`scan-type-desc-${scan.id}`} className="text-xs text-muted-foreground mt-0.5">{scan.description}</p>
                 </div>
               </div>
             );

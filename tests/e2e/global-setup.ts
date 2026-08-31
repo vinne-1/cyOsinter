@@ -42,8 +42,27 @@ export default async function globalSetup() {
       "ws-user-b@e2e.local",
     ].every((e) => !!parsed.users[e]?.token);
     if (ageMs < 23 * 60 * 60 * 1000 && allPresent) {
-      console.log("[global-setup] Reusing cached auth state (< 23h old).");
-      return;
+      // Age is not proof of validity. A session can be invalidated well inside
+      // the 23h window — another login as the same account supersedes it — and
+      // the cache has no way to know. Reusing a dead token then fails in the
+      // worst possible place: the app clears it on the first 401, so a test
+      // reports "auth_token is null" and reads like a logout bug rather than a
+      // stale fixture. One cheap request tells us which it is.
+      const probe = await request.newContext({ baseURL: BASE_URL });
+      try {
+        const res = await probe.get("/api/workspaces", {
+          headers: { Authorization: `Bearer ${parsed.users["auth-shared@e2e.local"].token}` },
+        });
+        if (res.status() !== 401) {
+          console.log("[global-setup] Reusing cached auth state (< 23h old, token verified).");
+          return;
+        }
+        console.log("[global-setup] Cached token was rejected; logging in again.");
+      } catch {
+        // Server unreachable — fall through and let the login path report it.
+      } finally {
+        await probe.dispose();
+      }
     }
   } catch {
     // No cache file or corrupt — fall through to create accounts

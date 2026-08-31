@@ -40,10 +40,89 @@ function normalizeCloudFootprintData(d: Record<string, unknown>) {
   return { email: { ...raw, ...email }, grades };
 }
 
+/**
+ * One transport-security control.
+ *
+ * `n/a` is a real state here, not a missing value: a domain with no MX cannot
+ * receive mail, so it is not failing MTA-STS — it has nothing to protect.
+ * Rendering that as a failure would contradict the scanner, which deliberately
+ * raises no finding in the same situation.
+ */
+function TransportControl({
+  name,
+  status,
+  detail,
+  explanation,
+  passLabel,
+}: {
+  name: string;
+  status: string;
+  detail?: string;
+  explanation: string;
+  /**
+   * What "working" is called for this control. Each of the three does a
+   * different thing — MTA-STS enforces, TLS-RPT reports, BIMI verifies — and a
+   * shared "Enforcing" badge would describe two of them wrongly.
+   */
+  passLabel: string;
+}) {
+  const tone =
+    status === "pass"
+      ? "bg-severity-ok/15 text-severity-ok"
+      : status === "partial"
+        ? "bg-severity-medium/15 text-severity-medium"
+        : status === "n/a"
+          ? "bg-muted text-muted-foreground"
+          : "bg-severity-high/15 text-severity-high";
+  const label =
+    status === "pass"
+      ? passLabel
+      : status === "partial"
+        ? "Partial"
+        : status === "n/a"
+          ? "Not applicable"
+          : "Not configured";
+  return (
+    <div className="p-2 rounded-md bg-muted/40 space-y-1">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <StatusIcon pass={status === "pass"} />
+          <span className="text-sm font-medium">{name}</span>
+        </div>
+        <Badge variant="outline" className={`text-xs border-0 no-default-hover-elevate no-default-active-elevate ${tone}`}>
+          {label}
+        </Badge>
+      </div>
+      {detail && <p className="text-xs font-mono text-muted-foreground break-all">{detail}</p>}
+      {/* A named control means nothing to a reader who has not met it, and this
+          panel is where they meet it. */}
+      <p className="text-xs text-muted-foreground">{explanation}</p>
+    </div>
+  );
+}
+
 export function CloudFootprintPanel({ mod }: { mod: ReconModule }) {
   const d = mod.data as Record<string, any>;
   const { email: emailRaw, grades } = normalizeCloudFootprintData(d);
   const email = ((emailRaw ?? {}) as Record<string, { status: string; record: string; issue?: string }>);
+  const transport = d.mailTransport as
+    | {
+        mtaSts?: string;
+        tlsRpt?: string;
+        bimi?: string;
+        mtaStsMode?: string;
+        mtaStsMx?: string[];
+        tlsRptDestinations?: string[];
+        bimiLogoUrl?: string;
+        bimiVmcUrl?: string;
+      }
+    | undefined;
+  const srvServices = (d.srvServices ?? []) as Array<{
+    service: string;
+    description: string;
+    exposure: string;
+    targets: string[];
+  }>;
   return (
     <div className="space-y-4" data-testid="panel-cloud-footprint">
       <ModuleHeader title="Cloud & Email Security" icon={Cloud} confidence={mod.confidence || 0} generatedAt={mod.generatedAt} />
@@ -115,13 +194,106 @@ export function CloudFootprintPanel({ mod }: { mod: ReconModule }) {
           {email.dkim && (
             <div className="p-2 rounded-md bg-muted/40 space-y-1">
               <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2"><StatusIcon pass={email.dkim.status === "pass"} /><span className="text-sm font-medium">DKIM</span></div>
+                <div className="flex items-center gap-2">
+                  <StatusIcon pass={email.dkim.status === "pass"} unknown={email.dkim.status !== "pass"} />
+                  <span className="text-sm font-medium">DKIM</span>
+                </div>
                 <GradeBadge grade={grades.dkim || "N/A"} />
               </div>
+              {/* DKIM keys live at a selector the domain owner chooses, and a
+                  scan can only try the common ones. Not finding a record is
+                  therefore "we could not check", not "DKIM is missing", and
+                  saying so keeps the reader from chasing a control they have. */}
+              {email.dkim.status !== "pass" && (
+                <p className="text-xs text-muted-foreground">
+                  No record found at the common selectors. DKIM keys are published under a selector the domain chooses,
+                  so this cannot be confirmed from outside without knowing it.
+                </p>
+              )}
             </div>
           )}
         </CardContent>
       </Card>
+
+      {/* Transport security is its own card rather than three more rows above,
+          because it answers a different question. SPF/DKIM/DMARC establish that
+          a message is authentic; these establish that the connection carrying
+          it cannot be silently downgraded to cleartext. A domain can score A on
+          the first group and have none of the second, and one merged score
+          would hide exactly that. */}
+      {transport && (
+        <Card data-testid="card-mail-transport">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">Mail Transport Security</CardTitle>
+            <p className="text-xs text-muted-foreground">
+              Whether mail to this domain can be forced onto an unencrypted connection.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <TransportControl
+              name="MTA-STS"
+              passLabel="Enforcing"
+              status={transport.mtaSts ?? "none"}
+              detail={
+                transport.mtaStsMode
+                  ? `mode: ${transport.mtaStsMode}${transport.mtaStsMx?.length ? ` · mx: ${transport.mtaStsMx.join(", ")}` : ""}`
+                  : undefined
+              }
+              explanation="Tells sending servers to refuse delivery over an unencrypted or untrusted connection. SPF, DKIM and DMARC do not cover this — they authenticate the message, not the channel carrying it."
+            />
+            <TransportControl
+              name="TLS-RPT"
+              passLabel="Reporting"
+              status={transport.tlsRpt ?? "none"}
+              detail={transport.tlsRptDestinations?.length ? transport.tlsRptDestinations.join(", ") : undefined}
+              explanation="Asks sending providers to report failed TLS negotiations. Without it, an active downgrade against this domain produces no signal the owner can see."
+            />
+            <TransportControl
+              name="BIMI"
+              passLabel="Verified"
+              status={transport.bimi ?? "none"}
+              detail={transport.bimiVmcUrl ? `VMC: ${transport.bimiVmcUrl}` : transport.bimiLogoUrl}
+              explanation="Shows a verified brand logo in the inbox. It takes effect only with a DMARC policy of quarantine or reject and a Verified Mark Certificate."
+            />
+          </CardContent>
+        </Card>
+      )}
+
+      {/* SRV records are a voluntary public statement of which services run
+          where. Grouped by exposure so the ones that should not be public read
+          first, rather than sitting as one row in an undifferentiated list. */}
+      {srvServices.length > 0 && (
+        <Card data-testid="card-srv-services">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm font-medium">Advertised Services (SRV)</CardTitle>
+            <p className="text-xs text-muted-foreground">
+              Services this domain names in public DNS, with the host and port each runs on.
+            </p>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {[...srvServices]
+              .sort((a, b) => Number(b.exposure === "internal") - Number(a.exposure === "internal"))
+              .map((svc, i) => (
+                <div key={i} className="flex items-start justify-between gap-2 p-2 rounded-md bg-muted/40">
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium">{svc.description}</p>
+                    <p className="text-xs font-mono text-muted-foreground break-all">{svc.targets.join(", ")}</p>
+                  </div>
+                  <Badge
+                    variant="outline"
+                    className={`shrink-0 text-xs border-0 no-default-hover-elevate no-default-active-elevate ${
+                      svc.exposure === "internal"
+                        ? "bg-severity-medium/15 text-severity-medium"
+                        : "bg-muted text-muted-foreground"
+                    }`}
+                  >
+                    {svc.exposure === "internal" ? "Internal" : "Public"}
+                  </Badge>
+                </div>
+              ))}
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }
