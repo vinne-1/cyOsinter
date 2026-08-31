@@ -25,7 +25,7 @@ Cyber-Shield-Pro (repo: cyOsinter) is a self-hosted **External Attack Surface Ma
 ```bash
 npx tsc --noEmit          # TypeScript — zero errors required
 npm test                   # Vitest unit tests — 725 tests / 48 files, all must pass
-npx playwright test        # E2E tests — 10 tests, all must pass
+npx playwright test        # E2E tests — 15 tests, all must pass
 ```
 
 The E2E suite needs the app on port 5050 and Postgres on 5433 (`docker compose up -d db`,
@@ -355,7 +355,12 @@ tests/
 - **No mutation** — spread for updates (`{ ...existing, field: value }`)
 - **Workspace isolation** — every bare-ID route must check membership before returning data
 - **Zod for all input** — validate at route boundary, never trust raw `req.body`
-- **Rate limits** — auth endpoints: 5/min login, 3/min register; scan: 5/min; general: 100/min.
+- **Rate limits** — login 10/min, register 3/min, scan 5/min; general **600/min**.
+  600 is not slack: this is a data-dense SPA (the dashboard alone fires 10
+  queries), and browsing eight pages measured 51 requests in 12s — ~254/min at a
+  normal pace. At the old 100/min an analyst hit 429 after roughly fifteen page
+  views and the app looked broken. The general limiter is a blunt DoS guard, not
+  an auth control; the sensitive endpoints carry their own tighter shared limits.
   The three sensitive limiters use `PostgresRateLimitStore`, so the budget is
   shared across instances — the default MemoryStore made "5 logins/min" mean
   5 x replicas, backwards for a control that exists to slow credential stuffing.

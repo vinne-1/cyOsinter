@@ -62,7 +62,15 @@ app.use(express.urlencoded({ extended: false }));
 // ── Rate limiting ──
 // The general throttle stays in-memory on purpose: it is approximate by nature,
 // and a database round trip on EVERY api request is not worth the precision.
-app.use("/api/", rateLimit({ windowMs: 60_000, max: 100, standardHeaders: true, legacyHeaders: false }));
+//
+// 600/min, not 100. This is a data-dense SPA: the dashboard alone fires 10
+// queries, and browsing eight pages measured 51 requests in 12 seconds — about
+// 254/min at a normal pace. At 100 an analyst hit 429 after roughly fifteen
+// page views, which looked like the app breaking. This is a blunt
+// denial-of-service guard, NOT an authentication control: login, register and
+// scan each have their own far tighter limits backed by a shared Postgres
+// counter, so raising this ceiling costs no real protection.
+app.use("/api/", rateLimit({ windowMs: 60_000, max: 600, standardHeaders: true, legacyHeaders: false }));
 
 // The sensitive limiters are shared through Postgres. With the default
 // MemoryStore these were per-process, so "5 login attempts per minute" became
