@@ -298,3 +298,26 @@ describe("nuclei classification (delegated to the shared taxonomy)", () => {
       .toMatchObject({ kind: "security", category: "ssl_issue" });
   });
 });
+
+describe("nuclei keeps controls and drops recon", () => {
+  // The classifier decides all three kinds, but for a while nuclei.ts dropped
+  // anything non-security outright, so a domain got no credit for a control the
+  // scanner had positively observed.
+  const c = async () => (await import("../../../server/scanner/finding-taxonomy")).classifyObservation;
+
+  it("marks a control so it can be stored as posture rather than discarded", async () => {
+    const classify = await c();
+    const r = classify("dnssec-detection", "DNSSEC Detection", "info", false);
+    expect(r.kind).toBe("control");
+    // nuclei.ts drops only kind === "recon"; a control is persisted with this
+    // kind, which keeps it out of the inbox and out of the score.
+    expect(r.kind).not.toBe("recon");
+  });
+
+  it("still marks pure enumeration as recon so it is not stored twice", async () => {
+    // The tech-stack and fingerprint recon modules already report this; storing
+    // it again as findings rows would duplicate the same fact in two places.
+    const classify = await c();
+    expect(classify("tech-detect", "Apache Detection", "info", false).kind).toBe("recon");
+  });
+});

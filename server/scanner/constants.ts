@@ -97,6 +97,13 @@ export interface VerifiedFinding {
   description: string;
   severity: string;
   category: string;
+  /**
+   * security | control | recon. Optional because most modules only ever produce
+   * security findings; omitted means "security", which matches the column
+   * default so a module that does not think about this cannot accidentally hide
+   * a real weakness. See scanner/finding-taxonomy.ts.
+   */
+  kind?: string;
   affectedAsset: string;
   cvssScore: string;
   remediation: string;

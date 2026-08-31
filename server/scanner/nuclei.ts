@@ -8,6 +8,7 @@ import { resolveProfile } from "./stealth.js";
 import { createLogger } from "../logger.js";
 import type { ScanProgressCallback, ScanOptions } from "./types.js";
 import { classifyObservation } from "./finding-taxonomy.js";
+import type { VerifiedFinding } from "./constants.js";
 
 const log = createLogger("scanner");
 
@@ -22,16 +23,10 @@ interface EvidenceItem {
   raw?: Record<string, unknown>;
 }
 
-interface VerifiedFinding {
-  title: string;
-  description: string;
-  severity: string;
-  category: string;
-  affectedAsset: string;
-  cvssScore: string;
-  remediation: string;
-  evidence: EvidenceItem[];
-}
+// Was a third local copy of this interface, which is how it came to lack the
+// `kind` field the rest of the engine had already gained. The classifier that
+// used to be duplicated here drifted the same way.
+
 
 export interface NucleiHit {
   templateId: string;
@@ -221,7 +216,13 @@ export async function runNucleiScan(
           // which drifted and put 25 of 76 stored findings in one `informational`
           // bucket that mixed real weaknesses with good news.
           const cls = classifyObservation(templateId, (info?.name as string) ?? "", severity, !!detectedCveId);
-          if (cls.skip) continue;
+          // Recon is dropped: the tech-stack and fingerprint recon modules
+          // already report it, and storing it again would duplicate that as
+          // findings rows. Controls are KEPT, with kind="control" so they never
+          // reach the triage inbox or the score — a domain that publishes
+          // DNSSEC or a security.txt should get visible credit for it, and
+          // dropping the observation entirely was throwing that away.
+          if (cls.kind === "recon") continue;
           // Expose the matched URL so the fail-closed gate can re-probe the finding.
           const matchedUrl = hit.matchedAt && /^https?:\/\//i.test(hit.matchedAt) ? hit.matchedAt : undefined;
           const cvssScore = severity === "critical" ? "9.0" : severity === "high" ? "7.5"
@@ -231,11 +232,15 @@ export async function runNucleiScan(
             description: (info?.description as string) ?? `Nuclei template ${templateId} matched at ${hit.host}`,
             severity,
             category: cls.category,
+            kind: cls.kind,
             affectedAsset: hit.host,
             cvssScore,
-            remediation: cls.category === "vulnerability"
-              ? "Review the vulnerability and apply patches or mitigations as recommended by the template."
-              : "Review and apply the recommended hardening for this issue.",
+            remediation:
+              cls.kind === "control"
+                ? "No action required — this records a protection that is already in place."
+                : cls.category === "vulnerability"
+                  ? "Review the vulnerability and apply patches or mitigations as recommended by the template."
+                  : "Review and apply the recommended hardening for this issue.",
             evidence: [
               {
                 type: "nuclei",
