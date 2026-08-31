@@ -24,7 +24,7 @@ Cyber-Shield-Pro (repo: cyOsinter) is a self-hosted **External Attack Surface Ma
 
 ```bash
 npx tsc --noEmit          # TypeScript — zero errors required
-npm test                   # Vitest unit tests — 845 tests / 53 files, all must pass
+npm test                   # Vitest unit tests — 952 tests / 57 files, all must pass
 npx playwright test        # E2E tests — 17 tests, all must pass
 ```
 
@@ -160,6 +160,20 @@ patch. `resolveBrowserEngine()` returns `supportsInitScript` — check it before
 relying on those patches; the screenshot service warns when they are skipped.
 CloakBrowser's binary is separately licensed (v148+ is a paid subscription,
 redistribution prohibited), so it can never be baked into the image.
+
+### Three states, not two
+Several checks can fail to run, and that is NOT the same as passing or failing.
+Each of these keeps the third state explicitly, because collapsing it produces a
+confident wrong answer:
+- `dnssec.ts` — `unverifiable` (both DoH resolvers failed) vs `unsigned`
+- `tls-protocols.ts` — `indeterminate` (OUR OpenSSL would not offer TLS 1.0, or
+  the host was unreachable) vs the server refusing. Without
+  `ciphers: "DEFAULT@SECLEVEL=0"` every host on the internet looks like it
+  safely refuses TLS 1.0.
+- `spf-dmarc-deep.ts` — the external-reporter check is SKIPPED without a
+  resolver rather than assumed to fail
+- The UI mirrors this: `StatusIcon` has an `unknown` state, and `GradeBadge`
+  renders "N/A" neutral rather than red.
 
 ### Never report "clean" for a check that did not run
 `code-leak-watch` needs `GITHUB_TOKEN` (free, no scopes) because GitHub's code
@@ -302,6 +316,14 @@ server/
     ransomware-watch.ts — Leak-site exposure vs. the public ransomware.live corpus
     code-leak-watch.ts  — Public-repo search for org identifiers + secret scan
     browser-profile.ts  — Coherent browser identities for outbound requests
+    finding-taxonomy.ts — kind (security|control|recon) x category, single source
+    spf-dmarc-deep.ts   — SPF lookup budget (RFC 7208 §4.6.4) + DMARC sp/rua
+    caa-analysis.ts     — Which CAs may issue; absence is the finding
+    dnssec.ts           — Real DNSKEY/DS/AD check over DoH (see below)
+    zone-transfer.ts    — AXFR over the wire; node cannot ask for it
+    tls-protocols.ts    — Versions a host ACCEPTS, not the one it negotiated
+    mail-transport-security.ts — MTA-STS, TLS-RPT, BIMI
+    srv-discovery.ts    — Service records, incl. exposed AD infrastructure
   evidence/
     browser-stealth.ts  — Playwright anti-detection launch args + init script
     browser-engine.ts   — Pluggable engine: stock | patchright | cloakbrowser
