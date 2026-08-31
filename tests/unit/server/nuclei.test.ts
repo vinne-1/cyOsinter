@@ -250,24 +250,51 @@ describe("runNucleiScan — abort signal", () => {
   });
 });
 
-describe("classifyNucleiFinding", () => {
-  it("drops pure-recon enumeration (cert details, tech detection) — misclassification fix", async () => {
-    const { classifyNucleiFinding } = await import("../../../server/scanner/nuclei");
-    expect(classifyNucleiFinding("ssl-dns-names", "SSL DNS Names", "info", false)).toEqual({ category: "informational", skip: true });
-    expect(classifyNucleiFinding("ssl-issuer", "Detect SSL Certificate Issuer", "info", false)).toEqual({ category: "informational", skip: true });
-    expect(classifyNucleiFinding("tech-detect", "Technology Detection", "info", false).skip).toBe(true);
+describe("nuclei classification (delegated to the shared taxonomy)", () => {
+  // nuclei.ts used to carry its own copy of this logic. The copy drifted from the
+  // rest of the engine, so the same observation could be categorised two ways
+  // depending on which module saw it first. The classifier now lives in one place
+  // and these cases pin the behaviour nuclei.ts depends on.
+  const c = async () => (await import("../../../server/scanner/finding-taxonomy")).classifyObservation;
+
+  it("drops pure-recon enumeration (cert details, tech detection)", async () => {
+    const classify = await c();
+    for (const [id, name] of [
+      ["ssl-dns-names", "SSL DNS Names"],
+      ["ssl-issuer", "Detect SSL Certificate Issuer"],
+      ["tech-detect", "Technology Detection"],
+    ]) {
+      const r = classify(id, name, "info", false);
+      expect(r.kind, name).toBe("recon");
+      expect(r.skip, name).toBe(true);
+    }
   });
 
   it("routes header/cookie/cors templates to verifiable categories (so the gate re-checks them)", async () => {
-    const { classifyNucleiFinding } = await import("../../../server/scanner/nuclei");
-    expect(classifyNucleiFinding("http-missing-security-headers", "HTTP Missing Security Headers", "info", false)).toEqual({ category: "security_headers", skip: false });
-    expect(classifyNucleiFinding("cookie-samesite", "Missing Cookie SameSite Strict", "info", false)).toEqual({ category: "cookie_security", skip: false });
-    expect(classifyNucleiFinding("cors-misconfig", "CORS Misconfiguration", "low", false)).toEqual({ category: "cors_misconfiguration", skip: false });
+    const classify = await c();
+    expect(classify("http-missing-security-headers", "HTTP Missing Security Headers", "info", false))
+      .toMatchObject({ kind: "security", category: "security_headers", skip: false });
+    expect(classify("cookie-samesite", "Missing Cookie SameSite Strict", "info", false))
+      .toMatchObject({ kind: "security", category: "cookie_security", skip: false });
+    expect(classify("cors-misconfig", "CORS Misconfiguration", "low", false))
+      .toMatchObject({ kind: "security", category: "cors_misconfiguration", skip: false });
   });
 
-  it("keeps CVE-backed and graded templates as vulnerabilities", async () => {
-    const { classifyNucleiFinding } = await import("../../../server/scanner/nuclei");
-    expect(classifyNucleiFinding("CVE-2021-44228", "Log4j RCE", "critical", true)).toEqual({ category: "vulnerability", skip: false });
-    expect(classifyNucleiFinding("apache-struts-rce", "Struts RCE", "high", false)).toEqual({ category: "vulnerability", skip: false });
+  it("keeps CVE-backed and graded templates as security findings", async () => {
+    const classify = await c();
+    // A CVE keeps the generic `vulnerability` category — the CVE id is the
+    // identity that matters and the NVD/OSV enrichment carries the detail.
+    expect(classify("CVE-2021-44228", "Log4j RCE", "critical", true))
+      .toMatchObject({ kind: "security", category: "vulnerability", skip: false });
+    // A non-CVE RCE is routed to the class of flaw it actually is, which is more
+    // useful on a triage board than a second "vulnerability" pile.
+    expect(classify("apache-struts-rce", "Struts RCE", "high", false))
+      .toMatchObject({ kind: "security", category: "injection", skip: false });
+  });
+
+  it("still catches a real certificate problem", async () => {
+    const classify = await c();
+    expect(classify("expired-cert", "Expired TLS certificate", "medium", false))
+      .toMatchObject({ kind: "security", category: "ssl_issue" });
   });
 });
