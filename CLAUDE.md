@@ -24,9 +24,21 @@ Cyber-Shield-Pro (repo: cyOsinter) is a self-hosted **External Attack Surface Ma
 
 ```bash
 npx tsc --noEmit          # TypeScript — zero errors required
-npm test                   # Vitest unit tests — 725 tests / 48 files, all must pass
-npx playwright test        # E2E tests — 15 tests, all must pass
+npm test                   # Vitest unit tests — 845 tests / 53 files, all must pass
+npx playwright test        # E2E tests — 17 tests, all must pass
 ```
+
+`tests/e2e/accessibility.spec.ts` sweeps every route with axe (WCAG 2.1 A/AA)
+and must stay at **0 serious/critical**. It is part of `npx playwright test`, so
+there is no separate a11y command to remember to run.
+
+**Restart the dev server before verifying anything server-side.** `npm run dev`
+is `tsx server/index.ts` with no watch, so a running process keeps the code and
+the Drizzle schema it started with. This has twice produced a convincing false
+result: once a "verified" upgrade that the old process was still serving, and
+once a `kind` column that looked missing from the API when the column was fine
+and the process was old. Confirm the restart (`grep "serving on port"`) rather
+than assuming it.
 
 The E2E suite needs the app on port 5050 and Postgres on 5433 (`docker compose up -d db`,
 then `PORT=5050 npm run dev`). Playwright reuses an already-running server.
@@ -321,7 +333,7 @@ client/src/
 
 tests/
   unit/server/       — Vitest unit tests (48 files, 725 tests)
-  e2e/               — Playwright E2E tests (10 tests)
+  e2e/               — Playwright E2E tests (17 tests, incl. axe a11y sweep)
     pages/           — Page Object Models
     global-setup.ts  — Cached auth state
 ```
@@ -333,7 +345,13 @@ tests/
 - `workspaces` — id, name (domain), description, status
 - `workspace_members` — workspaceId, userId, role (owner/admin/analyst/viewer)
 - `scans` — id, workspaceId, target, status, type, mode
-- `findings` — id, workspaceId, scanId, title, severity, category, status
+- `findings` — id, workspaceId, scanId, title, severity, category, kind, status
+  - `kind` is security | control | recon. `category` says WHICH kind of thing,
+    `kind` says WHETHER it is a problem at all. Only `security` reaches the
+    triage inbox or affects the score — a control being in place is good news,
+    and deducting for it would score a well-configured domain below an empty
+    one. Classification lives in `server/scanner/finding-taxonomy.ts`; repair
+    stored rows with `scripts/backfill-finding-kind.mts` (dry-run by default).
 - `assets` — id, workspaceId, type, value
 - `api_keys` — id, userId, keyHash, name, expiresAt, revokedAt
 - `scheduled_scans` — id, workspaceId, cronExpression, enabled
@@ -374,5 +392,14 @@ tests/
 
 - Running tests on Windows B: drive requires `pool: "vmThreads"` in `vitest.config.ts` — already configured
 - `workspace_members` table must exist — run `npm run db:push` after schema changes
-- Playwright tests use cached auth state (`tests/e2e/.auth-state.json`) — delete it if login credentials change
+- Playwright tests use cached auth state (`tests/e2e/.auth-state.json`). `global-setup`
+  now probes the cached token before reusing it, because a session can be invalidated
+  well inside the 23h cache window — logging in as `auth-shared@e2e.local` by hand
+  supersedes it. Without that probe the app clears the dead token on the first 401 and
+  the logout test fails with "auth_token is null", which reads like a logout bug rather
+  than a stale fixture.
+- The Playwright global-teardown deletes any workspace whose members are ALL `@e2e.local`.
+  A workspace created for manual verification with one of those accounts will be removed
+  by the next `npx playwright test` — which is correct, but explains a 403 on a workspace
+  that existed minutes earlier.
 - The `startMonitoring()` function must receive `userId` when creating new workspaces to avoid orphaned workspaces
