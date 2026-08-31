@@ -3,6 +3,9 @@ import { defineConfig, devices } from "@playwright/test";
 export default defineConfig({
   testDir: "./tests/e2e",
   globalSetup: "./tests/e2e/global-setup.ts",
+  // Removes the workspaces and throwaway users each run creates. Without it the
+  // suite leaked ~8 workspaces per run into the app's workspace switcher.
+  globalTeardown: "./tests/e2e/global-teardown.ts",
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: 0,

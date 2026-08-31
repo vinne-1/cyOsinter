@@ -121,16 +121,21 @@ export function PostureHero({
             <p className="mt-1 text-sm text-muted-foreground">
               {totalAssets.toLocaleString()} asset{totalAssets === 1 ? "" : "s"} monitored
               {lastScanLabel ? ` · scanned ${lastScanLabel}` : ""}
-              {typeof delta === "number" && delta !== 0 && (
-                <>
-                  {" · "}
-                  <span className={delta > 0 ? "text-severity-ok" : "text-severity-critical"}>
-                    {delta > 0 ? "+" : ""}
-                    {delta} pts since last scan
-                  </span>
-                </>
-              )}
             </p>
+            {typeof delta === "number" && delta !== 0 && (
+              // Its own line: inlined into the sentence above it wrapped
+              // mid-phrase ("+71 pts / since last scan") at common widths.
+              <p
+                className={`mt-1.5 inline-flex w-fit items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-medium tabular-nums ${
+                  delta > 0
+                    ? "bg-severity-ok/12 text-severity-ok"
+                    : "bg-severity-critical/12 text-severity-critical"
+                }`}
+              >
+                {delta > 0 ? "+" : ""}
+                {delta} pts since last scan
+              </p>
+            )}
           </div>
 
           {/* Severity mix as a single stacked bar — the shape of the risk at a glance. */}

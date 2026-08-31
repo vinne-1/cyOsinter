@@ -37,9 +37,12 @@ export function BentoGrid({
         // 16px gutter at every breakpoint keeps the rhythm identical as tiles
         // reflow, which is what stops the grid looking accidental.
         "grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4",
-        // Equal-height rows so a 2-row tile is exactly twice a 1-row tile;
-        // without this the "size = importance" signal drifts with content.
-        "lg:auto-rows-[minmax(9.5rem,auto)]",
+        // Rows size to their content. A fixed minimum made every row as tall as
+        // the hero needed, so a two-line stat tile ended up half empty with its
+        // label pinned to the top and its value to the bottom. The hero sets its
+        // own height instead (see BentoTile rows=2), and the rows it spans
+        // inherit that; the rest hug their content.
+        "lg:auto-rows-auto",
         className,
       )}
     >
@@ -57,7 +60,9 @@ const COL_SPAN: Record<BentoSpan, string> = {
 
 const ROW_SPAN: Record<BentoRows, string> = {
   1: "lg:row-span-1",
-  2: "lg:row-span-2",
+  // The two-row tile is the one that needs real height; it defines the rows it
+  // spans rather than every row being padded up to match it.
+  2: "lg:row-span-2 lg:min-h-[20rem]",
 };
 
 /** Padding scales with the tile's footprint, per the bento sizing guidance. */

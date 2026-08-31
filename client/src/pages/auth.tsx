@@ -7,7 +7,8 @@ import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Shield, LogIn, UserPlus, Radar, Lock, Globe, Activity } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, ApiError } from "@/lib/queryClient";
+import { AuthAlert, classifyAuthError, type AuthAlertState } from "@/components/auth-alert";
 
 export function useAuth() {
   const token = localStorage.getItem("auth_token");
@@ -39,14 +40,21 @@ function LoginForm() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  // Kept in the form rather than a toast: a locked account is exactly when the
+  // message needs to stay on screen while the user reads and waits.
+  const [alert, setAlert] = useState<AuthAlertState | null>(null);
   const { toast } = useToast();
   const { login } = useAuth();
   const [, navigate] = useLocation();
 
+  // While a lockout countdown runs, submitting again is pointless and only
+  // deepens the lockout, so the form disables itself until it clears.
+  const blocked = alert?.kind === "locked" || alert?.kind === "rate-limited";
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!email || !password) {
-      toast({ title: "Please fill in all fields", variant: "destructive" });
+      setAlert({ kind: "error", message: "Enter both your email and password." });
       return;
     }
     setLoading(true);
@@ -54,11 +62,14 @@ function LoginForm() {
       const res = await apiRequest("POST", "/api/auth/login", { email, password });
       const data = await res.json();
       login(data.token, data.refreshToken, data.user);
+      setAlert(null);
       toast({ title: "Login successful" });
       navigate("/");
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Login failed";
-      toast({ title: "Login failed", description: msg, variant: "destructive" });
+      const status = err instanceof ApiError ? err.status : undefined;
+      const retry = err instanceof ApiError ? err.retryAfterSeconds : undefined;
+      const msg = err instanceof Error ? err.message : "Sign-in failed";
+      setAlert(classifyAuthError(status, msg, retry));
     } finally {
       setLoading(false);
     }
@@ -66,6 +77,7 @@ function LoginForm() {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
+      {alert && <AuthAlert state={alert} onExpire={() => setAlert(null)} />}
       <div className="space-y-2">
         <Label htmlFor="login-email">Email</Label>
         <Input
@@ -86,9 +98,9 @@ function LoginForm() {
           onChange={(e) => setPassword(e.target.value)}
         />
       </div>
-      <Button type="submit" className="w-full" disabled={loading}>
+      <Button type="submit" className="w-full" disabled={loading || blocked}>
         <LogIn className="w-4 h-4 mr-2" />
-        {loading ? "Signing in..." : "Sign In"}
+        {loading ? "Signing in..." : blocked ? "Temporarily blocked" : "Sign In"}
       </Button>
     </form>
   );
@@ -99,6 +111,7 @@ function RegisterForm() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  const [alert, setAlert] = useState<AuthAlertState | null>(null);
   const { toast } = useToast();
   const { login } = useAuth();
   const [, navigate] = useLocation();
@@ -106,7 +119,7 @@ function RegisterForm() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!name || !email || !password) {
-      toast({ title: "Please fill in all fields", variant: "destructive" });
+      setAlert({ kind: "error", message: "Fill in your name, email and password." });
       return;
     }
     setLoading(true);
@@ -117,8 +130,10 @@ function RegisterForm() {
       toast({ title: "Registration successful" });
       navigate("/");
     } catch (err: unknown) {
+      const status = err instanceof ApiError ? err.status : undefined;
+      const retry = err instanceof ApiError ? err.retryAfterSeconds : undefined;
       const msg = err instanceof Error ? err.message : "Registration failed";
-      toast({ title: "Registration failed", description: msg, variant: "destructive" });
+      setAlert(classifyAuthError(status, msg, retry));
     } finally {
       setLoading(false);
     }
@@ -126,6 +141,7 @@ function RegisterForm() {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
+      {alert && <AuthAlert state={alert} onExpire={() => setAlert(null)} />}
       <div className="space-y-2">
         <Label htmlFor="reg-name">Name</Label>
         <Input

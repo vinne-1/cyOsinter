@@ -68,10 +68,19 @@ app.use("/api/", rateLimit({ windowMs: 60_000, max: 100, standardHeaders: true, 
 // MemoryStore these were per-process, so "5 login attempts per minute" became
 // 5 × replicas — precisely backwards for the one limit whose job is to slow
 // credential stuffing.
+// 10/min, NOT 5. The per-account lockout in server/auth.ts also trips at 5
+// failures, and this middleware runs first — so at an equal threshold the IP
+// limiter always fired first and replaced the lockout's actionable message
+// ("Try again in 1 minute") with a generic one, leaving the user no idea why
+// they were blocked or for how long. Leaving headroom lets the precise control
+// speak. This limiter stays as the blunt guard against a single IP spraying
+// many different accounts, which the per-account lockout cannot see.
 app.use("/api/auth/login", rateLimit({
-  windowMs: 60_000, max: 5,
+  windowMs: 60_000, max: 10,
   store: new PostgresRateLimitStore("login"),
-  message: { message: "Too many login attempts, please try again later" },
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: "Too many sign-in attempts from this address. Wait a minute and try again." },
 }));
 app.use("/api/auth/register", rateLimit({
   windowMs: 60_000, max: 3,

@@ -18,10 +18,41 @@ export function parseApiError(status: number, text: string): string {
   return text || `Request failed (${status})`;
 }
 
+/**
+ * An API failure that keeps its HTTP status.
+ *
+ * The UI has to tell a wrong password (401) from a locked account or a rate
+ * limit (429) — they need completely different wording, and one of them needs a
+ * countdown. A bare Error message string cannot carry that.
+ */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    /** Seconds until the caller may retry, from the RateLimit-Reset header. */
+    readonly retryAfterSeconds?: number,
+  ) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+function retryAfterFrom(res: Response): number | undefined {
+  // Retry-After is seconds; RateLimit-Reset is also seconds under the
+  // standardHeaders draft. Either is fine, both are optional.
+  const raw = res.headers.get("retry-after") ?? res.headers.get("ratelimit-reset");
+  if (!raw) return undefined;
+  const n = Number(raw);
+  // Zero means "no wait known", not "retry in 0 seconds" — a limiter that is
+  // not the thing blocking you still stamps its own window reset on the
+  // response, and RateLimit-Reset: 0 is what that looks like.
+  return Number.isFinite(n) && n > 0 ? Math.ceil(n) : undefined;
+}
+
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;
-    throw new Error(parseApiError(res.status, text));
+    throw new ApiError(parseApiError(res.status, text), res.status, retryAfterFrom(res));
   }
 }
 

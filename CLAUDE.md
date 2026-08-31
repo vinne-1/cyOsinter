@@ -24,7 +24,7 @@ Cyber-Shield-Pro (repo: cyOsinter) is a self-hosted **External Attack Surface Ma
 
 ```bash
 npx tsc --noEmit          # TypeScript — zero errors required
-npm test                   # Vitest unit tests — 700 tests / 47 files, all must pass
+npm test                   # Vitest unit tests — 725 tests / 48 files, all must pass
 npx playwright test        # E2E tests — 10 tests, all must pass
 ```
 
@@ -177,6 +177,30 @@ The two remaining moderates (`drizzle-kit`, `exceljs`) are only fixable by
 breaking majors and are deliberately left; the gate is set at high so the
 pipeline does not go permanently red over them.
 
+### Scoring — severity bands, not a linear sum
+`computeSecurityScore` was `100 - 20*critical - 10*high - 5*medium - ...`, flat
+and unbounded. A real workspace with **0 critical, 0 high, 27 medium** scored
+**0/100 "Grade F · Critical"**, because 27 x 5 alone floored it. Three fixes:
+- **Diminishing returns** (`weight * sqrt(n)`): 27 hosts missing the same header
+  is one misconfiguration with 27 instances, not 27 independent problems.
+- **Severity bands**: a floor AND a ceiling per worst-severity-present. The floor
+  stops volume alone reaching 0; the ceiling stops a workspace with an open
+  critical being graded well. Without the ceiling, one critical and a hundred
+  lows both scored 80.
+- **Info scores 0**, and `false_positive` / `accepted_risk` no longer deduct —
+  the old filter was `status !== "resolved"`, so dismissing a finding did nothing.
+
+### E2E leaves no residue
+`tests/e2e/global-teardown.ts` removes what the suite creates. There was no
+teardown at all, so every run leaked ~8 workspaces; ten runs had left 89
+workspaces, 65 of them fixtures, burying the real ones in the switcher.
+
+It deletes by **ownership, not name**: only workspaces whose every member is an
+`@e2e.local` account. One human member and the row survives, so a real workspace
+can never be caught by it. It also needs `import "dotenv/config"` — Playwright
+runs teardown in its own process, and without that DATABASE_URL is undefined and
+the cleanup silently no-ops.
+
 ### Dashboard layout — bento, not a card row
 The dashboard metrics are a **bento grid** (`client/src/components/bento.tsx`),
 not a uniform row of cards. That is deliberate: a rigid grid of equal-sized
@@ -296,7 +320,7 @@ client/src/
     severity.ts      — Severity colour/label source of truth (--sev-* tokens)
 
 tests/
-  unit/server/       — Vitest unit tests (47 files, 700 tests)
+  unit/server/       — Vitest unit tests (48 files, 725 tests)
   e2e/               — Playwright E2E tests (10 tests)
     pages/           — Page Object Models
     global-setup.ts  — Cached auth state

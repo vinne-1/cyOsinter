@@ -29,22 +29,34 @@ export interface MetricTileProps {
   className?: string;
 }
 
-/** Builds an SVG path for a sparkline normalised into a 100×32 viewBox. */
+/**
+ * Builds an SVG path for a sparkline normalised into a 100×32 viewBox.
+ *
+ * Inset on ALL FOUR sides. The stroke is centred on the path and drawn with
+ * `non-scaling-stroke`, so a point sitting exactly on x=0 or x=100 has half its
+ * width outside the viewBox and gets shaved off by the tile's overflow-hidden —
+ * which is what made the first and last segment look cut off at the card edge.
+ */
 function sparkPath(series: number[]): { line: string; area: string } {
   const w = 100;
   const h = 32;
+  const padX = 2;
+  const padY = 3;
   const min = Math.min(...series);
   const max = Math.max(...series);
   const span = max - min || 1;
-  const step = w / (series.length - 1);
+  const usableW = w - padX * 2;
+  const step = series.length > 1 ? usableW / (series.length - 1) : 0;
+
   const pts = series.map((v, i) => {
-    const x = i * step;
-    // Inset by 3px top and bottom so the stroke is never clipped.
-    const y = h - 3 - ((v - min) / span) * (h - 6);
+    const x = padX + i * step;
+    const y = h - padY - ((v - min) / span) * (h - padY * 2);
     return [x, y] as const;
   });
+
   const line = pts.map(([x, y], i) => `${i === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`).join(" ");
-  const area = `${line} L${w},${h} L0,${h} Z`;
+  // The fill may run to the baseline; only the stroked line needs the inset.
+  const area = `${line} L${(w - padX).toFixed(2)},${h} L${padX},${h} Z`;
   return { line, area };
 }
 
@@ -127,7 +139,7 @@ export function MetricTile({
           <svg
             viewBox="0 0 100 32"
             preserveAspectRatio="none"
-            className="h-8 w-20 shrink-0 opacity-80 transition-opacity group-hover:opacity-100"
+            className="h-9 w-24 shrink-0 self-center opacity-80 transition-opacity group-hover:opacity-100"
             aria-hidden="true"
           >
             <defs>
