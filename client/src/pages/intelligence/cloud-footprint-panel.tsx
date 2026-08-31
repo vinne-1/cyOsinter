@@ -104,7 +104,18 @@ function TransportControl({
 export function CloudFootprintPanel({ mod }: { mod: ReconModule }) {
   const d = mod.data as Record<string, any>;
   const { email: emailRaw, grades } = normalizeCloudFootprintData(d);
-  const email = ((emailRaw ?? {}) as Record<string, { status: string; record: string; issue?: string }>);
+  const email = (emailRaw ?? {}) as Record<
+    string,
+    {
+      status: string;
+      record: string;
+      issue?: string;
+      /** SPF only: DNS-querying mechanisms used, against the RFC 7208 limit. */
+      lookups?: number;
+      lookupLimit?: number;
+      lookupsExceeded?: boolean;
+    }
+  >;
   const transport = d.mailTransport as
     | {
         mtaSts?: string;
@@ -178,6 +189,25 @@ export function CloudFootprintPanel({ mod }: { mod: ReconModule }) {
                 <GradeBadge grade={grades.spf || "N/A"} />
               </div>
               <p className="text-xs font-mono text-muted-foreground break-all">{email.spf.record}</p>
+              {/* RFC 7208 caps evaluation at 10 DNS lookups. Past that a
+                  receiver returns permerror and treats the domain as having no
+                  SPF at all, so the count matters before it is exceeded. */}
+              {typeof email.spf.lookups === "number" && (
+                <p className="text-xs">
+                  <span className="text-muted-foreground">DNS lookups: </span>
+                  <span
+                    className={
+                      email.spf.lookupsExceeded
+                        ? "text-severity-high"
+                        : email.spf.lookups >= 9
+                          ? "text-severity-medium"
+                          : "text-severity-ok"
+                    }
+                  >
+                    {email.spf.lookups} of {email.spf.lookupLimit ?? 10}
+                  </span>
+                </p>
+              )}
               {email.spf.issue && <p className="text-xs text-yellow-400">{email.spf.issue}</p>}
             </div>
           )}

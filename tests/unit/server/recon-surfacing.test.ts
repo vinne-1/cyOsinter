@@ -105,6 +105,41 @@ describe("mail transport security reaches the UI", () => {
   });
 });
 
+describe("the SPF lookup budget reaches the UI", () => {
+  it("carries the lookup count and limit through", async () => {
+    // At 10 of 10 a domain's SPF still reads perfectly and the next provider
+    // anyone adds silently turns it off. If the number does not reach the
+    // panel, nobody ever sees the problem coming.
+    const data = await cloudFootprint({
+      emailSecurity: {
+        ...EMAIL_SEC,
+        spf: { found: true, record: "v=spf1 include:a -all", issues: [], lookups: { count: 10, voidLookups: 0, chain: [], exceeded: false, loop: false } },
+      } as never,
+    });
+    expect(data!.emailSecurity.spf.lookups).toBe(10);
+    expect(data!.emailSecurity.spf.lookupLimit).toBe(10);
+    expect(data!.emailSecurity.spf.lookupsExceeded).toBe(false);
+  });
+
+  it("marks an over-budget record as exceeded", async () => {
+    const data = await cloudFootprint({
+      emailSecurity: {
+        ...EMAIL_SEC,
+        spf: { found: true, record: "v=spf1 -all", issues: ["over limit"], lookups: { count: 14, voidLookups: 0, chain: [], exceeded: true, loop: false } },
+      } as never,
+    });
+    expect(data!.emailSecurity.spf.lookupsExceeded).toBe(true);
+    expect(data!.emailSecurity.spf.lookups).toBe(14);
+  });
+
+  it("omits the count for an older scan that never measured it", async () => {
+    // undefined must render as nothing, not as "0 of 10", which would claim a
+    // measurement the scan never made.
+    const data = await cloudFootprint({ emailSecurity: EMAIL_SEC });
+    expect(data!.emailSecurity.spf.lookups).toBeUndefined();
+  });
+});
+
 describe("SRV services reach the UI", () => {
   it("passes discovered services through with their exposure", async () => {
     const data = await cloudFootprint({

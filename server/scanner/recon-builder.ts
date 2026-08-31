@@ -244,7 +244,18 @@ export async function buildReconModules(
           source: "DNS MX/TXT record analysis",
           grades: { spf: spfGrade, dmarc: dmarcGrade, dkim: dkimGrade, overall: overallGrade },
           emailSecurity: {
-            spf: spf ? { status: spf.found && (spf.issues?.length ?? 0) === 0 ? "pass" : spf.found ? "fail" : "none", record: spf.record || "", issue: (spf.issues?.length ? spf.issues.join("; ") : undefined) } : undefined,
+            spf: spf ? {
+              status: spf.found && (spf.issues?.length ?? 0) === 0 ? "pass" : spf.found ? "fail" : "none",
+              record: spf.record || "",
+              issue: (spf.issues?.length ? spf.issues.join("; ") : undefined),
+              // The lookup budget is the actionable number here: at 10 of 10 a
+              // domain's SPF still reads perfectly and the next provider anyone
+              // adds silently turns it off. Nothing else in this panel warns
+              // about a problem that has not happened yet.
+              lookups: (spf as { lookups?: { count: number; exceeded: boolean } }).lookups?.count,
+              lookupLimit: 10,
+              lookupsExceeded: (spf as { lookups?: { exceeded: boolean } }).lookups?.exceeded ?? false,
+            } : undefined,
             dmarc: dmarc ? { status: dmarc.found && (dmarc.issues?.length ?? 0) === 0 ? "pass" : dmarc.found ? "fail" : "none", record: dmarc.record || "", issue: (dmarc.issues?.length ? dmarc.issues.join("; ") : undefined) } : undefined,
             dkim: dkim ? { status: dkim.found ? "pass" : "none", selector: dkim.selector, record: dkim.record } : undefined,
             mx: emailSec.mx,

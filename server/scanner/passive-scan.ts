@@ -2,8 +2,9 @@ import { createLogger } from "../logger.js";
 import { checkAborted, type ScanProgressCallback, type ScanOptions, type ScanResults } from "./constants.js";
 import {
   getDNSTxtRecords, getMXRecords, getNSRecords, getFullDNSRecords,
-  analyzeSPF, analyzeDMARC, extractCloudProvidersFromSPF, extractEmailsFromDNS, resolveDNS,
+  extractCloudProvidersFromSPF, extractEmailsFromDNS, resolveDNS,
 } from "./dns.js";
+import { analyzeSpfDeep, analyzeDmarcDeep } from "./spf-dmarc-deep.js";
 import { checkDnssec } from "./dnssec.js";
 import { fetchJSON, httpGetMainPage, getRedirectChain, parseSecurityTxt, parseSetCookie } from "./http.js";
 import { getCertificateInfo } from "./tls.js";
@@ -71,8 +72,12 @@ export async function runPassiveScan(
   results.reconData.domainInfo = domainInfo;
   results.reconData.dnssec = dnssec;
 
-  const spfAnalysis = analyzeSPF(txtRecords);
-  const dmarcAnalysis = analyzeDMARC(dmarcTxt);
+  // Deep analysis rather than string-matching the record text. The failures
+  // that matter here are silent: an SPF record over the RFC 7208 ten-lookup
+  // budget is a permerror, which receivers treat as NO SPF at all, and the
+  // record still reads perfectly. See scanner/spf-dmarc-deep.ts.
+  const spfAnalysis = await analyzeSpfDeep(domain, txtRecords, getDNSTxtRecords);
+  const dmarcAnalysis = await analyzeDmarcDeep(domain, dmarcTxt, getDNSTxtRecords);
   const mailContext = await deriveMailContext(domain, mxRecords, getDNSTxtRecords);
   results.findings.push(...buildSPFFindings(domain, spfAnalysis, txtRecords, now, mailContext));
   results.findings.push(...buildDMARCFindings(domain, dmarcAnalysis, now, mailContext));

@@ -6,7 +6,8 @@ import {
   isFullCoverage, checkAborted, loadDirectoryWordlist,
   type ScanProgressCallback, type ScanOptions, type ScanResults,
 } from "./constants.js";
-import { getDNSTxtRecords, getMXRecords, getNSRecords, getFullDNSRecords, analyzeSPF, analyzeDMARC, extractCloudProvidersFromSPF, extractEmailsFromDNS, getSRVRecords } from "./dns.js";
+import { getDNSTxtRecords, getMXRecords, getNSRecords, getFullDNSRecords, extractCloudProvidersFromSPF, extractEmailsFromDNS, getSRVRecords } from "./dns.js";
+import { analyzeSpfDeep, analyzeDmarcDeep } from "./spf-dmarc-deep.js";
 import { httpGet, getRedirectChain, httpGetMainPage, parseSetCookie, parseSecurityTxt, fetchSitemapUrls } from "./http.js";
 import { detectTechStack, scanOpenPorts, parseSocialTags, validatePathResponse } from "./detection.js";
 import { extractEmailsFromText, generateBackupFilePaths, extractSensitiveRobotsPaths, extractEmailsFromWhois, checkHIBPPasswords, checkS3Buckets, searchPGPKeyServer, extractEmailsFromCrtSh, getServerLocation, getWhois } from "./osint-helpers.js";
@@ -63,8 +64,12 @@ export async function runOSINTScan(domain: string, onProgress?: ScanProgressCall
   results.reconData.redirectChain = redirectChain;
   results.reconData.domainInfo = domainInfo;
 
-  const spfAnalysis = analyzeSPF(txtRecords);
-  const dmarcAnalysis = analyzeDMARC(dmarcTxt);
+  // Deep analysis rather than string-matching the record text. The failures
+  // that matter here are silent: an SPF record over the RFC 7208 ten-lookup
+  // budget is a permerror, which receivers treat as NO SPF at all, and the
+  // record still reads perfectly. See scanner/spf-dmarc-deep.ts.
+  const spfAnalysis = await analyzeSpfDeep(domain, txtRecords, getDNSTxtRecords);
+  const dmarcAnalysis = await analyzeDmarcDeep(domain, dmarcTxt, getDNSTxtRecords);
   const mailContext = await deriveMailContext(domain, mxRecords, getDNSTxtRecords);
 
   results.findings.push(...buildSPFFindings(domain, spfAnalysis, txtRecords, now, mailContext));

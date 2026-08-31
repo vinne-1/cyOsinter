@@ -119,33 +119,15 @@ export async function getSRVRecords(
 // Real DNSSEC detection needs DNSKEY/DS records and the AD flag, none of which
 // node's resolver can ask for; see scanner/dnssec.ts.
 
-export function analyzeSPF(txtRecords: string[][]): { found: boolean; record: string; issues: string[] } {
-  const spfRecords = txtRecords.flat().filter(r => r.startsWith("v=spf1"));
-  if (spfRecords.length === 0) return { found: false, record: "", issues: ["No SPF record found"] };
-  const record = spfRecords[0];
-  const issues: string[] = [];
-  if (record.includes("+all")) issues.push("SPF uses +all (allows any sender)");
-  if (record.includes("?all")) issues.push("SPF uses ?all (neutral policy - no enforcement)");
-  if (!record.includes("-all") && !record.includes("~all")) {
-    if (!record.includes("+all") && !record.includes("?all")) {
-      issues.push("SPF record may not have a restrictive -all or ~all terminator");
-    }
-  }
-  if (spfRecords.length > 1) issues.push("Multiple SPF records found (RFC violation)");
-  return { found: true, record, issues };
-}
 
-export function analyzeDMARC(txtRecords: string[][]): { found: boolean; record: string; issues: string[] } {
-  const dmarcRecords = txtRecords.flat().filter(r => r.startsWith("v=DMARC1"));
-  if (dmarcRecords.length === 0) return { found: false, record: "", issues: ["No DMARC record found"] };
-  const record = dmarcRecords[0];
-  const issues: string[] = [];
-  if (record.includes("p=none")) issues.push("DMARC policy is 'none' (monitoring only, no enforcement)");
-  const pctMatch = record.match(/pct=(\d+)/);
-  if (pctMatch && parseInt(pctMatch[1]) < 100) issues.push(`DMARC only applies to ${pctMatch[1]}% of messages`);
-  return { found: true, record, issues };
-}
 
+// analyzeSPF and analyzeDMARC used to live here. Both were string matches on
+// the record text, which cannot see the failures that matter: an SPF record
+// over the RFC 7208 ten-lookup budget is a permerror and therefore NO SPF at
+// all, and DMARC's sp=none subdomain bypass is invisible to a `p=` check.
+// Replaced by scanner/spf-dmarc-deep.ts, and deleted rather than left in place
+// because a second implementation of the same idea is exactly how the nuclei
+// classifier and VerifiedFinding copies drifted from the originals.
 export function extractCloudProvidersFromSPF(spfRecord: string, mxRecords: Array<{ exchange: string }>): Array<{ provider: string; confidence: number; evidence: string[] }> {
   const providers: Array<{ provider: string; confidence: number; evidence: string[] }> = [];
   const record = (spfRecord || "").toLowerCase();
