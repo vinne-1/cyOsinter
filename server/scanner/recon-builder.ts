@@ -324,6 +324,7 @@ export async function buildReconModules(
           source: "DNS resolution",
           dnsRecords: osintResults.reconData.dnsRecords,
           dnssec: osintResults.reconData.dnssec,
+          zoneTransfer: osintResults.reconData.zoneTransfer,
           verifiedAt: new Date().toISOString(),
         },
       });

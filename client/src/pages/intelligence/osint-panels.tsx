@@ -77,6 +77,35 @@ function DnssecLine({ dnssec, compact = false }: { dnssec: any; compact?: boolea
   );
 }
 
+/**
+ * Zone transfer state per authoritative nameserver.
+ *
+ * A closed result is worth showing, not just an open one: "we asked all four
+ * nameservers and every one refused" is a different statement from "nobody
+ * checked", and only the first is worth anything in a report.
+ */
+function ZoneTransferLine({ servers }: { servers: Array<{ nameserver: string; transferred: boolean; detail: string }> }) {
+  const open = servers.filter((s) => s.transferred);
+  return (
+    <div className="flex items-start gap-2" data-testid="text-zone-transfer">
+      <Shield className="w-4 h-4 mt-0.5 flex-shrink-0" />
+      <div className="min-w-0">
+        <span className="text-sm">
+          Zone transfer (AXFR):{" "}
+          <span className={open.length ? "text-severity-high" : "text-severity-ok"}>
+            {open.length
+              ? `allowed by ${open.length} of ${servers.length} nameserver(s)`
+              : `refused by all ${servers.length} nameserver(s)`}
+          </span>
+        </span>
+        <p className="text-xs text-muted-foreground break-all">
+          {servers.map((s) => `${s.nameserver}: ${s.detail}`).join(" · ")}
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export function DNSOverviewPanel({ mod }: { mod: ReconModule }) {
   const d = mod.data as Record<string, any>;
   const rec = d.dnsRecords || {};
@@ -84,6 +113,7 @@ export function DNSOverviewPanel({ mod }: { mod: ReconModule }) {
     <div className="space-y-4" data-testid="panel-dns-overview">
       <ModuleHeader title="DNS Records" icon={Network} confidence={mod.confidence || 0} generatedAt={mod.generatedAt} />
       {d.dnssec && <DnssecLine dnssec={d.dnssec} />}
+      {Array.isArray(d.zoneTransfer) && d.zoneTransfer.length > 0 && <ZoneTransferLine servers={d.zoneTransfer} />}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {rec.a?.length > 0 && <Card><CardHeader className="pb-2"><CardTitle className="text-sm font-medium">A</CardTitle></CardHeader><CardContent><pre className="text-xs font-mono whitespace-pre-wrap">{rec.a.join("\n")}</pre></CardContent></Card>}
         {rec.aaaa?.length > 0 && <Card><CardHeader className="pb-2"><CardTitle className="text-sm font-medium">AAAA</CardTitle></CardHeader><CardContent><pre className="text-xs font-mono whitespace-pre-wrap break-all">{rec.aaaa.join("\n")}</pre></CardContent></Card>}

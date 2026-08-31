@@ -124,6 +124,53 @@ describe("SRV services reach the UI", () => {
   });
 });
 
+/** Pulls the dns_overview module, which is what DNSOverviewPanel renders. */
+async function dnsOverview(reconData: Partial<ScanResults["reconData"]>) {
+  const mods = await buildReconModules("example.com", null, osint(reconData));
+  return mods.find((m) => m.moduleType === "dns_overview")?.data as Record<string, any> | undefined;
+}
+
+describe("DNS posture reaches the UI", () => {
+  const DNS = { a: ["1.2.3.4"], ns: ["ns1.example.com"] };
+
+  it("carries the real DNSSEC state, not just a boolean", async () => {
+    const data = await dnsOverview({
+      dnsRecords: DNS,
+      dnssec: {
+        signed: true, dsPresent: true, dnskeyPresent: true, authenticatedData: true,
+        algorithms: [13], state: "signed", detail: "chain verified",
+      },
+    });
+    expect(data!.dnssec.state).toBe("signed");
+    expect(data!.dnssec.algorithms).toEqual([13]);
+  });
+
+  it("carries the zone-transfer result, including when every server refused", async () => {
+    // A refusal is a positive statement — "we asked and it is closed" is not
+    // the same as "nobody looked" — so it must survive to the panel too.
+    const data = await dnsOverview({
+      dnsRecords: DNS,
+      zoneTransfer: [
+        { nameserver: "ns1.example.com", transferred: false, recordCount: 0, detail: "DNS rcode 5 (REFUSED)" },
+      ],
+    });
+    expect(data!.zoneTransfer).toHaveLength(1);
+    expect(data!.zoneTransfer[0].transferred).toBe(false);
+    expect(data!.zoneTransfer[0].detail).toMatch(/REFUSED/);
+  });
+
+  it("carries a permissive nameserver through", async () => {
+    const data = await dnsOverview({
+      dnsRecords: DNS,
+      zoneTransfer: [
+        { nameserver: "ns1.example.com", transferred: true, recordCount: 52, detail: "transferred 52 records" },
+      ],
+    });
+    expect(data!.zoneTransfer[0].transferred).toBe(true);
+    expect(data!.zoneTransfer[0].recordCount).toBe(52);
+  });
+});
+
 describe("the existing email module is unchanged by the addition", () => {
   it("still grades SPF and DMARC", async () => {
     const data = await cloudFootprint({ emailSecurity: EMAIL_SEC });
