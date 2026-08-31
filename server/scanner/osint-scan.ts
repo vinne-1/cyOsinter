@@ -18,6 +18,7 @@ import { runWordPressChecks } from "./wordpress-checks.js";
 import { runGithubDorks } from "./github-dork.js";
 import { runPeopleOsint } from "./people-osint.js";
 import { buildSPFFindings, buildDMARCFindings, deriveMailContext, processHarvestedEmails } from "./osint-email-dns.js";
+import { analyseMailTransport, buildMailTransportFindings, mailTransportControls } from "./mail-transport-security.js";
 
 const log = createLogger("scanner");
 
@@ -65,6 +66,23 @@ export async function runOSINTScan(domain: string, onProgress?: ScanProgressCall
 
   results.findings.push(...buildSPFFindings(domain, spfAnalysis, txtRecords, now, mailContext));
   results.findings.push(...buildDMARCFindings(domain, dmarcAnalysis, now, mailContext));
+
+  // Transport-layer mail security. SPF/DKIM/DMARC above authenticate the
+  // message; MTA-STS and TLS-RPT are what stop the connection carrying it from
+  // being downgraded to cleartext, and nothing checked them before.
+  const mailTransport = await analyseMailTransport(domain, getDNSTxtRecords, httpGet);
+  const dmarcPolicy = /p\s*=\s*(none|quarantine|reject)/i.exec(dmarcAnalysis.record ?? "")?.[1]?.toLowerCase();
+  results.findings.push(
+    ...buildMailTransportFindings(domain, mailTransport, now, mailContext, dmarcPolicy),
+  );
+  results.reconData.mailTransport = {
+    mtaStsMode: mailTransport.mtaSts.mode,
+    mtaStsMx: mailTransport.mtaSts.mx,
+    tlsRptDestinations: mailTransport.tlsRpt.rua,
+    bimiLogoUrl: mailTransport.bimi.logoUrl,
+    bimiVmcUrl: mailTransport.bimi.vmcUrl,
+    controls: mailTransportControls(mailTransport),
+  };
 
   checkAborted(signal);
   await report("Analyzed SPF/DMARC. Running directory bruteforce...", 25, "dns_email", 90);

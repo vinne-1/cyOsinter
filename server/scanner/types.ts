@@ -135,6 +135,19 @@ export interface ReconData {
     xmlrpcEnabled: boolean;
   };
   // Keyless people/employee-exposure OSINT (org-scoped, public data only).
+  /**
+   * Mail transport security posture (MTA-STS / TLS-RPT / BIMI). Kept as recon
+   * rather than findings so a domain that has these configured gets visible
+   * credit for it, instead of only ever being told what is missing.
+   */
+  mailTransport?: {
+    mtaStsMode?: string;
+    mtaStsMx?: string[];
+    tlsRptDestinations?: string[];
+    bimiLogoUrl?: string;
+    bimiVmcUrl?: string;
+    controls?: string[];
+  };
   peopleExposure?: {
     people: Array<{ name?: string; email?: string; emailInferred?: boolean; source: string; gravatar?: { displayName?: string; location?: string; accounts?: string[]; profileUrl?: string } }>;
     emailFormat?: string;
