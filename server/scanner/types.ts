@@ -148,6 +148,14 @@ export interface ReconData {
     xmlrpcEnabled: boolean;
   };
   // Keyless people/employee-exposure OSINT (org-scoped, public data only).
+  /** Which CAs may issue for this domain, and whether anything restricts them. */
+  caaAnalysis?: {
+    present: boolean;
+    issuers: string[];
+    wildcardIssuers: string[];
+    iodef: string[];
+    forbidsAll: boolean;
+  };
   /**
    * AXFR result per authoritative nameserver. Recorded even when every server
    * refuses, because "we checked and it is closed" is a different statement

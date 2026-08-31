@@ -336,6 +336,7 @@ export async function buildReconModules(
           dnsRecords: osintResults.reconData.dnsRecords,
           dnssec: osintResults.reconData.dnssec,
           zoneTransfer: osintResults.reconData.zoneTransfer,
+          caaAnalysis: osintResults.reconData.caaAnalysis,
           verifiedAt: new Date().toISOString(),
         },
       });

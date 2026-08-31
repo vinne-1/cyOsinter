@@ -194,6 +194,25 @@ describe("DNS posture reaches the UI", () => {
     expect(data!.zoneTransfer[0].detail).toMatch(/REFUSED/);
   });
 
+  it("carries the CAA analysis, including the absence of any record", async () => {
+    // "No CAA" is the consequential state and is invisible in a raw record
+    // table — it looks exactly like "no records shown".
+    const data = await dnsOverview({
+      dnsRecords: DNS,
+      caaAnalysis: { present: false, issuers: [], wildcardIssuers: [], iodef: [], forbidsAll: false },
+    });
+    expect(data!.caaAnalysis).toBeDefined();
+    expect(data!.caaAnalysis.present).toBe(false);
+  });
+
+  it("carries the authorised issuers through", async () => {
+    const data = await dnsOverview({
+      dnsRecords: DNS,
+      caaAnalysis: { present: true, issuers: ["letsencrypt.org"], wildcardIssuers: [], iodef: ["mailto:s@example.com"], forbidsAll: false },
+    });
+    expect(data!.caaAnalysis.issuers).toEqual(["letsencrypt.org"]);
+  });
+
   it("carries a permissive nameserver through", async () => {
     const data = await dnsOverview({
       dnsRecords: DNS,

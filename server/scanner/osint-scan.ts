@@ -23,6 +23,7 @@ import { analyseMailTransport, buildMailTransportFindings, mailTransportControls
 import { discoverSrvRecords, buildSrvFindings, summariseSrv } from "./srv-discovery.js";
 import { checkDnssec, buildDnssecFindings } from "./dnssec.js";
 import { checkZoneTransfer, buildZoneTransferFindings } from "./zone-transfer.js";
+import { analyzeCaa, buildCaaFindings } from "./caa-analysis.js";
 
 const log = createLogger("scanner");
 
@@ -546,6 +547,19 @@ export async function runOSINTScan(domain: string, onProgress?: ScanProgressCall
       });
     }
   }
+  // CAA was collected and printed but never analysed. Its absence is the most
+  // consequential thing about it: with no CAA record, every publicly trusted CA
+  // may issue for this domain.
+  const caa = analyzeCaa(domain, dnsRecords?.caa);
+  results.findings.push(...buildCaaFindings(domain, caa, now));
+  results.reconData.caaAnalysis = {
+    present: caa.present,
+    issuers: caa.issuers,
+    wildcardIssuers: caa.wildcardIssuers,
+    iodef: caa.iodef,
+    forbidsAll: caa.forbidsAll,
+  };
+
   const dnssec = await checkDnssec(domain);
   results.reconData.dnssec = dnssec;
   results.findings.push(...buildDnssecFindings(domain, dnssec, now));
