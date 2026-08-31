@@ -53,6 +53,41 @@ describe("buildBucketTargets — expanded cloud providers", () => {
   });
 });
 
+describe("buildBucketTargets — S3-compatible providers beyond the big three", () => {
+  const urls = () => buildBucketTargets("acme.com").map((t) => t.url);
+
+  it("probes Wasabi, Alibaba OSS, Linode, Scaleway and Backblaze", () => {
+    const u = urls();
+    expect(u.some((x) => /\.wasabisys\.com/.test(x)), "Wasabi").toBe(true);
+    expect(u.some((x) => /\.aliyuncs\.com/.test(x)), "Alibaba OSS").toBe(true);
+    expect(u.some((x) => /\.linodeobjects\.com/.test(x)), "Linode").toBe(true);
+    expect(u.some((x) => /\.scw\.cloud/.test(x)), "Scaleway").toBe(true);
+    expect(u.some((x) => /backblazeb2\.com\/file\//.test(x)), "Backblaze").toBe(true);
+  });
+
+  it("does NOT probe Cloudflare R2, which cannot be guessed from a domain", () => {
+    // A public R2 bucket lives at pub-<32 hex>.r2.dev, derived from the account
+    // rather than the bucket or domain. Probing it with domain-derived names
+    // would generate traffic that can never hit anything.
+    expect(urls().some((x) => /r2\.dev/.test(x))).toBe(false);
+  });
+
+  it("keeps the smaller providers on a short suffix list", () => {
+    // The full nine-suffix list across five more providers and their regions
+    // would roughly triple this module's request count for a small fraction of
+    // real-world usage.
+    const wasabi = urls().filter((x) => /wasabisys/.test(x));
+    expect(wasabi.some((x) => x.includes("acme-com-backup"))).toBe(true);
+    expect(wasabi.some((x) => x.includes("acme-com-staging"))).toBe(false);
+  });
+
+  it("stays within a sane total request budget", () => {
+    // A guard rather than a target: if this leaps, someone has added a provider
+    // with a long region list against the full suffix set, and every scan pays.
+    expect(buildBucketTargets("acme.com").length).toBeLessThan(140);
+  });
+});
+
 describe("GitHub dorking (key-gated)", () => {
   it("builds domain-scoped secret dorks", () => {
     const dorks = buildGithubDorks("acme.com");

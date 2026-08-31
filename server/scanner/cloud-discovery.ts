@@ -74,6 +74,15 @@ interface BucketCheckTarget {
   url: string;
 }
 
+/**
+ * Suffixes used for the smaller S3-compatible providers.
+ *
+ * The full nine-suffix list against five more providers and their regions would
+ * roughly triple this module's request count. These three are where buckets
+ * actually turn up.
+ */
+const SECONDARY_SUFFIXES = ["", "-backup", "-assets"];
+
 export function buildBucketTargets(domain: string): BucketCheckTarget[] {
   const baseName = domain.replace(/\./g, "-");
   const dotName = domain;
@@ -108,6 +117,46 @@ export function buildBucketTargets(domain: string): BucketCheckTarget[] {
     // Firebase Realtime Database — publicly-readable DB check (/.json returns data).
     targets.push({ provider: "Firebase", name, url: `https://${name}.firebaseio.com/.json` });
   }
+
+  // ── S3-compatible providers beyond the big three ──────────────────────────
+  //
+  // Deliberately probed with a SHORT suffix list. The nine suffixes above
+  // against five more providers and their regions would roughly triple the
+  // request count for this module, and these providers are a small fraction of
+  // real-world usage — the bare name and the two suffixes that actually turn
+  // things up carry nearly all the value for a fraction of the traffic.
+  for (const suffix of SECONDARY_SUFFIXES) {
+    const name = baseName + suffix;
+
+    // Wasabi — S3-compatible, region in the hostname.
+    for (const region of ["s3", "s3.eu-central-1", "s3.us-west-1"]) {
+      targets.push({ provider: "Wasabi", name, url: `https://${name}.${region}.wasabisys.com` });
+    }
+
+    // Alibaba Cloud OSS.
+    for (const region of ["oss-cn-hangzhou", "oss-us-west-1", "oss-ap-southeast-1"]) {
+      targets.push({ provider: "Alibaba", name, url: `https://${name}.${region}.aliyuncs.com` });
+    }
+
+    // Linode / Akamai Object Storage.
+    for (const region of ["us-east-1", "eu-central-1"]) {
+      targets.push({ provider: "Linode", name, url: `https://${name}.${region}.linodeobjects.com` });
+    }
+
+    // Scaleway Object Storage.
+    targets.push({ provider: "Scaleway", name, url: `https://${name}.s3.fr-par.scw.cloud` });
+
+    // Backblaze B2 — the /file/<bucket>/ form is the one reachable without an
+    // account-scoped hostname.
+    targets.push({ provider: "Backblaze", name, url: `https://f000.backblazeb2.com/file/${name}/` });
+  }
+
+  // Cloudflare R2 is deliberately absent. A public R2 bucket is served from
+  // pub-<32 hex chars>.r2.dev, which is derived from the account, not the
+  // bucket or domain name — so it cannot be guessed from a domain the way the
+  // providers above can. Probing r2.dev with domain-derived names would
+  // generate traffic that can never hit anything. R2 buckets attached to a
+  // custom domain are found by the CNAME patterns instead.
 
   return targets;
 }
