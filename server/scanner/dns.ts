@@ -103,6 +103,17 @@ export async function getFullDNSRecords(domain: string): Promise<{
   return out;
 }
 
+/**
+ * SRV lookup on the shared record resolver, so SRV discovery inherits the same
+ * timeout and retry budget as every other record type instead of using node's
+ * default resolver with its much longer timeout.
+ */
+export async function getSRVRecords(
+  name: string,
+): Promise<Array<{ priority: number; weight: number; port: number; name: string }>> {
+  return recordResolver.resolveSrv(name);
+}
+
 export function checkDNSSEC(domain: string): Promise<{ soaPresent: boolean }> {
   return recordResolver.resolveSoa(domain).then(() => ({ soaPresent: true })).catch(() => ({ soaPresent: false }));
 }

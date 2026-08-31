@@ -6,7 +6,7 @@ import {
   isFullCoverage, checkAborted, loadDirectoryWordlist,
   type ScanProgressCallback, type ScanOptions, type ScanResults,
 } from "./constants.js";
-import { getDNSTxtRecords, getMXRecords, getNSRecords, getFullDNSRecords, checkDNSSEC, analyzeSPF, analyzeDMARC, extractCloudProvidersFromSPF, extractEmailsFromDNS } from "./dns.js";
+import { getDNSTxtRecords, getMXRecords, getNSRecords, getFullDNSRecords, checkDNSSEC, analyzeSPF, analyzeDMARC, extractCloudProvidersFromSPF, extractEmailsFromDNS, getSRVRecords } from "./dns.js";
 import { httpGet, getRedirectChain, httpGetMainPage, parseSetCookie, parseSecurityTxt, fetchSitemapUrls } from "./http.js";
 import { detectTechStack, scanOpenPorts, parseSocialTags, validatePathResponse } from "./detection.js";
 import { extractEmailsFromText, generateBackupFilePaths, extractSensitiveRobotsPaths, extractEmailsFromWhois, checkHIBPPasswords, checkS3Buckets, searchPGPKeyServer, extractEmailsFromCrtSh, getServerLocation, getWhois } from "./osint-helpers.js";
@@ -19,6 +19,7 @@ import { runGithubDorks } from "./github-dork.js";
 import { runPeopleOsint } from "./people-osint.js";
 import { buildSPFFindings, buildDMARCFindings, deriveMailContext, processHarvestedEmails } from "./osint-email-dns.js";
 import { analyseMailTransport, buildMailTransportFindings, mailTransportControls } from "./mail-transport-security.js";
+import { discoverSrvRecords, buildSrvFindings, summariseSrv } from "./srv-discovery.js";
 
 const log = createLogger("scanner");
 
@@ -75,6 +76,13 @@ export async function runOSINTScan(domain: string, onProgress?: ScanProgressCall
   results.findings.push(
     ...buildMailTransportFindings(domain, mailTransport, now, mailContext, dmarcPolicy),
   );
+  // SRV service discovery. A, AAAA, CNAME, NS, MX, CAA, TXT and SOA describe
+  // the domain; SRV records describe its SERVICES, and a publicly resolvable
+  // _ldap._tcp.dc._msdcs record names a domain controller outright.
+  const srvRecords = await discoverSrvRecords(domain, getSRVRecords);
+  results.findings.push(...buildSrvFindings(domain, srvRecords, now));
+  results.reconData.srvServices = summariseSrv(srvRecords);
+
   results.reconData.mailTransport = {
     mtaStsMode: mailTransport.mtaSts.mode,
     mtaStsMx: mailTransport.mtaSts.mx,

@@ -135,6 +135,8 @@ export interface ReconData {
     xmlrpcEnabled: boolean;
   };
   // Keyless people/employee-exposure OSINT (org-scoped, public data only).
+  /** Services the domain advertises via SRV records, grouped by service. */
+  srvServices?: Array<{ service: string; description: string; exposure: string; targets: string[] }>;
   /**
    * Mail transport security posture (MTA-STS / TLS-RPT / BIMI). Kept as recon
    * rather than findings so a domain that has these configured gets visible
