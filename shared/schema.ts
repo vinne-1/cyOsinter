@@ -64,6 +64,20 @@ export const findings = pgTable("findings", {
   severity: text("severity").notNull(),
   status: text("status").notNull().default("open"),
   category: text("category").notNull(),
+  /**
+   * What KIND of observation this is, separate from which category it falls in.
+   *
+   *   security  a weakness or exposure — belongs in the triage inbox
+   *   control   evidence a protection is IN PLACE — good news, belongs in a
+   *             posture view, and must never drag the score down
+   *   recon     a technology or configuration fact with no security verdict
+   *
+   * Without this the three were indistinguishable, and `category` ended up
+   * carrying an `informational` bucket that held all three at once. Defaults to
+   * "security" so a row written by any path that does not set it is triaged
+   * rather than silently hidden.
+   */
+  kind: text("kind").notNull().default("security"),
   affectedAsset: text("affected_asset"),
   evidence: jsonb("evidence").$type<Record<string, unknown>[]>(),
   cvssScore: text("cvss_score"),
@@ -86,6 +100,8 @@ export const findings = pgTable("findings", {
   index("findings_workspace_severity_idx").on(t.workspaceId, t.severity),
   index("findings_workspace_status_idx").on(t.workspaceId, t.status),
   index("findings_workspace_category_idx").on(t.workspaceId, t.category),
+  // The inbox filters on kind first, so it leads the composite.
+  index("findings_workspace_kind_idx").on(t.workspaceId, t.kind),
   index("findings_group_id_idx").on(t.groupId),
   foreignKey({ columns: [t.workspaceId], foreignColumns: [workspaces.id], name: "findings_workspace_fk" }).onDelete("cascade"),
   foreignKey({ columns: [t.scanId], foreignColumns: [scans.id], name: "findings_scan_fk" }).onDelete("set null"),

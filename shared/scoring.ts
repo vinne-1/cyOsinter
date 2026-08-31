@@ -55,6 +55,16 @@ const CLOSED_STATUSES = new Set(["resolved", "false_positive", "accepted_risk"])
 export interface FindingForScore {
   severity: string;
   status?: string;
+  /**
+   * security | control | recon. Only `security` affects the score.
+   *
+   * A control being IN PLACE is good news, and a technology fact is neither
+   * good nor bad; deducting for either would mean a domain that publishes
+   * DNSSEC and a security.txt scores WORSE than one that publishes nothing.
+   * Absent (older rows, and callers that do not track kind) reads as security,
+   * so nothing stops counting by accident.
+   */
+  kind?: string;
 }
 
 export type ScoreSeverity = keyof typeof SEVERITY_DEDUCTION;
@@ -87,7 +97,9 @@ export function deductionFor(severity: ScoreSeverity, count: number): number {
  *     then its volume.
  */
 export function computeSecurityScore(findings: FindingForScore[]): number {
-  const open = findings.filter((f) => !CLOSED_STATUSES.has(f.status ?? "open"));
+  const open = findings.filter(
+    (f) => !CLOSED_STATUSES.has(f.status ?? "open") && (f.kind ?? "security") === "security",
+  );
 
   const counts: Record<string, number> = {};
   for (const f of open) counts[f.severity] = (counts[f.severity] ?? 0) + 1;
@@ -122,7 +134,12 @@ export function explainSecurityScore(findings: FindingForScore[]): {
   /** True when severity, not volume, is what is holding the score down. */
   capped: boolean;
 } {
-  const open = findings.filter((f) => !CLOSED_STATUSES.has(f.status ?? "open"));
+  // Must match computeSecurityScore's filter exactly. An explanation that
+  // counts a different set of findings than the score it explains is worse than
+  // no explanation, because it looks authoritative while disagreeing.
+  const open = findings.filter(
+    (f) => !CLOSED_STATUSES.has(f.status ?? "open") && (f.kind ?? "security") === "security",
+  );
   const counts = { critical: 0, high: 0, medium: 0, low: 0, info: 0 } as Record<ScoreSeverity, number>;
   for (const f of open) {
     if (f.severity in counts) counts[f.severity as ScoreSeverity] += 1;

@@ -17,9 +17,19 @@ const wsAuth = requireWorkspaceRole("owner", "admin", "analyst", "viewer");
 findingsRouter.get("/workspaces/:workspaceId/findings", wsAuth, async (req, res) => {
   try {
     const result = await storage.getFindings(req.params.workspaceId as string);
-    const { severity, status, search, page, pageSize } = req.query;
+    const { severity, status, search, page, pageSize, kind } = req.query;
 
     let filtered = result.data as Array<Record<string, unknown>>;
+
+    // Optional `?kind=security|control|recon`. The default stays "everything",
+    // because several callers (the dashboard, attack paths, reports) fetch this
+    // same endpoint and quietly narrowing it under them would change numbers in
+    // places nobody was looking. The triage queue asks for what it wants.
+    // Rows written before the kind column existed read as "security".
+    if (typeof kind === "string" && kind !== "all") {
+      filtered = filtered.filter((f) => (f.kind ?? "security") === kind);
+    }
+
     if (severity && typeof severity === "string") {
       filtered = filtered.filter((f) => f.severity === severity);
     }

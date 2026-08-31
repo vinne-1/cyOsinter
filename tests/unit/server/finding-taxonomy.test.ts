@@ -45,6 +45,13 @@ describe("the misclassifications that prompted this", () => {
       "Detect OpenID Connect provider",
       "Android Asset Links Configuration - Detect",
       "robots.txt endpoint prober",
+      // Real stored titles that the narrower `-detect$` pattern missed, leaving
+      // them in `unclassified` and making the taxonomy look full of holes.
+      "Apache Detection on www.example.com",
+      "AWS Service - Detect on host.example.com",
+      "Microsoft Azure Domain Tenant ID - Detect on example.com",
+      "Wildcard DNS Configuration - Detection on example.com",
+      "Strapi API - Detect on admin.example.com",
     ]) {
       const r = c("tech", name);
       expect(r.kind, name).toBe("recon");
@@ -79,6 +86,23 @@ describe("negation flips a control into a weakness", () => {
     expect(r.category).toBe("unclassified");
   });
 
+  it('treats "Misconfigured" as a negation', () => {
+    // The pattern was /\bmisconfigur\b/, which demands a word boundary right
+    // after "misconfigur" and therefore matched nothing. Every
+    // "… - Misconfigured" finding fell through to recon and left the inbox.
+    // Found by running the classifier over the findings already in the database.
+    const r = c("expect-ct", "Expect-CT Header - Misconfigured");
+    expect(r.kind).toBe("security");
+    expect(r.category).toBe("security_headers");
+  });
+
+  it.each(["Misconfigured CORS policy", "Unsafe inline script policy", "Deprecated TLS version offered"])(
+    "%s is a security finding",
+    (name) => {
+      expect(c("t", name).kind).toBe("security");
+    },
+  );
+
   it("distinguishes DMARC configured from DMARC missing", () => {
     expect(c("t", "DMARC record found").kind).toBe("control");
     expect(c("t", "Missing DMARC record").kind).toBe("security");
@@ -99,6 +123,12 @@ describe("security routing", () => {
     ["swagger", "API documentation exposed via swagger", "api_exposure"],
     ["aws-key", "AWS secret key leaked in response", "secret_exposure"],
     ["default-creds", "Default credentials accepted", "authentication"],
+    // Without SRI a compromised CDN silently swaps the script a page loads.
+    // This had no rule and was landing in "unclassified".
+    ["sri", "Missing Subresource Integrity", "supply_chain"],
+    // A reachable login panel is attack surface even when the template's
+    // wording never says "exposed".
+    ["strapi-panel", "Strapi Login Panel - Detect", "exposed_service"],
   ])("%s -> %s", (id, name, category) => {
     const r = c(id, name, "medium");
     expect(r.kind).toBe("security");

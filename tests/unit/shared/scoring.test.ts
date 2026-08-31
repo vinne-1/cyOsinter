@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { computeSecurityScore, SEVERITY_DEDUCTION } from "../../../shared/scoring";
+import { computeSecurityScore, explainSecurityScore, SEVERITY_DEDUCTION } from "../../../shared/scoring";
 
 /**
  * These tests previously pinned the exact output of a flat linear model
@@ -79,5 +79,50 @@ describe("computeSecurityScore", () => {
     expect(SEVERITY_DEDUCTION.medium).toBeGreaterThan(SEVERITY_DEDUCTION.low);
     // Informational findings describe the target rather than a defect.
     expect(SEVERITY_DEDUCTION.info).toBe(0);
+  });
+});
+
+describe("controls and recon do not affect the score", () => {
+  // The taxonomy split findings into security / control / recon. A control is
+  // evidence a protection is IN PLACE and recon is a technology fact. If either
+  // deducted, a domain that publishes DNSSEC and a security.txt would score
+  // WORSE than one that publishes nothing at all — the scanner would be
+  // punishing the work it exists to encourage.
+
+  it("a domain with only controls and recon scores 100", () => {
+    expect(
+      computeSecurityScore([
+        { severity: "info", kind: "control" },
+        { severity: "info", kind: "control" },
+        { severity: "info", kind: "recon" },
+        { severity: "medium", kind: "recon" },
+      ]),
+    ).toBe(100);
+  });
+
+  it("adding a control never lowers the score", () => {
+    const base = [{ severity: "high", kind: "security" }];
+    const withControls = [...base, { severity: "info", kind: "control" }, { severity: "medium", kind: "control" }];
+    expect(computeSecurityScore(withControls)).toBe(computeSecurityScore(base));
+  });
+
+  it("treats a finding with no kind as security, so nothing stops counting by accident", () => {
+    expect(computeSecurityScore([{ severity: "critical" }])).toBe(
+      computeSecurityScore([{ severity: "critical", kind: "security" }]),
+    );
+  });
+
+  it("explains the same set of findings it scores", () => {
+    // An explanation that counts a different set than the score it explains is
+    // worse than none: it looks authoritative while disagreeing.
+    const findings = [
+      { severity: "high", kind: "security" },
+      { severity: "critical", kind: "recon" },
+      { severity: "critical", kind: "control" },
+    ];
+    const explained = explainSecurityScore(findings);
+    expect(explained.score).toBe(computeSecurityScore(findings));
+    expect(explained.counts.critical).toBe(0);
+    expect(explained.counts.high).toBe(1);
   });
 });

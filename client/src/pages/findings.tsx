@@ -506,6 +506,11 @@ export default function Findings() {
   const [severityFilter, setSeverityFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  // The queue defaults to security. Controls (a protection that is working) and
+  // recon (a technology fact) are real output worth keeping, but neither is
+  // work to do, and mixing all three is what taught users to skim past this
+  // page. They stay one click away rather than being thrown out.
+  const [kindFilter, setKindFilter] = useState("security");
   const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [currentPage, setCurrentPage] = useState(1);
@@ -516,6 +521,7 @@ export default function Findings() {
     setSeverityFilter("all");
     setStatusFilter("all");
     setCategoryFilter("all");
+    setKindFilter("security");
     setSelectedIds(new Set());
     setCurrentPage(1);
   }, [selectedWorkspaceId]);
@@ -523,7 +529,7 @@ export default function Findings() {
   // Reset to page 1 when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchQuery, severityFilter, statusFilter, categoryFilter]);
+  }, [searchQuery, severityFilter, statusFilter, categoryFilter, kindFilter]);
 
   const { data: scans = [] } = useQuery<Scan[]>({
     queryKey: [`/api/workspaces/${selectedWorkspaceId}/scans`],
@@ -547,7 +553,10 @@ export default function Findings() {
     const matchesSeverity = severityFilter === "all" || f.severity === severityFilter;
     const matchesStatus = statusFilter === "all" || f.status === statusFilter;
     const matchesCategory = categoryFilter === "all" || f.category === categoryFilter;
-    return matchesSearch && matchesSeverity && matchesStatus && matchesCategory;
+    // Rows stored before the kind column existed read as security, so an older
+    // workspace shows exactly what it always did.
+    const matchesKind = kindFilter === "all" || ((f as { kind?: string }).kind ?? "security") === kindFilter;
+    return matchesSearch && matchesSeverity && matchesStatus && matchesCategory && matchesKind;
   });
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
@@ -602,12 +611,20 @@ export default function Findings() {
     },
   });
 
-  const countBySeverity = useMemo(() => ({
-    critical: (findings ?? []).filter((f) => f.severity === "critical").length,
-    high: (findings ?? []).filter((f) => f.severity === "high").length,
-    medium: (findings ?? []).filter((f) => f.severity === "medium").length,
-    low: (findings ?? []).filter((f) => f.severity === "low").length,
-  }), [findings]);
+  // Security-kind only, and deliberately NOT affected by the kind filter below.
+  // These tiles are the workspace's posture, so they must mean the same thing
+  // whichever list the user is looking at. Counting controls and recon here
+  // would let a medium-severity technology fact inflate the posture summary,
+  // and it would contradict computeSecurityScore, which ignores both.
+  const countBySeverity = useMemo(() => {
+    const security = (findings ?? []).filter((f) => ((f as { kind?: string }).kind ?? "security") === "security");
+    return {
+      critical: security.filter((f) => f.severity === "critical").length,
+      high: security.filter((f) => f.severity === "high").length,
+      medium: security.filter((f) => f.severity === "medium").length,
+      low: security.filter((f) => f.severity === "low").length,
+    };
+  }, [findings]);
 
   if (!selectedWorkspaceId) {
     return (
@@ -773,6 +790,18 @@ export default function Findings() {
                 data-testid="input-search-findings"
               />
             </div>
+            <Select value={kindFilter} onValueChange={setKindFilter}>
+              <SelectTrigger className="h-9 w-44" aria-label="Filter by observation kind" data-testid="select-kind-filter">
+                <SelectValue placeholder="Kind" />
+              </SelectTrigger>
+              <SelectContent>
+                {/* Named for what the reader gets, not for the internal enum. */}
+                <SelectItem value="security">Security issues</SelectItem>
+                <SelectItem value="control">Controls in place</SelectItem>
+                <SelectItem value="recon">Technology facts</SelectItem>
+                <SelectItem value="all">Everything</SelectItem>
+              </SelectContent>
+            </Select>
             <Select value={categoryFilter} onValueChange={setCategoryFilter}>
               <SelectTrigger className="h-9 w-40" aria-label="Filter by category">
                 <SelectValue placeholder="Category" />

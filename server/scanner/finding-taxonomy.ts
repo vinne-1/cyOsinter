@@ -65,13 +65,25 @@ const POSITIVE_CONTROLS: Array<{ pattern: RegExp; control: string }> = [
  * control being present — it is the HSTS control being wrong, and the previous
  * classifier had no rule for it so it fell through to the catch-all.
  */
-const NEGATIVE_QUALIFIER = /\b(weak|missing|absent|misconfigur|invalid|expired|insecure|disabled|not\s+(set|present|configured)|without)\b/i;
+// `misconfigur` and `unsafe` sit outside the trailing \b group on purpose.
+// Inside it the pattern was /\bmisconfigur\b/, which demands a word boundary
+// immediately after "misconfigur" — so it matched nothing, and every
+// "… - Misconfigured" observation fell straight through the negation check into
+// recon and out of the findings inbox. Found by running this classifier over
+// the findings already stored in the database rather than over invented cases.
+const NEGATIVE_QUALIFIER =
+  /\b(weak|missing|absent|invalid|expired|insecure|disabled|deprecated|not\s+(set|present|configured|enabled)|without)\b|\bmisconfigur|\bunsafe/i;
 
 /** Security categories, matched before the generic fallbacks. */
 const SECURITY_ROUTES: Array<{ pattern: RegExp; category: string }> = [
   { pattern: /strict-transport-security|\bhsts\b/i, category: "transport_security" },
   { pattern: /missing.*security.*header|security-headers|http-missing-security|x-frame-options|x-content-type|referrer-policy|permissions-policy/i, category: "security_headers" },
   { pattern: /content-security-policy|\bcsp\b/i, category: "security_headers" },
+  { pattern: /expect-ct/i, category: "security_headers" },
+  // Subresource Integrity: without it a compromised CDN silently swaps the
+  // script a page loads, so it is a supply-chain weakness rather than a header
+  // nicety. It had no rule at all and was landing in `unclassified`.
+  { pattern: /subresource.integrity|\bsri\b/i, category: "supply_chain" },
   { pattern: /cookie/i, category: "cookie_security" },
   { pattern: /\bcors\b/i, category: "cors_misconfiguration" },
   { pattern: /\bxss\b|cross-site.scripting/i, category: "xss" },
@@ -83,7 +95,9 @@ const SECURITY_ROUTES: Array<{ pattern: RegExp; category: string }> = [
   { pattern: /default.(credential|password|login)|weak.password/i, category: "authentication" },
   { pattern: /sql.injection|\bsqli\b|command.injection|\brce\b|ssrf|xxe|\bssti\b/i, category: "injection" },
   { pattern: /clickjack|frame.options/i, category: "clickjacking" },
-  { pattern: /exposed.(panel|admin|console|dashboard)|admin.(panel|login)/i, category: "exposed_service" },
+  // A reachable admin or login panel is attack surface whether or not the
+  // template's wording happens to include the word "exposed".
+  { pattern: /exposed.(panel|admin|console|dashboard)|admin.(panel|login)|(login|admin|management)\s*panel/i, category: "exposed_service" },
   { pattern: /api.*(expos|leak|doc|swagger|graphql)/i, category: "api_exposure" },
   { pattern: /secret|api.key|token.*(leak|expos)|credential/i, category: "secret_exposure" },
   // Deliberately NOT a bare /\bssl\b/. "SSL DNS Names" and "Detect SSL Certificate
@@ -106,8 +120,16 @@ const SECURITY_ROUTES: Array<{ pattern: RegExp; category: string }> = [
  * not a security verdict, so it is dropped from the findings inbox and lives in
  * the recon modules instead.
  */
+// `\bdetect(ion|ed|s)?\b` is deliberately broad. It is safe because the
+// security routes above run FIRST, so anything with a real security meaning has
+// already returned by the time we get here — "Weak HSTS - Detect" leaves as
+// transport_security, a CVE leaves as a vulnerability. What is left is genuine
+// enumeration. The narrower `-detect$` missed the common shapes outright:
+// "Apache Detection on host" and "AWS Service - Detect on host" both fell
+// through to `unclassified`, which made the taxonomy look full of gaps it did
+// not have.
 const RECON_PATTERNS =
-  /tech[-_]?detect|-detect$|detect-|wappalyzer|fingerprint|favicon|screenshot|metadata|http-title|form-detection|dns-names|issuer|\bwhois\b|dns-?record|version.detect|\bcname\b|waf-detect|robots\.txt|sitemap|openid|oauth.*(discover|config)|asset.?links|saas.*(service|detect)/i;
+  /tech[-_]?detect|\bdetect(ion|ed|s)?\b|wappalyzer|fingerprint|favicon|screenshot|metadata|http-title|form-detection|dns-names|issuer|\bwhois\b|dns-?record|\bcname\b|robots\.txt|sitemap|openid|oauth.*(discover|config)|asset.?links|saas.*(service|detect)|tenant\s*id|wildcard\s+dns/i;
 
 /**
  * Classifies a scanner observation.
