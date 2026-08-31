@@ -6,7 +6,7 @@ import {
   isFullCoverage, checkAborted, loadDirectoryWordlist,
   type ScanProgressCallback, type ScanOptions, type ScanResults,
 } from "./constants.js";
-import { getDNSTxtRecords, getMXRecords, getNSRecords, getFullDNSRecords, checkDNSSEC, analyzeSPF, analyzeDMARC, extractCloudProvidersFromSPF, extractEmailsFromDNS, getSRVRecords } from "./dns.js";
+import { getDNSTxtRecords, getMXRecords, getNSRecords, getFullDNSRecords, analyzeSPF, analyzeDMARC, extractCloudProvidersFromSPF, extractEmailsFromDNS, getSRVRecords } from "./dns.js";
 import { httpGet, getRedirectChain, httpGetMainPage, parseSetCookie, parseSecurityTxt, fetchSitemapUrls } from "./http.js";
 import { detectTechStack, scanOpenPorts, parseSocialTags, validatePathResponse } from "./detection.js";
 import { extractEmailsFromText, generateBackupFilePaths, extractSensitiveRobotsPaths, extractEmailsFromWhois, checkHIBPPasswords, checkS3Buckets, searchPGPKeyServer, extractEmailsFromCrtSh, getServerLocation, getWhois } from "./osint-helpers.js";
@@ -20,6 +20,7 @@ import { runPeopleOsint } from "./people-osint.js";
 import { buildSPFFindings, buildDMARCFindings, deriveMailContext, processHarvestedEmails } from "./osint-email-dns.js";
 import { analyseMailTransport, buildMailTransportFindings, mailTransportControls } from "./mail-transport-security.js";
 import { discoverSrvRecords, buildSrvFindings, summariseSrv } from "./srv-discovery.js";
+import { checkDnssec, buildDnssecFindings } from "./dnssec.js";
 
 const log = createLogger("scanner");
 
@@ -539,8 +540,9 @@ export async function runOSINTScan(domain: string, onProgress?: ScanProgressCall
       });
     }
   }
-  const dnssec = await checkDNSSEC(domain);
+  const dnssec = await checkDnssec(domain);
   results.reconData.dnssec = dnssec;
+  results.findings.push(...buildDnssecFindings(domain, dnssec, now));
 
   // API Security Discovery
   try {

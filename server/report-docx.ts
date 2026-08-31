@@ -2,6 +2,7 @@ import {
   Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType,
   Table, TableRow, TableCell, WidthType, BorderStyle, ImageRun, PageBreak,
 } from "docx";
+import { describeDnssec, type DnssecStatus } from "./scanner/dnssec.js";
 
 /**
  * Data-driven DOCX report generator. Produces the professional OSINT/EASM
@@ -54,7 +55,7 @@ export interface ReportDocxInput {
       caa?: Array<{ tag: string; value: string }>;
       soa?: { nsname?: string; hostmaster?: string } | null;
     };
-    dnssec?: { soaPresent?: boolean } | null;
+    dnssec?: DnssecStatus | null;
     /** WHOIS / domain registration (registrar, dates, nameservers). */
     whois?: Record<string, string>;
     /** Per-IP reputation + hosting intel (AbuseIPDB / VirusTotal / BGP ASN / geo). */
@@ -290,7 +291,10 @@ export async function generateReportDocx(input: ReportDocxInput): Promise<Buffer
     if (mxDetailed.length) rows.push(["MX", mxDetailed.join(", ")]);
     if (dnsr.caa?.length) rows.push(["CAA", dnsr.caa.map((c) => `${c.tag} ${c.value}`).join(", ")]);
     if (dnsr.soa?.nsname) rows.push(["SOA", `${dnsr.soa.nsname}${dnsr.soa.hostmaster ? ` (${dnsr.soa.hostmaster})` : ""}`]);
-    if (recon.dnssec) rows.push(["DNSSEC", recon.dnssec.soaPresent ? "SOA present (zone signed / responsive)" : "Not detected"]);
+    // This line used to read "SOA present (zone signed / responsive)" whenever
+    // an SOA record resolved, which is every domain — the report asserted a
+    // signed zone for targets that had no DNSSEC at all.
+    if (recon.dnssec) rows.push(["DNSSEC", describeDnssec(recon.dnssec)]);
     if (dnsr.txt?.length) {
       const txtFlat = dnsr.txt.map((r) => r.join("")).filter(Boolean);
       if (txtFlat.length) rows.push(["TXT", txtFlat.slice(0, 8).map((r) => r.slice(0, 120)).join("  |  ")]);

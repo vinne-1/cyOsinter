@@ -4,7 +4,7 @@
 export { classifyPathResponse, validatePathResponse, detectTechStack, scanOpenPorts, parseSocialTags, gradeHeader, checkSecurityHeaders, detectServerInfo, detectWAF, detectCDN } from "./detection.js";
 
 // DNS helpers
-export { resolveDNS, getDNSTxtRecords, getMXRecords, getNSRecords, getFullDNSRecords, checkDNSSEC, analyzeSPF, analyzeDMARC, extractCloudProvidersFromSPF, extractEmailsFromDNS } from "./dns.js";
+export { resolveDNS, getDNSTxtRecords, getMXRecords, getNSRecords, getFullDNSRecords, analyzeSPF, analyzeDMARC, extractCloudProvidersFromSPF, extractEmailsFromDNS } from "./dns.js";
 
 // HTTP helpers
 export { fetchJSON, fetchText, httpHead, httpGet, httpGetNoRedirect, getRedirectChain, httpGetMainPage, parseSetCookie, parseSecurityTxt, parseSitemapUrls, fetchSitemapUrls } from "./http.js";
@@ -17,6 +17,7 @@ export { extractEmailsFromText, redactCredentialValues, shannonEntropy, hasCrede
 
 // Nuclei scanner
 export { runNucleiScan } from "./nuclei.js";
+export { checkDnssec, describeDnssec } from "./dnssec.js";
 export type { NucleiHit, NucleiScanResult } from "./nuclei.js";
 
 // Recon module builder

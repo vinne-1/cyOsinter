@@ -89,7 +89,20 @@ export interface ReconData {
   techStack?: Array<{ name: string; source: string; category?: string; version?: string; thirdParty?: boolean }>;
   socialTags?: Record<string, string>;
   serverLocation?: { country?: string; region?: string; city?: string; org?: string; lat?: number; lon?: number };
-  dnssec?: { soaPresent: boolean };
+  /**
+   * Real DNSSEC state. This used to be `{ soaPresent: boolean }`, which was set
+   * by resolving an SOA record — something every resolvable domain has — and
+   * the DOCX report printed it as "zone signed". See scanner/dnssec.ts.
+   */
+  dnssec?: {
+    signed: boolean;
+    dsPresent: boolean;
+    dnskeyPresent: boolean;
+    authenticatedData: boolean;
+    algorithms: number[];
+    state: "signed" | "keys-without-delegation" | "unsigned" | "unverifiable";
+    detail: string;
+  };
   // Phase 2: Advanced detection
   subdomainTakeover?: Array<{
     subdomain: string;

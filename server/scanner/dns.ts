@@ -114,9 +114,10 @@ export async function getSRVRecords(
   return recordResolver.resolveSrv(name);
 }
 
-export function checkDNSSEC(domain: string): Promise<{ soaPresent: boolean }> {
-  return recordResolver.resolveSoa(domain).then(() => ({ soaPresent: true })).catch(() => ({ soaPresent: false }));
-}
+// checkDNSSEC used to live here. It resolved an SOA record — which every
+// resolvable domain has — and callers reported the result as "zone signed".
+// Real DNSSEC detection needs DNSKEY/DS records and the AD flag, none of which
+// node's resolver can ask for; see scanner/dnssec.ts.
 
 export function analyzeSPF(txtRecords: string[][]): { found: boolean; record: string; issues: string[] } {
   const spfRecords = txtRecords.flat().filter(r => r.startsWith("v=spf1"));

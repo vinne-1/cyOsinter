@@ -25,13 +25,65 @@ import {
 import { ModuleHeader } from "./shared";
 
 // DNS Overview (OSINT)
+/**
+ * DNSSEC state, in words a reader can act on.
+ *
+ * Both call sites used to print "SOA present: Yes", which told the reader
+ * nothing — every resolvable domain has an SOA record, and the underlying check
+ * never looked at DNSSEC at all.
+ */
+function DnssecLine({ dnssec, compact = false }: { dnssec: any; compact?: boolean }) {
+  const state = dnssec?.state as string | undefined;
+  // Legacy scans stored { soaPresent } and knew nothing about the real state.
+  // Showing them as "Not signed" would assert something the scan never checked.
+  if (!state) {
+    return (
+      <p className="text-xs text-muted-foreground" data-testid="text-dnssec">
+        DNSSEC: not checked by this scan — re-run to determine it.
+      </p>
+    );
+  }
+  const label =
+    state === "signed"
+      ? `Signed${dnssec.algorithms?.length ? ` (algorithm ${dnssec.algorithms.join(", ")})` : ""}`
+      : state === "keys-without-delegation"
+        ? "Keys published but not delegated"
+        : state === "unsigned"
+          ? "Not signed"
+          : "Could not be determined";
+  const tone =
+    state === "signed"
+      ? "text-severity-ok"
+      : state === "keys-without-delegation"
+        ? "text-severity-medium"
+        : "text-muted-foreground";
+  if (compact) {
+    return (
+      <p className="text-xs text-muted-foreground" data-testid="text-dnssec">
+        DNSSEC: <span className={tone}>{label}</span>
+      </p>
+    );
+  }
+  return (
+    <div className="flex items-start gap-2" data-testid="text-dnssec">
+      <Shield className="w-4 h-4 mt-0.5 flex-shrink-0" />
+      <div>
+        <span className="text-sm">
+          DNSSEC: <span className={tone}>{label}</span>
+        </span>
+        {dnssec.detail && <p className="text-xs text-muted-foreground">{dnssec.detail}</p>}
+      </div>
+    </div>
+  );
+}
+
 export function DNSOverviewPanel({ mod }: { mod: ReconModule }) {
   const d = mod.data as Record<string, any>;
   const rec = d.dnsRecords || {};
   return (
     <div className="space-y-4" data-testid="panel-dns-overview">
       <ModuleHeader title="DNS Records" icon={Network} confidence={mod.confidence || 0} generatedAt={mod.generatedAt} />
-      {d.dnssec && <div className="flex items-center gap-2"><Shield className="w-4 h-4" /><span className="text-sm">SOA present: {d.dnssec.soaPresent ? "Yes" : "No"}</span></div>}
+      {d.dnssec && <DnssecLine dnssec={d.dnssec} />}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {rec.a?.length > 0 && <Card><CardHeader className="pb-2"><CardTitle className="text-sm font-medium">A</CardTitle></CardHeader><CardContent><pre className="text-xs font-mono whitespace-pre-wrap">{rec.a.join("\n")}</pre></CardContent></Card>}
         {rec.aaaa?.length > 0 && <Card><CardHeader className="pb-2"><CardTitle className="text-sm font-medium">AAAA</CardTitle></CardHeader><CardContent><pre className="text-xs font-mono whitespace-pre-wrap break-all">{rec.aaaa.join("\n")}</pre></CardContent></Card>}
@@ -159,7 +211,7 @@ export function WebsiteOverviewPanel({ mod }: { mod: ReconModule }) {
           <CardContent><div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">{(Object.entries(d.socialTags || {})).map(([k, v]) => <div key={k}><span className="text-muted-foreground">{k}:</span> {String(v).length > 80 ? String(v).slice(0, 80) + "..." : String(v)}</div>)}</div></CardContent>
         </Card>
       )}
-      {d.dnssec && <div className="text-xs text-muted-foreground">DNSSEC: SOA present = {d.dnssec.soaPresent ? "Yes" : "No"}</div>}
+      {d.dnssec && <DnssecLine dnssec={d.dnssec} compact />}
     </div>
   );
 }

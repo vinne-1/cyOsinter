@@ -1,5 +1,6 @@
 import { storage } from "./storage";
 import type { ReportDocxInput, ReportFinding } from "./report-docx";
+import type { DnssecStatus } from "./scanner/dnssec.js";
 
 /**
  * Assemble a {@link ReportDocxInput} from a workspace's stored scan data
@@ -111,7 +112,7 @@ export async function buildDocxInput(
     : undefined;
   // Full DNS record set + DNSSEC from the dns_overview module.
   const dnsRecords = dnsOv?.dnsRecords as NonNullable<ReportDocxInput["recon"]>["dnsRecords"];
-  const dnssec = dnsOv?.dnssec as { soaPresent?: boolean } | undefined;
+  const dnssec = dnsOv?.dnssec as DnssecStatus | undefined;
   // WHOIS / domain registration.
   const whois = domainInfoMod?.domainInfo as Record<string, string> | undefined;
   // Server geolocation (from website_overview.serverLocation).

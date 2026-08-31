@@ -1,9 +1,10 @@
 import { createLogger } from "../logger.js";
 import { checkAborted, type ScanProgressCallback, type ScanOptions, type ScanResults } from "./constants.js";
 import {
-  getDNSTxtRecords, getMXRecords, getNSRecords, getFullDNSRecords, checkDNSSEC,
+  getDNSTxtRecords, getMXRecords, getNSRecords, getFullDNSRecords,
   analyzeSPF, analyzeDMARC, extractCloudProvidersFromSPF, extractEmailsFromDNS, resolveDNS,
 } from "./dns.js";
+import { checkDnssec } from "./dnssec.js";
 import { fetchJSON, httpGetMainPage, getRedirectChain, parseSecurityTxt, parseSetCookie } from "./http.js";
 import { getCertificateInfo } from "./tls.js";
 import { checkSecurityHeaders, detectServerInfo, detectTechStack, parseSocialTags } from "./detection.js";
@@ -61,7 +62,7 @@ export async function runPassiveScan(
       getFullDNSRecords(domain),
       getRedirectChain(`https://${domain}`),
       getWhois(domain),
-      checkDNSSEC(domain),
+      checkDnssec(domain),
       resolveDNS(domain),
     ]);
 
