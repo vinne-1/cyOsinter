@@ -11,6 +11,7 @@ import {
 import { resolveDNS, getNSRecords } from "./dns.js";
 import { fetchJSON, httpHead, httpGet } from "./http.js";
 import { getCertificateInfo } from "./tls.js";
+import { enumerateTlsVersions, buildTlsProtocolFindings } from "./tls-protocols.js";
 import { scanOpenPorts, checkSecurityHeaders, detectServerInfo, detectWAF, detectCDN } from "./detection.js";
 import { runWithConcurrency, makeConcurrencyProgress } from "./utils.js";
 import { scanSubdomainTakeover } from "./takeover.js";
@@ -288,6 +289,24 @@ export async function runEASMScan(domain: string, onProgress?: ScanProgressCallb
 
   checkAborted(signal);
   await report("Analyzing TLS certificate and security posture...", 65, "analyze_tls", 60);
+
+  // Which protocol versions the server will ACCEPT, not just the one it
+  // negotiated with us. A host still speaking TLS 1.0 alongside 1.3 negotiates
+  // 1.3 with this scanner and looks perfectly healthy; the obsolete version is
+  // only visible if you ask for it specifically.
+  if (certInfo) {
+    const tlsVersions = await enumerateTlsVersions(domain, 443);
+    results.findings.push(...buildTlsProtocolFindings(domain, tlsVersions, new Date().toISOString()));
+    if (!tlsVersions.unreachable) {
+      results.reconData.tlsVersions = {
+        accepted: tlsVersions.results.filter((r) => r.supported).map((r) => r.version),
+        obsoleteAccepted: tlsVersions.obsoleteAccepted,
+        // An undetermined probe is recorded so the panel can say "could not
+        // check" rather than implying the version was refused.
+        indeterminate: tlsVersions.results.filter((r) => r.indeterminate).map((r) => r.version),
+      };
+    }
+  }
 
   if (certInfo) {
     results.assets.push({

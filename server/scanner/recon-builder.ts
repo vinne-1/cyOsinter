@@ -162,6 +162,11 @@ export async function buildReconModules(
           source: "TLS connection + HTTP header analysis + WAF/CDN detection",
           ssl: easmResults.reconData.ssl,
           tlsPosture: { grade: tlsGrade },
+          // Which versions the server ACCEPTS. The grade above is derived from
+          // the one version it negotiated with us, which is always the best one
+          // both sides support and therefore says nothing about what else it
+          // would agree to.
+          tlsVersions: easmResults.reconData.tlsVersions,
           securityHeaders,
           serverInfo: easmResults.reconData.serverInfo ? { leaks: serverLeaks } : {},
           dns: { ns: dnsRecon?.ns || [], ips },

@@ -225,6 +225,47 @@ describe("DNS posture reaches the UI", () => {
   });
 });
 
+/** Pulls the attack_surface module, which is what AttackSurfacePanel renders. */
+async function attackSurface(reconData: Record<string, unknown>) {
+  // The EASM branch reads subdomains and assets as well as reconData, so a
+  // reconData-only fixture is not enough to reach the module builder.
+  const easm = { findings: [], subdomains: [], assets: [], reconData } as unknown as ScanResults;
+  const mods = await buildReconModules("example.com", easm, null);
+  return mods.find((m) => m.moduleType === "attack_surface")?.data as Record<string, any> | undefined;
+}
+
+describe("accepted TLS versions reach the UI", () => {
+  const BASE = { ssl: { subject: "example.com", issuer: "R3", daysRemaining: 60, protocol: "TLSv1.3" }, dns: { ips: ["1.2.3.4"] } };
+
+  it("carries the accepted versions and flags obsolete ones", async () => {
+    // The TLS grade beside this is derived from the single version negotiated,
+    // which is always the best one both sides support. A host accepting TLS 1.0
+    // as well earns a good grade and is still downgradable, so both numbers
+    // have to reach the screen.
+    const data = await attackSurface({
+      ...BASE,
+      tlsVersions: { accepted: ["TLSv1", "TLSv1.2", "TLSv1.3"], obsoleteAccepted: ["TLSv1"], indeterminate: [] },
+    });
+    expect(data!.tlsVersions.accepted).toEqual(["TLSv1", "TLSv1.2", "TLSv1.3"]);
+    expect(data!.tlsVersions.obsoleteAccepted).toEqual(["TLSv1"]);
+  });
+
+  it("carries a clean modern-only host through with nothing obsolete", async () => {
+    const data = await attackSurface({
+      ...BASE,
+      tlsVersions: { accepted: ["TLSv1.2", "TLSv1.3"], obsoleteAccepted: [], indeterminate: ["TLSv1"] },
+    });
+    expect(data!.tlsVersions.obsoleteAccepted).toEqual([]);
+    // Kept so the panel can say "could not check" rather than implying refusal.
+    expect(data!.tlsVersions.indeterminate).toEqual(["TLSv1"]);
+  });
+
+  it("omits the block for a scan that never enumerated versions", async () => {
+    const data = await attackSurface(BASE);
+    expect(data!.tlsVersions).toBeUndefined();
+  });
+});
+
 describe("the existing email module is unchanged by the addition", () => {
   it("still grades SPF and DMARC", async () => {
     const data = await cloudFootprint({ emailSecurity: EMAIL_SEC });

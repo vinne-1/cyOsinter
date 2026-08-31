@@ -31,6 +31,12 @@ export interface ReconData {
     protocol?: string;
     altNames?: string[];
   };
+  /**
+   * TLS versions the host ACCEPTS, as opposed to the single version it happened
+   * to negotiate. `indeterminate` is kept separate so the UI can say "could not
+   * check" rather than implying a version was refused.
+   */
+  tlsVersions?: { accepted: string[]; obsoleteAccepted: string[]; indeterminate: string[] };
   securityHeaders?: Record<string, { present?: boolean; value?: string | null; grade?: string }>;
   serverInfo?: {
     leaks?: string[];

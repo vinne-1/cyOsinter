@@ -41,6 +41,7 @@ export function AttackSurfacePanel({ mod }: { mod: ReconModule }) {
   const d = mod.data as Record<string, any>;
   const headers = d.securityHeaders || {};
   const tlsGrade = deriveTlsGrade(d);
+  const tlsVersions = d.tlsVersions as { accepted?: string[]; obsoleteAccepted?: string[]; indeterminate?: string[] } | undefined;
   const publicIPs = (d.publicIPs || []) as Array<{ ip: string; banner?: string; services?: string[] }>;
   const ips = publicIPs.map((p) => p.ip).filter(Boolean);
   const assetInventory = (d.assetInventory || []) as Array<{ host: string; ip: string; category: string; riskScore: number; tlsGrade: string; waf: string; cdn: string }>;
@@ -139,6 +140,27 @@ export function AttackSurfacePanel({ mod }: { mod: ReconModule }) {
         <Card><CardContent className="p-3 text-center"><p className="text-lg font-semibold">{assetInventory.length || (d.publicIPs || []).length}</p><p className="text-xs text-muted-foreground">Hosts</p></CardContent></Card>
         <Card><CardContent className="p-3 text-center"><p className="text-lg font-semibold text-orange-400">{highRiskCount}</p><p className="text-xs text-muted-foreground">High Risk</p></CardContent></Card>
         <Card><CardContent className="p-3 text-center"><GradeBadge grade={tlsGrade} /><p className="text-xs text-muted-foreground mt-1">TLS Grade</p></CardContent></Card>
+        {/* Accepted versions, not the single one negotiated. A host speaking
+            TLS 1.0 alongside 1.3 earns a good grade above and is still
+            downgradable, so the two numbers say different things and both
+            belong on screen. */}
+        {tlsVersions && (
+          <Card>
+            <CardContent className="p-3 text-center">
+              <p
+                className={`text-sm font-mono font-medium ${
+                  tlsVersions.obsoleteAccepted?.length ? "text-severity-high" : "text-severity-ok"
+                }`}
+                data-testid="text-tls-versions"
+              >
+                {(tlsVersions.accepted ?? []).map((v: string) => v.replace(/^TLSv1$/, "1.0").replace(/^TLSv/, "")).join(", ") || "none"}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">
+                {tlsVersions.obsoleteAccepted?.length ? "Accepts obsolete TLS" : "TLS versions accepted"}
+              </p>
+            </CardContent>
+          </Card>
+        )}
         <Card><CardContent className="p-3 text-center"><StatusIcon pass={d.wafDetection?.detected || false} /><p className="text-xs text-muted-foreground mt-1">WAF {d.wafDetection?.provider || ""}</p></CardContent></Card>
         <Card><CardContent className="p-3 text-center"><p className="text-lg font-semibold">{wafCoverage}%</p><p className="text-xs text-muted-foreground">WAF Coverage</p></CardContent></Card>
       </div>
