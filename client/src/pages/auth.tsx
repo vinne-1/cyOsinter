@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Shield, LogIn, UserPlus } from "lucide-react";
+import { Shield, LogIn, UserPlus, Radar, Lock, Globe, Activity } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 
@@ -165,32 +165,107 @@ function RegisterForm() {
 
 export default function AuthPage() {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background p-4">
-      <Card className="w-full max-w-md">
-        <CardHeader className="text-center space-y-2">
-          <div className="flex justify-center">
-            <Shield className="w-12 h-12 text-primary" />
+    <div className="grid min-h-screen lg:grid-cols-[1.1fr_1fr]">
+      {/* ── Brand panel ──
+          Hidden below lg so the form is never pushed off a small screen. */}
+      <aside className="relative hidden overflow-hidden bg-surface-inset lg:flex lg:flex-col lg:justify-between lg:p-12">
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute -left-32 -top-32 h-[32rem] w-[32rem] rounded-full opacity-25 blur-3xl"
+          style={{ background: "radial-gradient(circle, hsl(var(--brand-from)), transparent 70%)" }}
+        />
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute -bottom-40 -right-24 h-[28rem] w-[28rem] rounded-full opacity-20 blur-3xl"
+          style={{ background: "radial-gradient(circle, hsl(var(--brand-to)), transparent 70%)" }}
+        />
+        {/* Faint grid, evoking a radar sweep without animating anything costly. */}
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 opacity-[0.055]"
+          style={{
+            backgroundImage:
+              "linear-gradient(hsl(var(--foreground)) 1px, transparent 1px), linear-gradient(90deg, hsl(var(--foreground)) 1px, transparent 1px)",
+            backgroundSize: "56px 56px",
+          }}
+        />
+
+        <div className="relative flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-brand-from to-brand-to shadow-glow">
+            <Shield className="h-5 w-5 text-white" aria-hidden="true" />
           </div>
-          <CardTitle className="text-2xl font-bold">CyShield Pro</CardTitle>
-          <p className="text-sm text-muted-foreground">
-            Security intelligence platform
+          <span className="text-xl font-semibold tracking-tight">Cyshield Pro</span>
+        </div>
+
+        <div className="relative max-w-lg">
+          <h1 className="text-4xl font-semibold leading-tight tracking-tight">
+            Know your attack surface
+            <br />
+            <span className="bg-gradient-to-r from-brand-from to-brand-to bg-clip-text text-transparent">
+              before someone else does.
+            </span>
+          </h1>
+          <p className="mt-4 text-base leading-relaxed text-muted-foreground">
+            Continuous external attack surface management and OSINT reconnaissance —
+            subdomains, exposed services, TLS and DNS posture, leaked secrets and CVE
+            correlation, in one self-hosted platform.
           </p>
-        </CardHeader>
-        <CardContent>
-          <Tabs defaultValue="login">
+
+          {/* A list, not a <dl>: these are feature blurbs rather than
+              term/definition pairs, and dt/dd must be direct children of the dl,
+              which the two-line layout below cannot satisfy. */}
+          <ul className="mt-10 grid grid-cols-2 gap-x-6 gap-y-5">
+            {[
+              { icon: Globe, label: "Asset discovery", copy: "Subdomains, IPs, services, certificates" },
+              { icon: Radar, label: "OSINT recon", copy: "Leaked credentials and exposed documents" },
+              { icon: Lock, label: "Posture scoring", copy: "TLS, DNS and email security grading" },
+              { icon: Activity, label: "Continuous monitoring", copy: "Scheduled scans with change alerts" },
+            ].map((f) => (
+              <li key={f.label} className="flex gap-3">
+                <f.icon className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                <div>
+                  <p className="text-sm font-medium">{f.label}</p>
+                  <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{f.copy}</p>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+
+        <p className="relative text-xs text-muted-foreground">
+          Self-hosted · Your data never leaves your infrastructure
+        </p>
+      </aside>
+
+      {/* ── Form panel ── */}
+      <main className="flex items-center justify-center bg-background p-6">
+        <div className="w-full max-w-sm">
+          <div className="mb-8 flex items-center gap-3 lg:hidden">
+            <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-brand-from to-brand-to">
+              <Shield className="h-4 w-4 text-white" aria-hidden="true" />
+            </div>
+            <span className="text-lg font-semibold tracking-tight">Cyshield Pro</span>
+          </div>
+
+          <h2 className="text-2xl font-semibold tracking-tight">Welcome back</h2>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Sign in to continue to your workspace.
+          </p>
+
+          <Tabs defaultValue="login" className="mt-8">
             <TabsList className="grid w-full grid-cols-2">
               <TabsTrigger value="login">Login</TabsTrigger>
               <TabsTrigger value="register">Register</TabsTrigger>
             </TabsList>
-            <TabsContent value="login" className="mt-4">
+            <TabsContent value="login" className="mt-6">
               <LoginForm />
             </TabsContent>
-            <TabsContent value="register" className="mt-4">
+            <TabsContent value="register" className="mt-6">
               <RegisterForm />
             </TabsContent>
           </Tabs>
-        </CardContent>
-      </Card>
+        </div>
+      </main>
     </div>
   );
 }

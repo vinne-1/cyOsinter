@@ -49,7 +49,9 @@ services:
       db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://localhost:5000/ || exit 1"]
+      # Probe readiness, not the SPA: hitting / returns 200 even when the
+      # database is down, so the container would report healthy while broken.
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:5000/readyz || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 6

@@ -295,7 +295,7 @@ export function createAdminRouter(httpServer: Server): Router {
   // GET /api/status — machine-readable health board (no admin required, just auth)
   adminRouter.get("/status", async (_req, res) => {
     try {
-      const queue = getQueueStatus();
+      const queue = await getQueueStatus();
       const integrations = getIntegrationsStatus();
       let ollamaReachable = false;
       try { const s = await getOllamaStatus(); ollamaReachable = s.reachable ?? false; } catch { /* ignore */ }
@@ -368,7 +368,7 @@ export function createAdminRouter(httpServer: Server): Router {
     checks.push({ name: "github_config", status: githubConfigured ? "pass" : "skip", detail: githubConfigured ? undefined : "Not configured (optional)" });
 
     // 6. Scan queue health
-    const queue = getQueueStatus();
+    const queue = await getQueueStatus();
     checks.push({ name: "scan_queue", status: "pass", detail: `pending=${queue.queueLength} running=${queue.activeScans}/${queue.maxConcurrent}` });
 
     const failures = checks.filter(c => c.status === "fail");

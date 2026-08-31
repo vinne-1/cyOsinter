@@ -321,8 +321,10 @@ function NodeCard({ node }: { node: AttackNode }) {
       )}
       {node.findings.length > 0 && (
         <div className="mt-2 space-y-1 max-h-24 overflow-y-auto">
+          {/* No opacity modifier on these labels: stacked on the inherited
+              tint it measured 4.31:1, under the 4.5:1 AA floor for small text. */}
           {node.findings.slice(0, 3).map((f) => (
-            <div key={f.id} className="text-xs truncate opacity-75" title={f.title}>
+            <div key={f.id} className="truncate text-xs" title={f.title}>
               {f.title}
             </div>
           ))}

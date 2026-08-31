@@ -118,10 +118,18 @@ export function FindingsSummaryCard({ findings }: { findings: Finding[] }) {
           <p className="text-sm text-muted-foreground py-8 text-center">No findings yet. Run a scan to discover vulnerabilities.</p>
         ) : (
           <div className="flex flex-col sm:flex-row items-center gap-6">
-            <div className="flex-shrink-0">
+            {/* Decorative: every value is also rendered as text in the legend
+                beside it, so the chart adds no information for a screen reader
+                and Recharts' internal <path> elements fail svg-img-alt. */}
+            <div className="flex-shrink-0" aria-hidden="true">
               <ResponsiveContainer width={160} height={160}>
+                {/* rootTabIndex/tabIndex -1: Recharts makes the pie layer
+                    focusable by default, which puts a tab stop inside an
+                    aria-hidden container. */}
                 <PieChart>
                   <Pie
+                    tabIndex={-1}
+                    rootTabIndex={-1}
                     data={sliceData}
                     cx="50%"
                     cy="50%"

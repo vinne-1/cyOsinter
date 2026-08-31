@@ -577,7 +577,7 @@ export default function Integrations() {
               <Label className="text-xs">Model</Label>
               <p className="text-xs text-muted-foreground">smollm2:135m is smallest; run <code className="bg-muted px-1 rounded">ollama pull smollm2:135m</code> to use.</p>
               <Select value={ollamaModelSelect} onValueChange={setOllamaModelSelect} data-testid="select-ollama-model">
-                <SelectTrigger className="font-mono text-sm">
+                <SelectTrigger className="font-mono text-sm" aria-label="Ollama model">
                   <SelectValue placeholder="Select model" />
                 </SelectTrigger>
                 <SelectContent>
@@ -608,6 +608,7 @@ export default function Integrations() {
               <Switch
                 checked={ollamaEnabled}
                 onCheckedChange={setOllamaEnabled}
+                aria-label="Enable AI features via Ollama"
                 data-testid="switch-ollama-enabled"
               />
             </div>

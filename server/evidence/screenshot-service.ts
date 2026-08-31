@@ -1,4 +1,10 @@
 import { createLogger } from "../logger";
+import {
+  STEALTH_LAUNCH_ARGS,
+  STEALTH_INIT_SCRIPT,
+  stealthContextOptions,
+} from "./browser-stealth.js";
+import { resolveBrowserEngine } from "./browser-engine.js";
 
 /**
  * Headless-browser evidence capture. Given a domain and its findings, captures
@@ -147,12 +153,38 @@ export async function captureEvidence(
   const shots: Record<string, Buffer> = {};
   try {
     const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || undefined;
-    browser = await chromium.launch({ headless: true, executablePath, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    // Stock Chromium advertises itself as automated (navigator.webdriver, no
+    // window.chrome, empty plugin list), and many targets serve a block page
+    // rather than content — which silently degrades the evidence in the report.
+    // See browser-stealth.ts for what these patches cover and what they do not.
+    // Engine is configurable (CYSHIELD_BROWSER_ENGINE); stock Playwright by
+    // default. See browser-engine.ts for the licence and trade-off of each.
+    const engine = await resolveBrowserEngine();
+    browser = (await engine.chromium.launch({
+      headless: true,
+      executablePath,
+      args: [...STEALTH_LAUNCH_ARGS],
+    })) as import("playwright").Browser;
+    const stealthOpts = stealthContextOptions(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    );
     const ctx = await browser.newContext({
-      userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-      viewport: { width: 1280, height: 800 },
+      ...stealthOpts,
       ignoreHTTPSErrors: true,
     });
+    if (engine.supportsInitScript) {
+      // Runs in every frame before page scripts, so detection code never
+      // observes the un-patched values.
+      await ctx.addInitScript(STEALTH_INIT_SCRIPT);
+    } else {
+      // Calling addInitScript here would succeed and do nothing, leaving the
+      // page-level signals exposed with no error anywhere — so say so instead
+      // of failing quietly.
+      log.warn(
+        { engine: engine.name },
+        "Engine does not execute init scripts; page-level stealth patches are NOT applied",
+      );
+    }
 
     const grab = async (key: string, url: string, fullPage = false, headersFor?: string): Promise<void> => {
       if (Object.keys(shots).length >= maxShots || shots[key]) return;

@@ -53,6 +53,45 @@ import type { Finding, Scan } from "@shared/schema";
 import { SeverityBadge, StatusBadge } from "@/components/severity-badge";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { useToast } from "@/hooks/use-toast";
+import { cn } from "@/lib/utils";
+import { severityMeta } from "@/lib/severity";
+
+/**
+ * Remediation-deadline state for a finding.
+ *
+ * Findings carry `dueDate` and `slaBreached` and nothing rendered them, because
+ * until the SLA clock was wired up they were always null/false. Now that they
+ * hold real values, an overdue item has to be visible in the list — the whole
+ * point of a deadline is that someone sees it before it passes.
+ */
+function SlaIndicator({ finding }: { finding: Finding }) {
+  const closed = ["resolved", "false_positive", "accepted_risk"].includes(finding.status);
+  if (closed || !finding.dueDate) return null;
+
+  const due = new Date(finding.dueDate).getTime();
+  const hoursLeft = (due - Date.now()) / 3_600_000;
+
+  if (finding.slaBreached || hoursLeft <= 0) {
+    const daysOver = Math.floor(-hoursLeft / 24);
+    return (
+      <span className="inline-flex items-center gap-1 rounded bg-severity-critical/12 px-1.5 py-0.5 text-[0.6875rem] font-medium text-severity-critical">
+        <Clock className="h-3 w-3" aria-hidden="true" />
+        Overdue{daysOver >= 1 ? ` ${daysOver}d` : ""}
+      </span>
+    );
+  }
+  // Only warn inside the last day; anything further out is just noise in a list.
+  if (hoursLeft <= 24) {
+    return (
+      <span className="inline-flex items-center gap-1 rounded bg-severity-medium/12 px-1.5 py-0.5 text-[0.6875rem] font-medium text-severity-medium">
+        <Clock className="h-3 w-3" aria-hidden="true" />
+        Due in {Math.max(1, Math.round(hoursLeft))}h
+      </span>
+    );
+  }
+  return null;
+}
+
 
 function FindingDetail({
   finding,
@@ -598,7 +637,7 @@ export default function Findings() {
   }
 
   return (
-    <div className="space-y-6 p-6">
+    <div className="mx-auto max-w-[1600px] space-y-6 p-6">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight" data-testid="text-findings-title">Findings Inbox</h1>
         <p className="text-sm text-muted-foreground mt-1">
@@ -606,28 +645,40 @@ export default function Findings() {
         </p>
       </div>
 
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        {Object.entries(countBySeverity).map(([severity, count]) => (
-          <Card
-            key={severity}
-            className={`cursor-pointer transition-colors ${severityFilter === severity ? "ring-1 ring-primary" : ""}`}
-            onClick={() => setSeverityFilter(severityFilter === severity ? "all" : severity)}
-            data-testid={`card-filter-${severity}`}
-          >
-            <CardContent className="p-4 flex items-center justify-between gap-2">
-              <div>
-                <p className="text-lg font-semibold">{count}</p>
-                <p className="text-xs text-muted-foreground capitalize">{severity}</p>
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        {Object.entries(countBySeverity).map(([severity, count]) => {
+          const meta = severityMeta(severity);
+          const active = severityFilter === severity;
+          return (
+            <button
+              key={severity}
+              type="button"
+              // A filter is a control, not a card: it must be reachable by
+              // keyboard and announce its pressed state.
+              aria-pressed={active}
+              onClick={() => setSeverityFilter(active ? "all" : severity)}
+              data-testid={`card-filter-${severity}`}
+              className={cn(
+                "group relative overflow-hidden rounded-xl border bg-surface-2 p-4 text-left transition-all",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                active ? "border-primary/50 shadow-lift" : "border-hairline hover:border-primary/30",
+              )}
+            >
+              <span
+                aria-hidden="true"
+                className={cn("absolute inset-x-0 top-0 h-0.5 transition-opacity", meta.solid,
+                  active ? "opacity-100" : "opacity-40 group-hover:opacity-70")}
+              />
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <p className="text-display-sm font-semibold tabular-nums">{count}</p>
+                  <p className="mt-0.5 text-xs capitalize text-muted-foreground">{meta.label}</p>
+                </div>
+                <span className={cn("h-2.5 w-2.5 rounded-full", meta.solid)} aria-hidden="true" />
               </div>
-              <div className={`w-3 h-3 rounded-full ${
-                severity === "critical" ? "bg-red-500" :
-                severity === "high" ? "bg-orange-500" :
-                severity === "medium" ? "bg-yellow-500" :
-                "bg-blue-500"
-              }`} />
-            </CardContent>
-          </Card>
-        ))}
+            </button>
+          );
+        })}
       </div>
 
       <Card data-testid="card-findings-table">
@@ -723,7 +774,7 @@ export default function Findings() {
               />
             </div>
             <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-              <SelectTrigger className="w-40 h-9">
+              <SelectTrigger className="h-9 w-40" aria-label="Filter by category">
                 <SelectValue placeholder="Category" />
               </SelectTrigger>
               <SelectContent>
@@ -750,7 +801,7 @@ export default function Findings() {
               </SelectContent>
             </Select>
             <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="w-36 h-9" data-testid="select-status-filter">
+              <SelectTrigger className="h-9 w-36" aria-label="Filter by status" data-testid="select-status-filter">
                 <SelectValue placeholder="Status" />
               </SelectTrigger>
               <SelectContent>
@@ -788,7 +839,7 @@ export default function Findings() {
               {paginatedFindings.map((finding) => (
                 <div
                   key={finding.id}
-                  className="flex items-center justify-between gap-4 p-3 rounded-md bg-muted/30 hover-elevate"
+                  className="flex items-center justify-between gap-4 rounded-lg border border-transparent bg-surface-inset/60 p-3 transition-colors hover:border-hairline hover:bg-surface-3/50"
                   data-testid={`finding-item-${finding.id}`}
                 >
                   <div className="flex items-center gap-3 min-w-0 flex-1">
@@ -798,25 +849,21 @@ export default function Findings() {
                       onClick={(e) => e.stopPropagation()}
                       aria-label={`Select ${finding.title}`}
                     />
-                    <div
-                      className={`w-1.5 h-8 rounded-full flex-shrink-0 ${
-                        finding.severity === "critical" ? "bg-red-500" :
-                        finding.severity === "high" ? "bg-orange-500" :
-                        finding.severity === "medium" ? "bg-yellow-500" :
-                        finding.severity === "low" ? "bg-blue-500" :
-                        "bg-slate-500"
-                      }`}
+                    <span
+                      aria-hidden="true"
+                      className={cn("h-8 w-1.5 flex-shrink-0 rounded-full", severityMeta(finding.severity).solid)}
                     />
                     <div
                       className="min-w-0 flex-1 cursor-pointer active-elevate-2"
                       onClick={() => setSelectedFinding(finding)}
                     >
                       <p className="text-sm font-medium truncate">{finding.title}</p>
-                      <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                        <span className="text-xs text-muted-foreground font-mono truncate">{finding.affectedAsset}</span>
-                        <span className="text-xs text-muted-foreground capitalize">
+                      <div className="mt-0.5 flex flex-wrap items-center gap-2">
+                        <span className="truncate font-mono text-xs text-muted-foreground">{finding.affectedAsset}</span>
+                        <span className="text-xs capitalize text-muted-foreground">
                           {finding.category.replace(/_/g, " ")}
                         </span>
+                        <SlaIndicator finding={finding} />
                       </div>
                     </div>
                   </div>

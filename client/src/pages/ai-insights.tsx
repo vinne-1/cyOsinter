@@ -167,7 +167,7 @@ export default function AIInsights() {
                         : summary.fallbackReason === "ollama_timeout"
                           ? "Request timed out. Try a smaller model (smollm2:135m or tinyllama) or free up CPU/memory."
                           : "Ollama error. Check Integrations—ensure Ollama is running and the model is pulled."}{" "}
-                      <Link href="/integrations" className="text-primary hover:underline">Integrations</Link>
+                      <Link href="/integrations" className="text-primary underline underline-offset-2">Integrations</Link>
                     </p>
                     {summary.fallbackErrorDetail && (
                       <div className="rounded border border-amber-500/30 bg-amber-500/5 p-2">
@@ -214,7 +214,7 @@ export default function AIInsights() {
               <Sparkles className="w-10 h-10 text-muted-foreground/50 mx-auto mb-3" />
               <p className="text-sm text-muted-foreground">Click Generate to create AI insights from findings and intelligence data</p>
               <p className="text-xs text-muted-foreground mt-1">
-                Enable Ollama in <Link href="/integrations" className="text-primary hover:underline">Integrations</Link> for AI-generated insights, or use the summary below
+                Enable Ollama in <Link href="/integrations" className="text-primary underline underline-offset-2">Integrations</Link> for AI-generated insights, or use the summary below
               </p>
             </div>
           )}

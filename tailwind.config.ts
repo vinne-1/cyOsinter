@@ -75,6 +75,27 @@ export default {
           foreground: "hsl(var(--sidebar-accent-foreground) / <alpha-value>)",
           border: "var(--sidebar-accent-border)"
         },
+        // Finding severity — single source of truth, see --sev-* in index.css
+        severity: {
+          critical: "hsl(var(--sev-critical) / <alpha-value>)",
+          high: "hsl(var(--sev-high) / <alpha-value>)",
+          medium: "hsl(var(--sev-medium) / <alpha-value>)",
+          low: "hsl(var(--sev-low) / <alpha-value>)",
+          info: "hsl(var(--sev-info) / <alpha-value>)",
+          ok: "hsl(var(--sev-ok) / <alpha-value>)",
+        },
+        // Layered surfaces for consistent depth
+        surface: {
+          1: "hsl(var(--surface-1) / <alpha-value>)",
+          2: "hsl(var(--surface-2) / <alpha-value>)",
+          3: "hsl(var(--surface-3) / <alpha-value>)",
+          inset: "hsl(var(--surface-inset) / <alpha-value>)",
+        },
+        brand: {
+          from: "hsl(var(--brand-from) / <alpha-value>)",
+          to: "hsl(var(--brand-to) / <alpha-value>)",
+        },
+        hairline: "hsl(var(--hairline) / <alpha-value>)",
         status: {
           online: "rgb(34 197 94)",
           away: "rgb(245 158 11)",
@@ -87,6 +108,17 @@ export default {
         serif: ["var(--font-serif)"],
         mono: ["var(--font-mono)"],
       },
+      fontSize: {
+        // Display sizes for hero metrics — tight tracking, tabular by default.
+        "display-sm": ["1.75rem", { lineHeight: "1", letterSpacing: "-0.02em" }],
+        "display": ["2.25rem", { lineHeight: "1", letterSpacing: "-0.025em" }],
+        "display-lg": ["3rem", { lineHeight: "1", letterSpacing: "-0.03em" }],
+      },
+      boxShadow: {
+        glow: "0 0 0 1px hsl(var(--glow) / 0.25), 0 0 24px -4px hsl(var(--glow) / 0.35)",
+        "glow-sm": "0 0 0 1px hsl(var(--glow) / 0.2), 0 0 12px -2px hsl(var(--glow) / 0.25)",
+        lift: "0 1px 2px hsl(0 0% 0% / 0.16), 0 8px 24px -8px hsl(0 0% 0% / 0.28)",
+      },
       keyframes: {
         "accordion-down": {
           from: { height: "0" },
@@ -96,10 +128,25 @@ export default {
           from: { height: "var(--radix-accordion-content-height)" },
           to: { height: "0" },
         },
+        "fade-up": {
+          from: { opacity: "0", transform: "translateY(8px)" },
+          to: { opacity: "1", transform: "translateY(0)" },
+        },
+        shimmer: {
+          from: { backgroundPosition: "200% 0" },
+          to: { backgroundPosition: "-200% 0" },
+        },
+        "pulse-ring": {
+          "0%, 100%": { opacity: "0.55", transform: "scale(1)" },
+          "50%": { opacity: "0.15", transform: "scale(1.6)" },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
         "accordion-up": "accordion-up 0.2s ease-out",
+        "fade-up": "fade-up 0.35s cubic-bezier(0.22, 1, 0.36, 1) both",
+        shimmer: "shimmer 2s linear infinite",
+        "pulse-ring": "pulse-ring 2.4s cubic-bezier(0.4, 0, 0.6, 1) infinite",
       },
     },
   },

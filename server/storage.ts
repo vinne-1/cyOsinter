@@ -2,6 +2,7 @@ import { eq, desc, and, sql, lt, asc, count, inArray } from "drizzle-orm";
 import { db } from "./db";
 import { workspaces, assets, scans, findings, reports, reconModules, continuousMonitoring, uploadedScans, postureSnapshots, alerts, scheduledScans, scanProfiles, workspaceMembers } from "@shared/schema";
 import type { Workspace, InsertWorkspace, Asset, InsertAsset, Scan, InsertScan, Finding, InsertFinding, Report, InsertReport, ReconModule, InsertReconModule, ContinuousMonitoring, InsertContinuousMonitoring, UploadedScan, InsertUploadedScan, PostureSnapshot, InsertPostureSnapshot, Alert, InsertAlert, ScheduledScan, InsertScheduledScan, ScanProfile, InsertScanProfile, WorkspaceMember } from "@shared/schema";
+import { computeDueDate, computePriority } from "./finding-workflow";
 
 export interface PaginationOpts {
   limit?: number;
@@ -270,7 +271,21 @@ export class DatabaseStorage implements IStorage {
   }
 
   async createFinding(finding: InsertFinding): Promise<Finding> {
-    const [created] = await db.insert(findings).values(finding).returning();
+    // Derive the SLA clock here rather than at each call site. Every path that
+    // creates a finding goes through this method, and the previous arrangement —
+    // where computeDueDate/computePriority existed but nothing invoked them —
+    // left all 126 findings in the database with no due date, no priority and
+    // no breach flag, which made the whole SLA feature inert.
+    // `discoveredAt` is omitted from InsertFinding (the column defaults to now),
+    // so the clock starts at insert time.
+    const discoveredAt = new Date();
+    const withSla: InsertFinding = {
+      ...finding,
+      priority: finding.priority ?? computePriority(finding.severity),
+      dueDate: finding.dueDate ?? computeDueDate(finding.severity, discoveredAt),
+    };
+
+    const [created] = await db.insert(findings).values(withSla).returning();
     return created;
   }
 

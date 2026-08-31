@@ -55,7 +55,14 @@ export function NotificationBell() {
   return (
     <Popover>
       <PopoverTrigger asChild>
-        <Button variant="ghost" size="icon" className="relative" data-testid="button-notification-bell">
+        <Button
+          variant="ghost"
+          size="icon"
+          className="relative"
+          // Icon-only trigger; the unread count alone is not a usable name.
+          aria-label={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : "Notifications"}
+          data-testid="button-notification-bell"
+        >
           <Bell className="w-4 h-4" />
           {unreadCount > 0 && (
             <span className="absolute -top-0.5 -right-0.5 flex items-center justify-center w-4 h-4 text-[10px] font-bold text-white bg-red-500 rounded-full">

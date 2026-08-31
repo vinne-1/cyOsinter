@@ -22,7 +22,7 @@
   --sidebar-foreground: 210 20% 85%;
   --sidebar-border: 222 20% 18%;
   --sidebar-primary: 199 89% 48%;
-  --sidebar-primary-foreground: 0 0% 100%;
+  --sidebar-primary-foreground: 222 45% 8%;
   --sidebar-accent: 222 25% 16%;
   --sidebar-accent-foreground: 199 89% 60%;
   --sidebar-ring: 199 89% 48%;
@@ -30,11 +30,14 @@
   --popover-foreground: 220 25% 15%;
   --popover-border: 220 15% 94%;
   --primary: 199 89% 48%;
-  --primary-foreground: 0 0% 100%;
+  /* Near-black, not white: white on this cyan measures 2.86:1 (WCAG AA needs
+     4.5:1), while near-black measures ~6.8:1. Darkening the text rather than
+     the brand colour keeps the accent vivid. */
+  --primary-foreground: 222 45% 11%;
   --secondary: 220 15% 92%;
   --secondary-foreground: 220 25% 20%;
   --muted: 220 15% 94%;
-  --muted-foreground: 220 10% 46%;
+  --muted-foreground: 220 12% 40%;
   --accent: 199 30% 92%;
   --accent-foreground: 199 60% 30%;
   --destructive: 0 72% 51%;
@@ -60,6 +63,32 @@
   --shadow-2xl: 0px 25px 50px -12px rgba(0,0,0,0.15);
   --tracking-normal: 0em;
   --spacing: 0.25rem;
+
+
+  /* ── Severity ramp ──
+     One source of truth for finding severity colour, so a badge, a chart slice,
+     a table rail and a gauge segment can never drift apart. Values are raw HSL
+     triples (no hsl() wrapper) so Tailwind's `/<alpha-value>` syntax works. */
+  --sev-critical: 0 74% 52%;
+  --sev-high: 22 92% 52%;
+  --sev-medium: 38 92% 50%;
+  --sev-low: 213 90% 58%;
+  --sev-info: 215 16% 52%;
+  --sev-ok: 152 62% 42%;
+
+  /* ── Layered surfaces ──
+     surface-1 sits on the page, surface-2 on a card, surface-3 on a popover.
+     Using tokens rather than ad-hoc bg-muted/40 keeps depth consistent. */
+  --surface-1: 220 20% 99%;
+  --surface-2: 220 22% 97%;
+  --surface-3: 220 24% 94%;
+  --surface-inset: 220 16% 95%;
+
+  /* Brand accent pair — the gradient used for hero surfaces and the mark. */
+  --brand-from: 199 89% 48%;
+  --brand-to: 258 84% 62%;
+  --glow: 199 89% 48%;
+  --hairline: 220 15% 90%;
 
   --sidebar-primary-border: hsl(var(--sidebar-primary));
   --sidebar-primary-border: hsl(from hsl(var(--sidebar-primary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
@@ -99,7 +128,7 @@
   --sidebar-foreground: 210 20% 80%;
   --sidebar-border: 222 25% 14%;
   --sidebar-primary: 199 89% 48%;
-  --sidebar-primary-foreground: 0 0% 100%;
+  --sidebar-primary-foreground: 222 45% 8%;
   --sidebar-accent: 222 30% 12%;
   --sidebar-accent-foreground: 199 89% 60%;
   --sidebar-ring: 199 89% 48%;
@@ -107,11 +136,13 @@
   --popover-foreground: 210 20% 88%;
   --popover-border: 222 20% 12%;
   --primary: 199 89% 48%;
-  --primary-foreground: 0 0% 100%;
+  --primary-foreground: 222 45% 8%;
   --secondary: 222 20% 16%;
   --secondary-foreground: 210 20% 85%;
   --muted: 222 20% 12%;
-  --muted-foreground: 215 10% 50%;
+  /* Raised from 50% lightness: measured 4.16:1 on surface-2, under WCAG AA
+     (4.5:1) for small text. This token carries nearly every secondary label. */
+  --muted-foreground: 215 14% 64%;
   --accent: 222 25% 14%;
   --accent-foreground: 199 89% 60%;
   --destructive: 0 72% 51%;
@@ -131,6 +162,26 @@
   --shadow-lg: 0px 10px 15px -3px rgba(0,0,0,0.4), 0px 4px 6px -4px rgba(0,0,0,0.3);
   --shadow-xl: 0px 20px 25px -5px rgba(0,0,0,0.4), 0px 8px 10px -6px rgba(0,0,0,0.3);
   --shadow-2xl: 0px 25px 50px -12px rgba(0,0,0,0.5);
+
+
+  /* Severity ramp — lifted slightly for legibility on a dark ground. */
+  --sev-critical: 0 84% 62%;
+  --sev-high: 25 95% 58%;
+  --sev-medium: 41 96% 56%;
+  --sev-low: 213 94% 66%;
+  /* Raised from 58%: measured 4.37:1 as chip text, under the 4.5:1 AA floor. */
+  --sev-info: 215 16% 68%;
+  --sev-ok: 152 60% 50%;
+
+  --surface-1: 224 32% 9%;
+  --surface-2: 224 30% 12%;
+  --surface-3: 224 28% 15%;
+  --surface-inset: 224 34% 7%;
+
+  --brand-from: 199 89% 52%;
+  --brand-to: 258 88% 68%;
+  --glow: 199 89% 55%;
+  --hairline: 224 22% 18%;
 
   --sidebar-primary-border: hsl(var(--sidebar-primary));
   --sidebar-primary-border: hsl(from hsl(var(--sidebar-primary)) h s calc(l + var(--opaque-button-border-intensity)) / alpha);
@@ -175,6 +226,16 @@
 .bar-fill[data-value="0"]{width:0%}.bar-fill[data-value="5"]{width:5%}.bar-fill[data-value="10"]{width:10%}.bar-fill[data-value="15"]{width:15%}.bar-fill[data-value="20"]{width:20%}.bar-fill[data-value="25"]{width:25%}.bar-fill[data-value="30"]{width:30%}.bar-fill[data-value="35"]{width:35%}.bar-fill[data-value="40"]{width:40%}.bar-fill[data-value="45"]{width:45%}.bar-fill[data-value="50"]{width:50%}.bar-fill[data-value="55"]{width:55%}.bar-fill[data-value="60"]{width:60%}.bar-fill[data-value="65"]{width:65%}.bar-fill[data-value="70"]{width:70%}.bar-fill[data-value="75"]{width:75%}.bar-fill[data-value="80"]{width:80%}.bar-fill[data-value="85"]{width:85%}.bar-fill[data-value="90"]{width:90%}.bar-fill[data-value="95"]{width:95%}.bar-fill[data-value="100"]{width:100%}
 
 @layer utilities {
+  /* Hide the native scrollbar on strips that provide their own affordances
+     (see components/scroll-strip.tsx) without disabling scrolling itself. */
+  .scrollbar-none {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
+
   input[type="search"]::-webkit-search-cancel-button {
     @apply hidden;
   }

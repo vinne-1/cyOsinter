@@ -239,10 +239,15 @@ export default function Trends() {
             <CardContent className="p-4">
               <h3 className="text-sm font-medium mb-4">Finding Categories</h3>
               <div className="h-56 flex items-center">
-                <div className="w-1/2 h-full">
+                {/* Decorative: the legend to the right lists every category and
+                    value as text, so the chart carries no extra information for
+                    a screen reader. aria-hidden AND tabIndex are both needed —
+                    hiding it alone would leave a keyboard tab stop inside
+                    hidden content. */}
+                <div className="w-1/2 h-full" aria-hidden="true">
                   <ResponsiveContainer width="100%" height="100%">
                     <PieChart>
-                      <Pie data={pieData} dataKey="value" cx="50%" cy="50%" innerRadius={40} outerRadius={70} paddingAngle={2}>
+                      <Pie tabIndex={-1} rootTabIndex={-1} data={pieData} dataKey="value" cx="50%" cy="50%" innerRadius={40} outerRadius={70} paddingAngle={2}>
                         {pieData.map((entry, index) => (
                           <Cell key={index} fill={entry.color} />
                         ))}

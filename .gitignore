@@ -4,5 +4,37 @@ dist
 server/public
 vite.config.ts.*
 *.tar.gz
+
+# ── Secrets ──
+# .local/ holds credentials.key, the AES-256-GCM master key that every stored
+# integration secret (Shodan, VirusTotal, Jira, webhook signing keys) is
+# encrypted with. The previous entry read ".local.claude/", which matched
+# nothing — the key was one `git add .` away from being published.
 .env
-.local.claude/
+.env.*
+!.env.example
+.local/
+*.pem
+*.key
+
+# ── Logs and runtime output ──
+*.log
+server-run.err
+pg.log
+push-out.txt
+
+# ── Test and build artifacts ──
+test-results/
+playwright-report/
+playwright-results.xml
+coverage/
+tests/e2e/.auth-state.json
+.playwright-mcp/
+
+# ── Generated reports and scan output ──
+# Customer scan data and rendered reports; these are outputs, not source.
+*.docx
+*.pdf
+/*.png
+/*-scan.json
+/live-findings.json

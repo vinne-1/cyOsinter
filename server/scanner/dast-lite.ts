@@ -305,36 +305,79 @@ async function checkHTTPMethods(domain: string): Promise<DASTFinding[]> {
   return findings;
 }
 
-async function checkCookieSecurity(domain: string): Promise<DASTFinding[]> {
-  const findings: DASTFinding[] = [];
+/**
+ * Cookie attribute audit for a host.
+ *
+ * Emits ONE finding per host rather than one per cookie. A site with 20 cookies
+ * missing `Secure` has a single misconfiguration with 20 instances, not 20
+ * findings — and reporting it as 20 buries genuinely distinct issues, inflates
+ * the severity counts the posture score is built from, and makes every export
+ * unreadable. The individual cookies are preserved as structured evidence, so
+ * no detail is lost.
+ *
+ * Severity reflects the worst attribute missing anywhere on the host: a missing
+ * `Secure` flag (credentials sent over cleartext) outranks a missing `SameSite`.
+ */
+// Exported for unit tests; the scan itself calls it through runDASTScan.
+export async function checkCookieSecurity(domain: string): Promise<DASTFinding[]> {
   const url = `https://${domain}`;
   const res = await safeFetch(url, { redirect: "follow" });
-  if (!res) return findings;
+  if (!res) return [];
 
   const cookies = res.headers.getSetCookie?.() ?? [];
+
+  const affected: Array<{ cookieName: string; issues: string[]; rawHeader: string }> = [];
+  const missing = { secure: 0, httpOnly: 0, sameSite: 0 };
+
   for (const cookie of cookies) {
     const name = cookie.split("=")[0]?.trim() ?? "unknown";
     const lower = cookie.toLowerCase();
     const issues: string[] = [];
 
-    if (!lower.includes("httponly")) issues.push("missing HttpOnly");
-    if (!lower.includes("secure")) issues.push("missing Secure");
-    if (!lower.includes("samesite")) issues.push("missing SameSite");
+    if (!lower.includes("httponly")) { issues.push("missing HttpOnly"); missing.httpOnly++; }
+    if (!lower.includes("secure")) { issues.push("missing Secure"); missing.secure++; }
+    if (!lower.includes("samesite")) { issues.push("missing SameSite"); missing.sameSite++; }
 
     if (issues.length > 0) {
-      findings.push({
-        title: `Insecure Cookie: ${name}`,
-        description: `Cookie "${name}" is set without security attributes: ${issues.join(", ")}.`,
-        severity: "medium",
-        category: "cookie_security",
-        affectedAsset: domain,
-        evidence: [{ cookieName: name, issues, rawHeader: cookie.substring(0, 200) }],
-        remediation: "Set HttpOnly, Secure, and SameSite=Strict (or Lax) on all cookies.",
-      });
+      affected.push({ cookieName: name, issues, rawHeader: cookie.substring(0, 200) });
     }
   }
 
-  return findings;
+  if (affected.length === 0) return [];
+
+  // Worst-attribute-wins: Secure is the only one whose absence exposes the
+  // cookie value on the wire, so it drives severity on its own.
+  const severity: DASTFinding["severity"] = missing.secure > 0 ? "medium" : "low";
+
+  const summary = [
+    missing.secure > 0 ? `${missing.secure} missing Secure` : null,
+    missing.httpOnly > 0 ? `${missing.httpOnly} missing HttpOnly` : null,
+    missing.sameSite > 0 ? `${missing.sameSite} missing SameSite` : null,
+  ].filter(Boolean).join(", ");
+
+  const names = affected.map((a) => a.cookieName);
+  // Name a handful inline; the full list stays in evidence.
+  const preview = names.slice(0, 5).join(", ") + (names.length > 5 ? `, +${names.length - 5} more` : "");
+
+  return [
+    {
+      title: `Insecure cookie attributes on ${domain} (${affected.length} cookie${affected.length === 1 ? "" : "s"})`,
+      description:
+        `${affected.length} of ${cookies.length} cookie${cookies.length === 1 ? "" : "s"} set by ${domain} are missing ` +
+        `one or more security attributes (${summary}). Affected: ${preview}.`,
+      severity,
+      category: "cookie_security",
+      affectedAsset: domain,
+      evidence: [
+        { totalCookies: cookies.length, affectedCookies: affected.length, missingCounts: missing },
+        ...affected,
+      ],
+      remediation:
+        "Set Secure, HttpOnly and SameSite=Strict (or Lax) on all cookies. Secure is the priority: " +
+        "without it the cookie is transmitted over plaintext HTTP. HttpOnly blocks JavaScript access, " +
+        "limiting the impact of XSS; SameSite mitigates CSRF.",
+    },
+  ];
 }
 
 async function checkDirectoryListing(domain: string): Promise<DASTFinding[]> {

@@ -1,4 +1,10 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import {
+  BROWSER_PROFILES,
+  DEFAULT_PROFILE,
+  mergeHeaders,
+  type BrowserProfile,
+} from "./browser-profile.js";
 
 /**
  * Stealth engine — centralizes outbound request pacing, concurrency, and
@@ -60,17 +66,9 @@ export interface ScanProfile {
  * stealth mode so requests do not advertise a scanner. The passthrough default
  * uses a single modern Chrome UA (still browser-like, not "Cyshield-Scanner").
  */
-export const USER_AGENTS: readonly string[] = [
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:125.0) Gecko/20100101 Firefox/125.0",
-  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36 Edg/124.0.0.0",
-  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-];
+export const USER_AGENTS: readonly string[] = BROWSER_PROFILES.map((p) => p.userAgent);
 
-export const DEFAULT_USER_AGENT = USER_AGENTS[0];
+export const DEFAULT_USER_AGENT = DEFAULT_PROFILE.userAgent;
 
 const STANDARD_PROFILE: ScanProfile = {
   mode: "standard",
@@ -187,12 +185,21 @@ export class StealthController {
     }
   }
 
+  /**
+   * Next browser identity to present. Rotation moves through whole profiles,
+   * never individual headers: a Firefox UA carrying Chrome's client hints is a
+   * stronger tell than not rotating at all.
+   */
+  nextProfile(): BrowserProfile {
+    if (!this.profile.rotateUserAgent) return DEFAULT_PROFILE;
+    const p = BROWSER_PROFILES[this.uaIndex % BROWSER_PROFILES.length]!;
+    this.uaIndex++;
+    return p;
+  }
+
   /** Next User-Agent to present (rotates in stealth mode; fixed otherwise). */
   nextUserAgent(): string {
-    if (!this.profile.rotateUserAgent) return DEFAULT_USER_AGENT;
-    const ua = USER_AGENTS[this.uaIndex % USER_AGENTS.length];
-    this.uaIndex++;
-    return ua;
+    return this.nextProfile().userAgent;
   }
 }
 
@@ -214,12 +221,13 @@ export async function stealthFetch(url: string, init: RequestInit = {}, timeoutM
     else init.signal.addEventListener("abort", () => abort.abort(), { once: true });
   }
   try {
+    // Send the profile's COMPLETE header set, not just its User-Agent. A Chrome
+    // UA arriving without sec-ch-ua and Sec-Fetch-* is filtered on the first
+    // hop; see browser-profile.ts for what this does and does not defeat.
+    const browser = stealth.nextProfile();
+    const headers = mergeHeaders(browser.headers, init.headers);
     return await stealth.run(() =>
-      fetch(url, {
-        ...init,
-        signal: abort.signal,
-        headers: { "User-Agent": stealth.nextUserAgent(), ...(init.headers ?? {}) },
-      }),
+      fetch(url, { ...init, signal: abort.signal, headers }),
     );
   } finally {
     clearTimeout(timer);

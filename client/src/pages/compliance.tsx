@@ -126,7 +126,11 @@ function FrameworkCard({ report }: { report: ComplianceReport }) {
           <span>{report.framework} {report.frameworkVersion}</span>
           <span>{report.totalControls} controls</span>
         </div>
-        <Progress value={report.score} className="h-2" />
+        <Progress
+          value={report.score}
+          className="h-2"
+          aria-label={`Compliance score: ${report.score} out of 100`}
+        />
       </div>
 
       {/* Controls list */}

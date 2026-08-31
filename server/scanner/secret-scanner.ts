@@ -16,8 +16,13 @@ import type { VerifiedFinding, EvidenceItem } from "./types.js";
 
 const log = createLogger("scanner:secrets");
 
-/** Patterns that match known API key and token formats */
-const SECRET_PATTERNS: Array<{
+/**
+ * Patterns that match known API key and token formats.
+ * Exported so the code-leak watch scans repository content with exactly the
+ * same detector set as the web scanner — two drifting copies would mean a
+ * secret caught on a website but missed in a repo.
+ */
+export const SECRET_PATTERNS: Array<{
   name: string;
   pattern: RegExp;
   severity: "critical" | "high" | "medium";

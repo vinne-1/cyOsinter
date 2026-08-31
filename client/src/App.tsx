@@ -11,7 +11,9 @@ import { DomainProvider } from "@/lib/domain-context";
 import { DomainSelector } from "@/components/domain-selector";
 import { NotificationBell } from "@/components/notification-bell";
 import { useAuth } from "@/pages/auth";
-import { Loader2, AlertTriangle, RefreshCw } from "lucide-react";
+import { CommandPalette } from "@/components/command-palette";
+import { navItemForPath } from "@/components/nav-items";
+import { Loader2, AlertTriangle, RefreshCw, Search } from "lucide-react";
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },
@@ -80,6 +82,8 @@ const ThreatIntelPage = React.lazy(() => import("@/pages/threat-intel"));
 const RetentionConfigPage = React.lazy(() => import("@/pages/retention-config"));
 const PlaybooksPage = React.lazy(() => import("@/pages/playbooks"));
 const AssetRiskPage = React.lazy(() => import("@/pages/asset-risk"));
+const BrandThreatsPage = React.lazy(() => import("@/pages/brand-threats"));
+const CasesPage = React.lazy(() => import("@/pages/cases"));
 
 function Router() {
   return (
@@ -110,6 +114,8 @@ function Router() {
         <Route path="/retention" component={RetentionConfigPage} />
         <Route path="/playbooks" component={PlaybooksPage} />
         <Route path="/asset-risk" component={AssetRiskPage} />
+        <Route path="/brand-threats" component={BrandThreatsPage} />
+        <Route path="/cases" component={CasesPage} />
         <Route component={NotFound} />
       </Switch>
     </Suspense>
@@ -136,21 +142,49 @@ function AuthenticatedApp() {
     );
   }
 
+  const current = navItemForPath(location);
+
   return (
     <DomainProvider>
       <SidebarProvider>
+        <CommandPalette />
+        <a
+          href="#main-content"
+          className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-primary focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-primary-foreground"
+        >
+          Skip to main content
+        </a>
         <div className="flex h-screen w-full">
           <AppSidebar />
-          <div className="flex flex-col flex-1 overflow-hidden">
-            <header className="flex items-center justify-between gap-2 p-2 border-b h-12 flex-shrink-0">
-              <SidebarTrigger data-testid="button-sidebar-toggle" />
+          <div className="flex flex-1 flex-col overflow-hidden">
+            <header className="flex h-14 flex-shrink-0 items-center justify-between gap-3 border-b border-hairline bg-surface-1/80 px-3 backdrop-blur-md">
+              <div className="flex min-w-0 items-center gap-2">
+                <SidebarTrigger data-testid="button-sidebar-toggle" />
+                {/* The current page name anchors the header, so the app always
+                    says where you are without a redundant in-page title bar. */}
+                {current && (
+                  <div className="flex min-w-0 items-center gap-2">
+                    <current.icon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    <span className="truncate text-sm font-medium">{current.title}</span>
+                  </div>
+                )}
+              </div>
+
               <div className="flex items-center gap-2">
+                <CommandHint />
                 <DomainSelector />
                 <NotificationBell />
                 <ThemeToggle />
               </div>
             </header>
-            <main className="flex-1 overflow-y-auto">
+            {/* tabIndex={0} because <main> scrolls: a scrollable region that
+                cannot be focused is unreachable for a keyboard user, who has no
+                way to scroll it. It doubles as the skip-link target above. */}
+            <main
+              className="flex-1 overflow-y-auto bg-background focus-visible:outline-none"
+              id="main-content"
+              tabIndex={0}
+            >
               <ErrorBoundary>
                 <Router />
               </ErrorBoundary>
@@ -160,6 +194,34 @@ function AuthenticatedApp() {
       </SidebarProvider>
       <Toaster />
     </DomainProvider>
+  );
+}
+
+/**
+ * Affordance for the ⌘K palette. Dispatching a synthetic keydown keeps the
+ * palette's open state owned solely by CommandPalette, so there is one code
+ * path whether it is opened by mouse or keyboard.
+ */
+function CommandHint() {
+  const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
+  return (
+    <button
+      type="button"
+      onClick={() =>
+        document.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "k", metaKey: isMac, ctrlKey: !isMac, bubbles: true }),
+        )
+      }
+      aria-label="Open command palette"
+      data-testid="button-command-palette"
+      className="hidden items-center gap-2 rounded-lg border border-hairline bg-surface-2 px-2.5 py-1.5 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground sm:flex"
+    >
+      <Search className="h-3.5 w-3.5" aria-hidden="true" />
+      <span>Search</span>
+      <kbd className="rounded border border-hairline bg-surface-3 px-1.5 py-0.5 font-mono text-[0.625rem] leading-none">
+        {isMac ? "⌘" : "Ctrl"}K
+      </kbd>
+    </button>
   );
 }
 

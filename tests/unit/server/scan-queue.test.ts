@@ -1,159 +1,193 @@
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
 /**
- * Unit tests for server/scan-queue.ts — in-memory scan queue.
+ * The queue moved from an in-memory array to Postgres, so these tests assert
+ * the SQL contract rather than array contents. The two properties that matter
+ * are the ones the old implementation could not provide:
  *
- * Tests: enqueueScan, getQueueStatus, cancelQueuedScan.
- * processQueue triggers side-effects (triggerScan) so we mock it out.
+ *  - a claim is atomic across instances (FOR UPDATE SKIP LOCKED), and
+ *  - a job whose holder crashed is reclaimed once its lease expires.
  */
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { triggerScan } from "../../../server/scan-trigger";
-
-// Mock triggerScan so processQueue doesn't actually run scans
-vi.mock("../../../server/scan-trigger", () => ({
-  triggerScan: vi.fn().mockResolvedValue("scan-id"),
+const poolQuery = vi.fn();
+vi.mock("../../../server/db", () => ({
+  pool: { query: (...args: unknown[]) => poolQuery(...args) },
 }));
-vi.mock("../../../server/db", () => ({ db: {} }));
-vi.mock("../../../server/storage", () => ({ storage: {} }));
 
-import {
-  enqueueScan,
-  getQueueStatus,
-  cancelQueuedScan,
-  startQueuePoller,
-  stopQueuePoller,
-} from "../../../server/scan-queue";
+const triggerScan = vi.fn().mockResolvedValue("scan-123");
+vi.mock("../../../server/scan-trigger", () => ({ triggerScan }));
 
-const mockTriggerScan = triggerScan as ReturnType<typeof vi.fn>;
+let queue: typeof import("../../../server/scan-queue");
 
-// ---------------------------------------------------------------------------
-// enqueueScan
-// ---------------------------------------------------------------------------
+/** The SQL text of every query issued, for asserting on the statements built. */
+function sqlCalls(): string[] {
+  return poolQuery.mock.calls.map(([sql]) => String(sql));
+}
+
+/**
+ * Parameters of the INSERT. Found by matching the SQL rather than by call
+ * index: a drain() left running by an earlier assertion can issue a claim query
+ * first, which would shift the positions.
+ */
+function insertParams(): unknown[] {
+  const call = poolQuery.mock.calls.find(([sql]) => String(sql).includes("INSERT INTO scan_queue"));
+  if (!call) throw new Error("no INSERT INTO scan_queue was issued");
+  return call[1] as unknown[];
+}
+
+beforeEach(async () => {
+  vi.resetModules();
+  poolQuery.mockReset();
+  triggerScan.mockClear();
+  // Default: inserts succeed, claims find nothing (so drain stops immediately).
+  poolQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+  queue = await import("../../../server/scan-queue");
+});
+
 describe("enqueueScan", () => {
-  it("returns a queue ID starting with q_", () => {
-    const id = enqueueScan("example.com", "easm", "ws-1", "standard");
-    expect(id).toMatch(/^q_/);
+  it("persists the job and returns its id", async () => {
+    poolQuery.mockResolvedValueOnce({ rows: [{ id: "q-1" }], rowCount: 1 });
+
+    const id = await queue.enqueueScan("example.com", "easm", "ws-1", "standard");
+
+    expect(id).toBe("q-1");
+    expect(sqlCalls()[0]).toContain("INSERT INTO scan_queue");
   });
 
-  it("returns unique IDs for each call", () => {
-    const ids = new Set([
-      enqueueScan("a.com", "easm", "ws-1", "standard"),
-      enqueueScan("b.com", "osint", "ws-1", "standard"),
-      enqueueScan("c.com", "full", "ws-1", "gold"),
-    ]);
-    expect(ids.size).toBe(3);
+  it("writes the scan's parameters, so any instance can run it", async () => {
+    poolQuery.mockResolvedValueOnce({ rows: [{ id: "q-1" }], rowCount: 1 });
+
+    await queue.enqueueScan("example.com", "easm", "ws-1", "safe");
+
+    expect(insertParams()).toEqual(["ws-1", "example.com", "easm", "safe", 2]);
+  });
+
+  it("ranks a fast dast scan ahead of a long full scan", async () => {
+    poolQuery.mockResolvedValue({ rows: [{ id: "q" }], rowCount: 1 });
+
+    await queue.enqueueScan("a.com", "dast", "ws", "standard");
+    const dastPriority = insertParams()[4];
+
+    poolQuery.mockClear();
+    poolQuery.mockResolvedValue({ rows: [{ id: "q" }], rowCount: 1 });
+    await queue.enqueueScan("b.com", "full", "ws", "standard");
+    const fullPriority = insertParams()[4];
+
+    expect(dastPriority).toBeLessThan(fullPriority as number);
+  });
+
+  it("gives an unknown scan type the lowest priority rather than failing", async () => {
+    poolQuery.mockResolvedValueOnce({ rows: [{ id: "q" }], rowCount: 1 });
+    await queue.enqueueScan("x.com", "not-a-real-type", "ws", "standard");
+    expect(insertParams()[4]).toBe(3);
   });
 });
 
-// ---------------------------------------------------------------------------
-// getQueueStatus
-// ---------------------------------------------------------------------------
+describe("claiming work", () => {
+  it("claims atomically with FOR UPDATE SKIP LOCKED", async () => {
+    poolQuery.mockResolvedValueOnce({ rows: [{ id: "q-1" }], rowCount: 1 });
+    await queue.enqueueScan("example.com", "easm", "ws-1", "standard");
+
+    const claim = sqlCalls().find((s) => s.includes("UPDATE scan_queue q"));
+    expect(claim).toBeDefined();
+    // Without SKIP LOCKED two workers block on each other instead of taking
+    // different jobs, which is the whole point of the pattern.
+    expect(claim).toContain("FOR UPDATE SKIP LOCKED");
+    expect(claim).toContain("ORDER BY c.priority ASC, c.queued_at ASC");
+  });
+
+  it("reclaims a job whose holder died and whose lease expired", async () => {
+    poolQuery.mockResolvedValueOnce({ rows: [{ id: "q-1" }], rowCount: 1 });
+    await queue.enqueueScan("example.com", "easm", "ws-1", "standard");
+
+    const claim = sqlCalls().find((s) => s.includes("UPDATE scan_queue q"))!;
+    // A crashed worker leaves its job in 'running'; only the lease check can
+    // ever return it to circulation.
+    expect(claim).toContain("c.status = 'running'");
+    expect(claim).toContain("c.locked_at <");
+  });
+
+  it("will not retry a job past its attempt limit", async () => {
+    poolQuery.mockResolvedValueOnce({ rows: [{ id: "q-1" }], rowCount: 1 });
+    await queue.enqueueScan("example.com", "easm", "ws-1", "standard");
+
+    const claim = sqlCalls().find((s) => s.includes("UPDATE scan_queue q"))!;
+    expect(claim).toContain("c.attempts < c.max_attempts");
+  });
+
+  it("records which worker holds the job, so a stuck queue can be traced", async () => {
+    poolQuery.mockResolvedValueOnce({ rows: [{ id: "q-1" }], rowCount: 1 });
+    await queue.enqueueScan("example.com", "easm", "ws-1", "standard");
+
+    const claimCall = poolQuery.mock.calls.find(([sql]) => String(sql).includes("UPDATE scan_queue q"))!;
+    expect(String(claimCall[1]![0])).toBe(queue.__queueInternals.WORKER_ID);
+    expect(queue.__queueInternals.WORKER_ID).toMatch(/.+:\d+:[0-9a-f]+/);
+  });
+
+  it("does not schedule work when the claim query fails", async () => {
+    poolQuery.mockResolvedValueOnce({ rows: [{ id: "q-1" }], rowCount: 1 });
+    poolQuery.mockRejectedValueOnce(new Error("db down"));
+
+    await expect(queue.enqueueScan("example.com", "easm", "ws-1", "standard")).resolves.toBe("q-1");
+    expect(triggerScan).not.toHaveBeenCalled();
+  });
+});
+
 describe("getQueueStatus", () => {
-  it("returns a status object with expected shape", () => {
-    const status = getQueueStatus();
-    expect(status).toHaveProperty("queueLength");
-    expect(status).toHaveProperty("activeScans");
-    expect(status).toHaveProperty("maxConcurrent");
-    expect(status).toHaveProperty("items");
-    expect(typeof status.queueLength).toBe("number");
-    expect(typeof status.activeScans).toBe("number");
-    expect(status.maxConcurrent).toBe(3);
-    expect(Array.isArray(status.items)).toBe(true);
+  it("reports counts from the database, not from this process", async () => {
+    poolQuery.mockResolvedValueOnce({
+      rows: [
+        { id: "a", target: "a.com", type: "easm", priority: 2, status: "queued", attempts: 0, queued_at: new Date() },
+        { id: "b", target: "b.com", type: "full", priority: 3, status: "running", attempts: 1, queued_at: new Date() },
+        { id: "c", target: "c.com", type: "dast", priority: 1, status: "queued", attempts: 0, queued_at: new Date() },
+      ],
+      rowCount: 3,
+    });
+
+    const status = await queue.getQueueStatus();
+
+    // A per-process count would miss work claimed by another instance.
+    expect(status.queueLength).toBe(2);
+    expect(status.activeScans).toBe(1);
+    expect(status.items).toHaveLength(3);
+    expect(status.workerId).toBe(queue.__queueInternals.WORKER_ID);
   });
 
-  it("items have correct shape", () => {
-    enqueueScan("shape-test.com", "dast", "ws-shape", "standard");
-    const status = getQueueStatus();
-    for (const item of status.items) {
-      expect(item).toHaveProperty("id");
-      expect(item).toHaveProperty("target");
-      expect(item).toHaveProperty("type");
-      expect(item).toHaveProperty("priority");
-      expect(item).toHaveProperty("queuedAt");
-      expect(typeof item.queuedAt).toBe("string"); // ISO string
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
-// getPriority (via enqueueScan priority ordering)
-// ---------------------------------------------------------------------------
-describe("scan type priority ordering", () => {
-  it("assigns lower priority number to dast (runs first)", () => {
-    // We can't call getPriority directly (private), but we can observe it
-    // via the queue ordering by using a never-resolving triggerScan mock
-    // so items stay in the queue
-    mockTriggerScan.mockReturnValue(new Promise(() => {})); // never resolves
-
-    const idDast = enqueueScan("d.com", "dast", "ws-pri", "standard");
-    const idFull = enqueueScan("f.com", "full", "ws-pri", "standard");
-    const idUnknown = enqueueScan("u.com", "unknown_type", "ws-pri", "standard");
-
-    const status = getQueueStatus();
-    // Any items that didn't start (active >= MAX_CONCURRENT) remain in queue in priority order
-    // This also exercises the default: return 3 branch for "unknown_type"
-    const itemIds = status.items.map((i) => i.id);
-    // dast has priority 1 so should appear before full (priority 3) in queue
-    const dastPos = itemIds.indexOf(idDast);
-    const fullPos = itemIds.indexOf(idFull);
-    if (dastPos !== -1 && fullPos !== -1) {
-      expect(dastPos).toBeLessThan(fullPos);
-    }
-
-    // Cleanup: restore mock
-    mockTriggerScan.mockResolvedValue("scan-id");
+  it("serialises timestamps as ISO strings", async () => {
+    poolQuery.mockResolvedValueOnce({
+      rows: [{ id: "a", target: "a.com", type: "easm", priority: 2, status: "queued", attempts: 0, queued_at: new Date("2026-01-02T03:04:05Z") }],
+      rowCount: 1,
+    });
+    const status = await queue.getQueueStatus();
+    expect(status.items[0]!.queuedAt).toBe("2026-01-02T03:04:05.000Z");
   });
 });
 
-// ---------------------------------------------------------------------------
-// cancelQueuedScan
-// ---------------------------------------------------------------------------
 describe("cancelQueuedScan", () => {
-  it("returns false for non-existent queue ID", () => {
-    expect(cancelQueuedScan("nonexistent")).toBe(false);
+  it("cancels a job that has not started", async () => {
+    poolQuery.mockResolvedValueOnce({ rows: [], rowCount: 1 });
+    expect(await queue.cancelQueuedScan("q-1")).toBe(true);
   });
 
-  it("returns true and removes item from queue", () => {
-    // Use a never-resolving mock to prevent items from being dequeued
-    mockTriggerScan.mockReturnValue(new Promise(() => {}));
-
-    // Enqueue enough to fill active slots and have one remaining in queue
-    for (let i = 0; i < 4; i++) {
-      enqueueScan(`cancel-test-${i}.com`, "full", "ws-cancel", "standard");
-    }
-
-    const status = getQueueStatus();
-    if (status.items.length > 0) {
-      const itemId = status.items[0].id;
-      const result = cancelQueuedScan(itemId);
-      expect(result).toBe(true);
-      // Should no longer be in queue
-      const after = getQueueStatus();
-      expect(after.items.find((i) => i.id === itemId)).toBeUndefined();
-    }
-
-    // Restore mock
-    mockTriggerScan.mockResolvedValue("scan-id");
+  it("refuses to cancel a job that is already running", async () => {
+    // The UPDATE is guarded by status = 'queued', so it matches nothing.
+    poolQuery.mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    expect(await queue.cancelQueuedScan("q-running")).toBe(false);
+    expect(sqlCalls().some((q) => q.includes("status = 'queued'"))).toBe(true);
   });
 });
 
-// ---------------------------------------------------------------------------
-// startQueuePoller / stopQueuePoller
-// ---------------------------------------------------------------------------
-describe("queue poller lifecycle", () => {
-  it("startQueuePoller and stopQueuePoller run without throwing", () => {
-    expect(() => startQueuePoller()).not.toThrow();
-    expect(() => stopQueuePoller()).not.toThrow();
+describe("poller lifecycle", () => {
+  it("starts and stops without throwing", () => {
+    expect(() => queue.startQueuePoller()).not.toThrow();
+    expect(() => queue.stopQueuePoller()).not.toThrow();
   });
 
-  it("calling stopQueuePoller when not running does not throw", () => {
-    expect(() => stopQueuePoller()).not.toThrow();
-  });
-
-  it("calling startQueuePoller twice is idempotent", () => {
-    expect(() => {
-      startQueuePoller();
-      startQueuePoller(); // second call should be no-op
-      stopQueuePoller();
-    }).not.toThrow();
+  it("is idempotent, so a double start leaves one timer", () => {
+    queue.startQueuePoller();
+    queue.startQueuePoller();
+    expect(() => queue.stopQueuePoller()).not.toThrow();
+    // A second stop on an already-stopped poller must also be safe.
+    expect(() => queue.stopQueuePoller()).not.toThrow();
   });
 });

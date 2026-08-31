@@ -1,5 +1,11 @@
 name: CI
 
+# Runs on every push to main and every PR:
+#   verify   - TypeScript + 679 unit tests
+#   e2e      - Playwright against a real Postgres
+#   security - npm audit (high/critical block) + dependency review
+#   codeql   - static analysis, security-extended queries
+
 on:
   push:
     branches: [main]
@@ -116,3 +122,65 @@ jobs:
             test-results/
             playwright-report/
           retention-days: 7
+
+  # ── Supply chain ────────────────────────────────────────────────────────────
+  # A security product that never audits its own dependencies is a bad look, and
+  # this repo had 23 advisories (11 high) before anyone looked.
+  security:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      # Fails the build on HIGH or CRITICAL only. Moderate advisories are
+      # reported but do not block: three of them are currently only fixable by a
+      # major upgrade of drizzle-orm/exceljs, and a permanently-red pipeline
+      # teaches people to ignore it.
+      - name: npm audit (high and critical block the build)
+        run: npm audit --audit-level=high
+
+      - name: npm audit (full report, advisory only)
+        if: always()
+        run: npm audit || true
+
+      # Flags a dependency added in a PR that carries a known advisory, before
+      # it lands rather than after.
+      - name: Review dependency changes
+        if: github.event_name == 'pull_request'
+        uses: actions/dependency-review-action@v4
+        with:
+          fail-on-severity: high
+
+  # ── Static analysis ─────────────────────────────────────────────────────────
+  codeql:
+    name: CodeQL
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+      actions: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Initialise CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+          # security-extended adds the injection and SSRF queries, which are the
+          # ones that matter for a scanner making outbound requests to
+          # user-supplied targets.
+          queries: security-extended
+
+      - name: Analyse
+        uses: github/codeql-action/analyze@v3

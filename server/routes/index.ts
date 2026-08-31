@@ -14,6 +14,7 @@ import { analyticsRouter } from "./analytics";
 import { scanProfilesRouter } from "./scan-profiles";
 import { integrationsTicketsRouter } from "./integrations-tickets";
 import { authRouter } from "./auth";
+import { healthRouter } from "./health";
 import { auditRouter } from "./audit";
 import { webhooksRouter } from "./webhooks";
 import { apiKeysRouter } from "./api-keys";
@@ -23,7 +24,10 @@ import { scanDiffRouter } from "./scan-diff";
 import { playbooksRouter } from "./playbooks";
 import { assetRiskRouter } from "./asset-risk";
 import { threatIntelRouter } from "./threat-intel";
+import { brandThreatsRouter } from "./brand-threats";
+import { casesRouter } from "./cases";
 import { requireAuth } from "./auth-middleware";
+import { auditMutations } from "../audit";
 import { errorHandler } from "./response";
 
 const routeLog = createLogger("routes");
@@ -36,6 +40,10 @@ export async function registerRoutes(
 ): Promise<Server> {
 
   // ── Public routes (no auth required) ──
+  // Health probes are mounted before the auth gate and outside /api so an
+  // orchestrator can reach them without credentials.
+  app.use(healthRouter);
+
   // Auth router is mounted first so /auth/login, /auth/register, /auth/refresh
   // respond before the global requireAuth middleware runs.
   app.use("/api", authRouter);
@@ -43,6 +51,12 @@ export async function registerRoutes(
   // ── Global authentication gate ──
   // Every /api route registered AFTER this line requires a valid session or API key.
   app.use("/api", requireAuth);
+
+  // ── Audit trail ──
+  // Mounted after the auth gate (so req.user is set) and before the resource
+  // routers, so every successful state-changing request is recorded without
+  // each route having to remember to instrument itself.
+  app.use("/api", auditMutations);
 
   // ── Protected routes ──
   app.use("/api/workspaces", workspacesRouter);
@@ -65,6 +79,8 @@ export async function registerRoutes(
   app.use("/api", playbooksRouter);
   app.use("/api", assetRiskRouter);
   app.use("/api", threatIntelRouter);
+  app.use("/api", brandThreatsRouter);
+  app.use("/api", casesRouter);
 
   // Standalone asset routes that don't fit under /api/workspaces
   app.get("/api/assets/:id", async (req, res) => {

@@ -4,6 +4,7 @@ import { useDomain } from "@/lib/domain-context";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { ScrollStrip } from "@/components/scroll-strip";
 import {
   Building2,
   Globe,
@@ -168,7 +169,7 @@ export default function Intelligence() {
         </Card>
       ) : (
         <Tabs defaultValue={defaultTab} className="space-y-4">
-          <div className="overflow-x-auto">
+          <ScrollStrip ariaLabel="Intelligence modules">
             <TabsList className="inline-flex w-auto" data-testid="tabs-intelligence">
               {availableModules.map((type) => {
                 const config = moduleTypeToPanel[type];
@@ -180,7 +181,7 @@ export default function Intelligence() {
                 );
               })}
             </TabsList>
-          </div>
+          </ScrollStrip>
           {availableModules.map((type) => {
             const config = moduleTypeToPanel[type];
             const mod = modulesByType[type] ?? ({} as ReconModule);

@@ -10,8 +10,10 @@ import { seedDatabase } from "./seed";
 import { initNotifications } from "./notifications";
 import { startScheduler, registerScanTrigger, stopScheduler } from "./scan-scheduler";
 import { triggerScan } from "./scan-trigger";
-import { stopQueuePoller } from "./scan-queue";
+import { startQueuePoller, stopQueuePoller } from "./scan-queue";
+import { startSlaMonitor, stopSlaMonitor } from "./sla-monitor";
 import { pool } from "./db";
+import { PostgresRateLimitStore, startRateLimitCleanup, stopRateLimitCleanup } from "./rate-limit-store";
 
 const app = express();
 const httpServer = createServer(app);
@@ -57,11 +59,36 @@ app.use(
 
 app.use(express.urlencoded({ extended: false }));
 
-// Rate limiting
+// ── Rate limiting ──
+// The general throttle stays in-memory on purpose: it is approximate by nature,
+// and a database round trip on EVERY api request is not worth the precision.
 app.use("/api/", rateLimit({ windowMs: 60_000, max: 100, standardHeaders: true, legacyHeaders: false }));
-app.use("/api/auth/login", rateLimit({ windowMs: 60_000, max: 5, message: { message: "Too many login attempts, please try again later" } }));
-app.use("/api/auth/register", rateLimit({ windowMs: 60_000, max: 3, message: { message: "Too many registration attempts, please try again later" } }));
-app.use("/api/scans", rateLimit({ windowMs: 60_000, max: 5, message: { message: "Too many scan requests, please try again later" } }));
+
+// The sensitive limiters are shared through Postgres. With the default
+// MemoryStore these were per-process, so "5 login attempts per minute" became
+// 5 × replicas — precisely backwards for the one limit whose job is to slow
+// credential stuffing.
+app.use("/api/auth/login", rateLimit({
+  windowMs: 60_000, max: 5,
+  store: new PostgresRateLimitStore("login"),
+  message: { message: "Too many login attempts, please try again later" },
+}));
+app.use("/api/auth/register", rateLimit({
+  windowMs: 60_000, max: 3,
+  store: new PostgresRateLimitStore("register"),
+  message: { message: "Too many registration attempts, please try again later" },
+}));
+app.use("/api/scans", rateLimit({
+  windowMs: 60_000, max: 5,
+  store: new PostgresRateLimitStore("scans"),
+  message: { message: "Too many scan requests, please try again later" },
+}));
+// Lookalike sweeps fan out hundreds of DNS lookups; limit them like scans.
+app.use("/api/workspaces/:id/brand-threats", rateLimit({ windowMs: 60_000, max: 5, message: { message: "Too many brand threat scans, please try again later" } }));
+// The leak-site corpus is a large third-party download; be a good citizen.
+app.use("/api/workspaces/:id/ransomware-exposure", rateLimit({ windowMs: 60_000, max: 5, message: { message: "Too many exposure checks, please try again later" } }));
+// GitHub code search allows 10 requests/minute; stay well inside it.
+app.use("/api/workspaces/:id/code-leaks", rateLimit({ windowMs: 60_000, max: 2, message: { message: "Too many code leak sweeps, please try again later" } }));
 
 // Stricter rate limits for AI/enrichment endpoints (expensive, long-running)
 const aiRateLimit = rateLimit({ windowMs: 60_000, max: 3, message: { message: "Too many AI requests, please try again later" } });
@@ -111,6 +138,14 @@ app.use((req, res, next) => {
   registerScanTrigger(triggerScan);
   await registerRoutes(httpServer, app);
   startScheduler();
+  // The poller was never started, so the queue table would only ever be drained
+  // by the instance that enqueued the job. It also reclaims leases from workers
+  // that died mid-scan.
+  startQueuePoller();
+  // Marks findings that blow their remediation deadline. The sweep existed but
+  // was never scheduled, so every finding read sla_breached = false forever.
+  startSlaMonitor();
+  startRateLimitCleanup();
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
     const status = err.status || err.statusCode || 500;
@@ -173,6 +208,8 @@ app.use((req, res, next) => {
     try {
       stopScheduler();
       stopQueuePoller();
+      stopSlaMonitor();
+      stopRateLimitCleanup();
       await new Promise<void>((resolve) => httpServer.close(() => resolve()));
       await pool.end();
       httpLog.info("Shutdown complete");

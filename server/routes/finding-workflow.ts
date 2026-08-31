@@ -8,6 +8,8 @@ import { storage } from "../storage";
 import { sendError, sendNotFound, sendValidationError } from "./response";
 import { requireAuth, requireWorkspaceRole } from "./auth-middleware";
 import { createLogger } from "../logger";
+import { getSlaSummary, runSlaSweep } from "../sla-monitor";
+import { SLA_HOURS } from "../finding-workflow";
 
 const log = createLogger("finding-workflow-routes");
 
@@ -112,3 +114,43 @@ findingWorkflowRouter.post("/workspaces/:workspaceId/finding-groups/compute", re
     sendError(res, 500, "Internal server error");
   }
 });
+
+// ── SLA ──
+
+const wsRead = requireWorkspaceRole("owner", "admin", "analyst", "viewer");
+
+/**
+ * Remediation-deadline posture for a workspace.
+ *
+ * Answers the question a security manager is actually accountable for: are we
+ * keeping up? Counts come from the findings table, so they reflect the whole
+ * workspace rather than the current page.
+ */
+findingWorkflowRouter.get("/workspaces/:workspaceId/sla-summary", wsRead, async (req, res) => {
+  try {
+    const summary = await getSlaSummary(req.params.workspaceId as string);
+    res.json({
+      ...summary,
+      // Returned so the client can explain a deadline without hardcoding the
+      // policy in two places.
+      policyHours: SLA_HOURS,
+    });
+  } catch (err) {
+    log.error({ err }, "Failed to load SLA summary");
+    sendError(res, 500, "Failed to load SLA summary");
+  }
+});
+
+/** Forces an immediate breach sweep instead of waiting for the hourly run. */
+findingWorkflowRouter.post(
+  "/sla/recheck",
+  requireAuth,
+  async (_req, res) => {
+    try {
+      res.json(await runSlaSweep());
+    } catch (err) {
+      log.error({ err }, "SLA recheck failed");
+      sendError(res, 500, "SLA recheck failed");
+    }
+  },
+);

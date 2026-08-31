@@ -152,7 +152,7 @@ export default function Imports() {
           <CardTitle className="text-base">Upload file</CardTitle>
           <div className="flex items-center gap-2">
             <Select value={fileType} onValueChange={(v) => setFileType(v as "nmap" | "nikto" | "generic")}>
-              <SelectTrigger className="w-32">
+              <SelectTrigger className="w-32" aria-label="Import file type">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

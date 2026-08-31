@@ -272,6 +272,14 @@ export const users = pgTable("users", {
   totpSecret: text("totp_secret"),
   totpEnabled: boolean("totp_enabled").notNull().default(false),
   lastLoginAt: timestamp("last_login_at"),
+  /**
+   * Consecutive failed logins. Reset to 0 on success. Drives the lockout below;
+   * an IP rate limit alone does not stop a distributed credential-stuffing run,
+   * because each source IP stays under the per-IP threshold.
+   */
+  failedLoginAttempts: integer("failed_login_attempts").notNull().default(0),
+  /** While set and in the future, authentication is refused for this account. */
+  lockedUntil: timestamp("locked_until"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 }, (t) => [
@@ -281,15 +289,38 @@ export const users = pgTable("users", {
 export const sessions = pgTable("sessions", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: varchar("user_id").notNull(),
+  /**
+   * SHA-256 of the bearer token, never the token itself.
+   *
+   * API keys were already hashed while session tokens sat in plaintext, so a
+   * read-only leak of this table (a backup, a log, an SQL injection) handed the
+   * attacker live sessions for every logged-in user. A plain SHA-256 is correct
+   * here — unlike a password, the token is 256 bits of CSPRNG output, so there
+   * is nothing to brute-force and a slow KDF would only add latency to every
+   * authenticated request.
+   */
   token: text("token").notNull().unique(),
   refreshToken: text("refresh_token").unique(),
   expiresAt: timestamp("expires_at").notNull(),
   ipAddress: text("ip_address"),
   userAgent: text("user_agent"),
+  /**
+   * Set when this row's refresh token has been exchanged. The row is KEPT with
+   * its old hashes so a replay of the spent token still finds it — that is what
+   * makes reuse detectable at all.
+   */
+  rotatedAt: timestamp("rotated_at"),
+  /**
+   * Groups every session descended from one login. A refresh creates a new row
+   * sharing this id, so detecting a replay lets us revoke the whole chain
+   * rather than only the row that was replayed.
+   */
+  familyId: varchar("family_id"),
   createdAt: timestamp("created_at").defaultNow(),
 }, (t) => [
   index("sessions_user_id_idx").on(t.userId),
   index("sessions_token_idx").on(t.token),
+  index("sessions_family_id_idx").on(t.familyId),
   foreignKey({ columns: [t.userId], foreignColumns: [users.id], name: "sessions_user_fk" }).onDelete("cascade"),
 ]);
 
@@ -424,6 +455,136 @@ export type UploadedScan = typeof uploadedScans.$inferSelect;
 export type InsertUploadedScan = z.infer<typeof insertUploadedScanSchema>;
 export type Alert = typeof alerts.$inferSelect;
 export type InsertAlert = z.infer<typeof insertAlertSchema>;
+
+/**
+ * Durable scan queue.
+ *
+ * The queue was previously an in-memory array, which meant a second app
+ * instance kept its own copy: the same scan could run twice, and anything
+ * queued was lost on restart. Backing it with Postgres lets any number of
+ * instances share one queue, claiming work with SELECT … FOR UPDATE SKIP LOCKED.
+ */
+export const scanQueue = pgTable("scan_queue", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  workspaceId: varchar("workspace_id").notNull(),
+  target: text("target").notNull(),
+  type: text("type").notNull(),
+  mode: text("mode").notNull().default("standard"),
+  /** 1 = highest. Cheap scans run ahead of long ones. */
+  priority: integer("priority").notNull().default(3),
+  /** queued | running | completed | failed */
+  status: text("status").notNull().default("queued"),
+  attempts: integer("attempts").notNull().default(0),
+  maxAttempts: integer("max_attempts").notNull().default(3),
+  /** Identifies the instance holding the lease, for debugging a stuck queue. */
+  lockedBy: text("locked_by"),
+  /** Lease start. A job whose lease has expired is reclaimed by another worker. */
+  lockedAt: timestamp("locked_at"),
+  /** Retry backoff: the job is invisible to claims until this time. */
+  availableAt: timestamp("available_at").notNull().defaultNow(),
+  queuedAt: timestamp("queued_at").notNull().defaultNow(),
+  startedAt: timestamp("started_at"),
+  finishedAt: timestamp("finished_at"),
+  scanId: varchar("scan_id"),
+  lastError: text("last_error"),
+}, (t) => [
+  // The claim query orders by (priority, queued_at) over queued rows, so this
+  // composite index is what keeps claiming O(1) as the table grows.
+  index("scan_queue_claim_idx").on(t.status, t.availableAt, t.priority, t.queuedAt),
+  index("scan_queue_workspace_id_idx").on(t.workspaceId),
+  index("scan_queue_locked_at_idx").on(t.lockedAt),
+  foreignKey({ columns: [t.workspaceId], foreignColumns: [workspaces.id], name: "scan_queue_workspace_fk" }).onDelete("cascade"),
+]);
+
+export const insertScanQueueSchema = createInsertSchema(scanQueue).omit({
+  id: true, queuedAt: true, startedAt: true, finishedAt: true, lockedBy: true, lockedAt: true,
+});
+
+
+/**
+ * Shared rate-limit counters.
+ *
+ * express-rate-limit's default MemoryStore is per-process, so the login limit of
+ * 5/min became 5 × replicas — exactly the wrong direction for the one limit that
+ * exists to slow credential stuffing. Backing the sensitive limiters with a
+ * table makes the budget global.
+ *
+ * Fixed window rather than sliding: one UPSERT per request instead of a row per
+ * request, which matters because this sits in the hot path of every login.
+ */
+export const rateLimits = pgTable("rate_limits", {
+  /** Limiter name + client key, e.g. "login:203.0.113.9". */
+  key: text("key").primaryKey(),
+  /** Start of the current fixed window. */
+  windowStart: timestamp("window_start").notNull().defaultNow(),
+  hits: integer("hits").notNull().default(0),
+  expiresAt: timestamp("expires_at").notNull(),
+}, (t) => [
+  // Supports the periodic sweep of expired windows.
+  index("rate_limits_expires_at_idx").on(t.expiresAt),
+]);
+
+
+/**
+ * Cases — the unit of WORK, as distinct from a finding, which is an observation.
+ *
+ * Findings answer "what is wrong". A security manager is accountable for a
+ * different question: "who is on it, and are we keeping up?" That needs an
+ * object with an owner and a clock, which a finding row cannot carry because one
+ * piece of work routinely spans several findings (all the TLS issues on one
+ * host) and one finding can be re-opened across several pieces of work.
+ */
+export const cases = pgTable("cases", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  workspaceId: varchar("workspace_id").notNull(),
+  /** Human-readable reference, e.g. CASE-14. Unique per workspace. */
+  reference: text("reference").notNull(),
+  title: text("title").notNull(),
+  description: text("description"),
+  /** open | investigating | contained | resolved | closed */
+  status: text("status").notNull().default("open"),
+  /** Drives the SLA deadline; mirrors finding severities. */
+  severity: text("severity").notNull().default("medium"),
+  /** Who is accountable. Null means unassigned, which is itself a signal. */
+  ownerId: varchar("owner_id"),
+  createdBy: varchar("created_by"),
+  /** Remediation deadline, derived from severity at creation. */
+  dueAt: timestamp("due_at"),
+  slaBreached: boolean("sla_breached").notNull().default(false),
+  createdAt: timestamp("created_at").notNull().defaultNow(),
+  updatedAt: timestamp("updated_at").notNull().defaultNow(),
+  closedAt: timestamp("closed_at"),
+}, (t) => [
+  index("cases_workspace_id_idx").on(t.workspaceId),
+  index("cases_workspace_status_idx").on(t.workspaceId, t.status),
+  index("cases_owner_id_idx").on(t.ownerId),
+  unique("cases_workspace_reference_unique").on(t.workspaceId, t.reference),
+  foreignKey({ columns: [t.workspaceId], foreignColumns: [workspaces.id], name: "cases_workspace_fk" }).onDelete("cascade"),
+  foreignKey({ columns: [t.ownerId], foreignColumns: [users.id], name: "cases_owner_fk" }).onDelete("set null"),
+]);
+
+/**
+ * Findings attached to a case. A join table rather than a column on findings,
+ * because the same finding can legitimately belong to more than one case
+ * (a shared host appearing in both a TLS remediation and a decommissioning).
+ */
+export const caseFindings = pgTable("case_findings", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  caseId: varchar("case_id").notNull(),
+  findingId: varchar("finding_id").notNull(),
+  addedAt: timestamp("added_at").notNull().defaultNow(),
+}, (t) => [
+  index("case_findings_case_id_idx").on(t.caseId),
+  index("case_findings_finding_id_idx").on(t.findingId),
+  unique("case_findings_unique").on(t.caseId, t.findingId),
+  foreignKey({ columns: [t.caseId], foreignColumns: [cases.id], name: "case_findings_case_fk" }).onDelete("cascade"),
+  foreignKey({ columns: [t.findingId], foreignColumns: [findings.id], name: "case_findings_finding_fk" }).onDelete("cascade"),
+]);
+
+export const insertCaseSchema = createInsertSchema(cases).omit({
+  id: true, reference: true, createdAt: true, updatedAt: true, closedAt: true, slaBreached: true,
+});
+
 export type ScheduledScan = typeof scheduledScans.$inferSelect;
 export type InsertScheduledScan = z.infer<typeof insertScheduledScanSchema>;
 export type ScanProfile = typeof scanProfiles.$inferSelect;
@@ -444,3 +605,9 @@ export type ApiKey = typeof apiKeys.$inferSelect;
 export type InsertApiKey = z.infer<typeof insertApiKeySchema>;
 export type RetentionPolicy = typeof retentionPolicies.$inferSelect;
 export type InsertRetentionPolicy = z.infer<typeof insertRetentionPolicySchema>;
+export type ScanQueueItem = typeof scanQueue.$inferSelect;
+export type InsertScanQueueItem = z.infer<typeof insertScanQueueSchema>;
+export type RateLimitRow = typeof rateLimits.$inferSelect;
+export type Case = typeof cases.$inferSelect;
+export type InsertCase = z.infer<typeof insertCaseSchema>;
+export type CaseFinding = typeof caseFindings.$inferSelect;

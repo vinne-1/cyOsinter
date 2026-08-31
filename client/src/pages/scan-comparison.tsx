@@ -145,9 +145,9 @@ export default function ScanComparison() {
         <CardContent className="py-4">
           <div className="flex items-center gap-4 flex-wrap">
             <div className="flex-1 min-w-[200px] space-y-1">
-              <label className="text-sm font-medium">Baseline Scan</label>
+              <label className="text-sm font-medium" htmlFor="baseline-scan">Baseline Scan</label>
               <Select value={scanA} onValueChange={setScanA}>
-                <SelectTrigger>
+                <SelectTrigger id="baseline-scan" aria-label="Baseline scan">
                   <SelectValue placeholder="Select baseline scan" />
                 </SelectTrigger>
                 <SelectContent>
@@ -160,9 +160,9 @@ export default function ScanComparison() {
               </Select>
             </div>
             <div className="flex-1 min-w-[200px] space-y-1">
-              <label className="text-sm font-medium">Comparison Scan</label>
+              <label className="text-sm font-medium" htmlFor="comparison-scan">Comparison Scan</label>
               <Select value={scanB} onValueChange={setScanB}>
-                <SelectTrigger>
+                <SelectTrigger id="comparison-scan" aria-label="Comparison scan">
                   <SelectValue placeholder="Select comparison scan" />
                 </SelectTrigger>
                 <SelectContent>
