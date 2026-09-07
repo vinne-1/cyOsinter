@@ -29,6 +29,9 @@ import {
   Unplug,
   KeyRound,
   ScanLine,
+  Radar,
+  ShieldCheck,
+  Eye,
 } from "lucide-react";
 import type { ReconModule, Scan } from "@shared/schema";
 
@@ -50,8 +53,11 @@ import { TakeoverPanel } from "./takeover-panel";
 import { ApiDiscoveryPanel } from "./api-discovery-panel";
 import { SecretExposurePanel } from "./secret-exposure-panel";
 import { DASTPanel } from "./dast-panel";
+import { RoutedFootprintPanel, DiscoveryHealthPanel, VerificationSummaryPanel } from "./discovery-panels";
+import { DarkWebPanel } from "../dark-web-panel";
 
 const IPReputationPanelWrapper: React.FC<{ mod: ReconModule }> = () => <IPReputationPanel />;
+const DarkWebPanelWrapper: React.FC<{ mod: ReconModule }> = ({ mod }) => <DarkWebPanel workspaceId={mod.workspaceId} />;
 
 const moduleTypeToPanel: Record<string, { component: React.FC<{ mod: ReconModule }>; label: string; icon: React.ElementType }> = {
   org_identity: { component: OrgIdentityPanel, label: "Org Profile", icon: Building2 },
@@ -77,6 +83,10 @@ const moduleTypeToPanel: Record<string, { component: React.FC<{ mod: ReconModule
   api_discovery: { component: ApiDiscoveryPanel, label: "API Security", icon: Unplug },
   secret_exposure: { component: SecretExposurePanel, label: "Secrets", icon: KeyRound },
   dast_lite: { component: DASTPanel, label: "DAST", icon: ScanLine },
+  routed_footprint: { component: RoutedFootprintPanel, label: "Routed Footprint", icon: Network },
+  discovery_health: { component: DiscoveryHealthPanel, label: "Discovery Health", icon: Radar },
+  verification_summary: { component: VerificationSummaryPanel, label: "Verification", icon: ShieldCheck },
+  dark_web_monitoring: { component: DarkWebPanelWrapper, label: "Dark Web", icon: Eye },
 };
 
 const moduleOrder = [
@@ -86,6 +96,7 @@ const moduleOrder = [
   "linkedin_company", "linkedin_people", "linkedin_hiring",
   "subdomain_takeover", "api_discovery", "secret_exposure", "dast_lite",
   "code_footprint", "third_party_surface",
+  "routed_footprint", "discovery_health", "verification_summary", "dark_web_monitoring",
 ];
 
 export default function Intelligence() {

@@ -241,7 +241,7 @@ export function WebsiteOverviewPanel({ mod }: { mod: ReconModule }) {
       {d.responseHeaders && Object.keys(d.responseHeaders).length > 0 && (
         <Card>
           <CardHeader className="pb-2"><CardTitle className="text-sm font-medium">Response Headers</CardTitle></CardHeader>
-          <CardContent><pre className="text-xs font-mono overflow-auto max-h-60 whitespace-pre-wrap break-all">{Object.entries(d.responseHeaders).map(([k, v]) => `${k}: ${v}`).join("\n")}</pre></CardContent>
+          <CardContent><pre className="text-xs font-mono overflow-auto max-h-60 whitespace-pre-wrap break-all" tabIndex={0} role="group" aria-label="Response headers">{Object.entries(d.responseHeaders).map(([k, v]) => `${k}: ${v}`).join("\n")}</pre></CardContent>
         </Card>
       )}
       {d.securityTxt && (d.securityTxt.parsed && Object.keys(d.securityTxt.parsed).length > 0) && (
@@ -249,20 +249,20 @@ export function WebsiteOverviewPanel({ mod }: { mod: ReconModule }) {
           <CardHeader className="pb-2"><CardTitle className="text-sm font-medium flex items-center gap-2"><Shield className="w-4 h-4" />Security.txt</CardTitle></CardHeader>
           <CardContent className="space-y-2">
             {Object.entries(d.securityTxt.parsed).map(([k, v]) => <div key={k} className="text-sm"><span className="text-muted-foreground">{k}:</span> {String(v).startsWith("http") ? <a href={String(v)} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">{String(v)}</a> : String(v)}</div>)}
-            {d.securityTxt.raw && <pre className="text-xs font-mono mt-2 p-2 rounded bg-muted overflow-auto max-h-32">{d.securityTxt.raw}</pre>}
+            {d.securityTxt.raw && <pre className="text-xs font-mono mt-2 p-2 rounded bg-muted overflow-auto max-h-32" tabIndex={0} role="group" aria-label="security.txt contents">{d.securityTxt.raw}</pre>}
           </CardContent>
         </Card>
       )}
       {(d.sitemapUrls || []).length > 0 && (
         <Card>
           <CardHeader className="pb-2"><CardTitle className="text-sm font-medium flex items-center gap-2"><List className="w-4 h-4" />Sitemap ({d.sitemapUrls.length} URLs)</CardTitle></CardHeader>
-          <CardContent><ul className="text-xs font-mono space-y-1 max-h-48 overflow-auto">{(d.sitemapUrls || []).slice(0, 50).map((u: string, i: number) => <li key={i} className="truncate" title={u}>{u}</li>)}{(d.sitemapUrls || []).length > 50 && <li className="text-muted-foreground">... and {(d.sitemapUrls || []).length - 50} more</li>}</ul></CardContent>
+          <CardContent><ul className="text-xs font-mono space-y-1 max-h-48 overflow-auto" tabIndex={0} aria-label="Sitemap URLs">{(d.sitemapUrls || []).slice(0, 50).map((u: string, i: number) => <li key={i} className="truncate" title={u}>{u}</li>)}{(d.sitemapUrls || []).length > 50 && <li className="text-muted-foreground">... and {(d.sitemapUrls || []).length - 50} more</li>}</ul></CardContent>
         </Card>
       )}
       {d.robotsTxt && (
         <Card>
           <CardHeader className="pb-2"><CardTitle className="text-sm font-medium flex items-center gap-2"><FileText className="w-4 h-4" />Robots.txt</CardTitle></CardHeader>
-          <CardContent><pre className="text-xs font-mono overflow-auto max-h-48 whitespace-pre-wrap">{d.robotsTxt}</pre></CardContent>
+          <CardContent><pre className="text-xs font-mono overflow-auto max-h-48 whitespace-pre-wrap" tabIndex={0} role="group" aria-label="robots.txt contents">{d.robotsTxt}</pre></CardContent>
         </Card>
       )}
       {(d.techStack || []).length > 0 && (

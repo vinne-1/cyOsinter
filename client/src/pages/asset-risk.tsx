@@ -5,6 +5,7 @@ import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { usePagedList, ListPager } from "@/components/list-pager";
 import {
   Table,
   TableBody,
@@ -36,7 +37,14 @@ interface AssetRisk {
   assetId: string;
   hostname: string;
   overallScore: number;
-  trend: "improving" | "stable" | "degrading";
+  /**
+   * Scorable findings behind the score. A 0 reached from no findings is not
+   * the same claim as a 0 reached from findings that all scored low, and the
+   * table must not render them identically — a green "0" with a green bar for
+   * a host nothing was ever found against reads as an assurance we never made.
+   */
+  findingCount: number;
+  trend: "improving" | "stable" | "degrading" | "unknown";
   factors: RiskFactor[];
   lastUpdated: string;
 }
@@ -58,15 +66,27 @@ function progressBarColor(score: number): string {
   return "bg-green-500";
 }
 
+/**
+ * The icon column had no text at all, so a red rising arrow was the whole
+ * claim — and `unknown` has to be legible as "we cannot say", not as neutral.
+ * The icon is decorative; the accessible name comes from the label beside it.
+ */
 function TrendIcon({ trend }: { trend: string }) {
-  switch (trend) {
-    case "degrading":
-      return <TrendingUp className="w-4 h-4 text-red-500" />;
-    case "improving":
-      return <TrendingDown className="w-4 h-4 text-green-500" />;
-    default:
-      return <Minus className="w-4 h-4 text-muted-foreground" />;
-  }
+  const { Icon, cls, label } =
+    trend === "degrading"
+      ? { Icon: TrendingUp, cls: "text-red-500", label: "Degrading" }
+      : trend === "improving"
+        ? { Icon: TrendingDown, cls: "text-green-500", label: "Improving" }
+        : trend === "stable"
+          ? { Icon: Minus, cls: "text-muted-foreground", label: "Stable" }
+          : { Icon: Minus, cls: "text-muted-foreground", label: "No history" };
+
+  return (
+    <span className="flex items-center gap-1.5">
+      <Icon className={`w-4 h-4 ${cls}`} aria-hidden="true" />
+      <span className="text-xs text-muted-foreground">{label}</span>
+    </span>
+  );
 }
 
 function sortAssets(assets: AssetRisk[], field: SortField, dir: SortDir): AssetRisk[] {
@@ -109,6 +129,42 @@ export default function AssetRiskPage() {
     }
   }
 
+  /*
+   * Derived above the early returns, because `usePagedList` is a HOOK.
+   *
+   * It was originally placed after the `isLoading` / `isError` guards, so it
+   * ran on a loaded render and not on a loading one — React counted a different
+   * number of hooks between renders, threw "Rendered more hooks than during the
+   * previous render", and tore the page down. The symptom was not an error
+   * message on screen: the table simply never appeared, and a scan measuring
+   * "largest rendered list" read the crash as a successful reduction.
+   *
+   * `assets` is undefined while loading, which the Array.isArray guard already
+   * handles, so running this early costs nothing.
+   */
+  const assetList = Array.isArray(assets) ? assets : [];
+  const totalAssets = assetList.length;
+  const criticalRiskCount = assetList.filter((a) => a.overallScore >= 80).length;
+  /*
+   * Average over the assets that actually have findings.
+   *
+   * Averaging the whole estate divides by every host nothing was found against
+   * — on a live workspace that is 654 of 743 — so the headline collapsed
+   * towards zero and reported a clean posture no matter what the findings said.
+   * The denominator is shown beside it so the number cannot be read as an
+   * estate-wide claim.
+   */
+  const scoredAssets = assetList.filter((a) => a.findingCount > 0);
+  const averageScore = scoredAssets.length > 0
+    ? scoredAssets.reduce((sum, a) => sum + a.overallScore, 0) / scoredAssets.length
+    : 0;
+
+  const sorted = sortAssets(assetList, sortField, sortDir);
+  // Sorting covers the whole estate; only the window is paged, so "highest risk
+  // first" still means highest in the estate. Re-sorting returns to page 1 —
+  // the row the reader was looking at has moved.
+  const pagedAssets = usePagedList(sorted, `${sortField}|${sortDir}`);
+
   if (isLoading) {
     return (
       <div className="p-6 space-y-4">
@@ -137,15 +193,6 @@ export default function AssetRiskPage() {
       </div>
     );
   }
-
-  const assetList = Array.isArray(assets) ? assets : [];
-  const totalAssets = assetList.length;
-  const criticalRiskCount = assetList.filter((a) => a.overallScore >= 80).length;
-  const averageScore = totalAssets > 0
-    ? assetList.reduce((sum, a) => sum + a.overallScore, 0) / totalAssets
-    : 0;
-
-  const sorted = sortAssets(assetList, sortField, sortDir);
 
   return (
     <div className="p-6 space-y-6">
@@ -191,7 +238,12 @@ export default function AssetRiskPage() {
           </CardHeader>
           <CardContent>
             <p className={`text-2xl font-bold ${scoreColor(averageScore)}`}>
-              {averageScore.toFixed(1)}
+              {scoredAssets.length > 0 ? averageScore.toFixed(1) : "—"}
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">
+              {scoredAssets.length > 0
+                ? `across ${scoredAssets.length} of ${totalAssets} assets with findings`
+                : "no assets have findings yet"}
             </p>
           </CardContent>
         </Card>
@@ -236,7 +288,7 @@ export default function AssetRiskPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {sorted.map((asset) => (
+                {pagedAssets.items.map((asset) => (
                   <React.Fragment key={asset.assetId}>
                     <TableRow
                       className="cursor-pointer"
@@ -246,17 +298,28 @@ export default function AssetRiskPage() {
                     >
                       <TableCell className="font-medium">{asset.hostname}</TableCell>
                       <TableCell>
-                        <div className="flex items-center gap-3">
-                          <span className={`font-bold ${scoreColor(asset.overallScore)}`}>
-                            {asset.overallScore}
+                        {asset.findingCount === 0 ? (
+                          // Nothing was found against this host. Rendering a
+                          // green 0 here would assert it was assessed clean.
+                          <span className="text-muted-foreground text-sm">
+                            No findings
                           </span>
-                          <div className="w-24 h-2 bg-muted rounded-full overflow-hidden">
-                            <div
-                              className={`h-full rounded-full ${progressBarColor(asset.overallScore)}`}
-                              style={{ width: `${asset.overallScore}%` }}
-                            />
+                        ) : (
+                          <div className="flex items-center gap-3">
+                            <span className={`font-bold ${scoreColor(asset.overallScore)}`}>
+                              {asset.overallScore}
+                            </span>
+                            <div className="w-24 h-2 bg-muted rounded-full overflow-hidden">
+                              <div
+                                className={`h-full rounded-full ${progressBarColor(asset.overallScore)}`}
+                                style={{ width: `${asset.overallScore}%` }}
+                              />
+                            </div>
+                            <span className="text-xs text-muted-foreground">
+                              {asset.findingCount} finding{asset.findingCount === 1 ? "" : "s"}
+                            </span>
                           </div>
-                        </div>
+                        )}
                       </TableCell>
                       <TableCell>
                         <TrendIcon trend={asset.trend} />
@@ -309,6 +372,7 @@ export default function AssetRiskPage() {
                 ))}
               </TableBody>
             </Table>
+            <ListPager paged={pagedAssets} label="assets" />
           </CardContent>
         </Card>
       )}

@@ -9,7 +9,8 @@
 
 import { createLogger } from "../logger.js";
 import { httpGet } from "./http.js";
-import { resolveDNS } from "./dns.js";
+import { resolveDNS, getNSRecords } from "./dns.js";
+import { registrableDomain } from "./ransomware-watch.js";
 import { runWithConcurrency } from "./utils.js";
 import type { VerifiedFinding, EvidenceItem } from "./types.js";
 
@@ -138,6 +139,12 @@ export interface TakeoverResult {
   service: string | null;
   vulnerable: boolean;
   confidence: "high" | "medium" | "low";
+  /**
+   * Whether an attacker could actually CLAIM the target — a known multi-tenant
+   * service, or an unregistered domain. False for a dangling CNAME inside a zone
+   * that somebody else still controls, which is a hygiene issue, not a takeover.
+   */
+  takeoverable: boolean;
   evidence: string;
 }
 
@@ -169,17 +176,58 @@ async function checkSubdomainTakeover(
     // (resolveDNS). Using the flaky system resolver here risked a transient
     // timeout being mis-read as NXDOMAIN → a false-positive CRITICAL takeover.
     const cnameTargetDns = await resolveDNS(cname);
-    const cnameResolves = cnameTargetDns.ips.length > 0 || cnameTargetDns.cnames.length > 0;
+    const cnameResolves = cnameTargetDns.resolved;
 
-    // If CNAME doesn't resolve (NXDOMAIN), it's a strong takeover signal
+    // A CNAME that does not resolve is a dangling record — but that is not the
+    // same thing as a takeover, and reporting it as one at critical severity was
+    // wrong for the common case.
+    //
+    // A takeover needs the target to be CLAIMABLE by an attacker. Two ways:
+    //
+    //   1. It points at a known multi-tenant service (GitHub Pages, Heroku, S3)
+    //      where anyone can register the unclaimed hostname.
+    //   2. Its registrable domain is itself unregistered, so an attacker can buy
+    //      the domain and serve whatever they like.
+    //
+    // If neither holds — the target's apex is registered and delegated, it is
+    // simply a broken record inside somebody's own zone — the finding is DNS
+    // hygiene, not a critical takeover. Calling that critical is how a scanner
+    // loses a reader's trust for every other finding it reports.
     if (!cnameResolves) {
+      if (matchedService) {
+        return {
+          subdomain,
+          cname,
+          service: matchedService.service,
+          vulnerable: true,
+          confidence: "high",
+          takeoverable: true,
+          evidence: `CNAME target ${cname} does not resolve (NXDOMAIN) and matches the ${matchedService.service} pattern, where an unclaimed hostname can be registered by anyone`,
+        };
+      }
+
+      const apex = registrableDomain(cname);
+      const apexNs = await getNSRecords(apex);
+      if (apexNs.length === 0) {
+        return {
+          subdomain,
+          cname,
+          service: null,
+          vulnerable: true,
+          confidence: "medium",
+          takeoverable: true,
+          evidence: `CNAME target ${cname} does not resolve and its registrable domain ${apex} has no NS records — the domain appears unregistered and could be bought by an attacker`,
+        };
+      }
+
       return {
         subdomain,
         cname,
-        service: matchedService?.service ?? null,
+        service: null,
         vulnerable: true,
-        confidence: matchedService ? "high" : "medium",
-        evidence: `CNAME target ${cname} does not resolve (NXDOMAIN)${matchedService ? ` — known ${matchedService.service} pattern` : ""}`,
+        confidence: "low",
+        takeoverable: false,
+        evidence: `CNAME target ${cname} does not resolve, but ${apex} is registered and delegated (NS: ${apexNs.slice(0, 2).join(", ")}) — a broken record inside a zone somebody else controls, not a claimable name`,
       };
     }
 
@@ -200,6 +248,7 @@ async function checkSubdomainTakeover(
               service: matchedService.service,
               vulnerable: true,
               confidence: "high",
+              takeoverable: true,
               evidence: `HTTP response matches ${matchedService.service} unclaimed fingerprint (status ${httpResult.status})`,
             };
           }
@@ -242,7 +291,9 @@ export async function scanSubdomainTakeover(
     if (!result || !result.vulnerable) continue;
     results.push(result);
 
-    const severity = result.confidence === "high" ? "critical" : "high";
+    // Severity follows what an attacker can actually do, not merely that a
+    // record is broken.
+    const severity = !result.takeoverable ? "low" : result.confidence === "high" ? "critical" : "high";
     const evidence: EvidenceItem[] = [
       {
         type: "dns_record",
@@ -254,13 +305,19 @@ export async function scanSubdomainTakeover(
     ];
 
     findings.push({
-      title: `Subdomain Takeover: ${result.subdomain}`,
-      description: `The subdomain ${result.subdomain} has a CNAME record pointing to ${result.cname}${result.service ? ` (${result.service})` : ""} which appears to be unclaimed. An attacker could register the target service and serve malicious content on this subdomain.`,
+      title: result.takeoverable
+        ? `Subdomain Takeover: ${result.subdomain}`
+        : `Dangling DNS Record: ${result.subdomain}`,
+      description: result.takeoverable
+        ? `The subdomain ${result.subdomain} has a CNAME record pointing to ${result.cname}${result.service ? ` (${result.service})` : ""}, which an attacker can claim. Registering it would let them serve content on your subdomain — inheriting its reputation, and any cookies scoped to the parent domain.`
+        : `The subdomain ${result.subdomain} points to ${result.cname}, which no longer resolves. The target's domain is still registered and delegated to somebody else's nameservers, so this is not currently claimable — but it is a broken record that will silently break links and may become takeoverable if that domain lapses.`,
       severity,
-      category: "subdomain_takeover",
+      category: result.takeoverable ? "subdomain_takeover" : "dns_misconfiguration",
       affectedAsset: result.subdomain,
-      cvssScore: severity === "critical" ? "9.8" : "8.1",
-      remediation: `Remove the dangling CNAME record for ${result.subdomain} or re-provision the ${result.service ?? "target"} service. If the service is no longer needed, delete the DNS record entirely.`,
+      cvssScore: severity === "critical" ? "9.8" : severity === "high" ? "8.1" : "3.1",
+      remediation: result.takeoverable
+        ? `Remove the dangling CNAME record for ${result.subdomain} or re-provision the ${result.service ?? "target"} service. If the service is no longer needed, delete the DNS record entirely.`
+        : `Delete the CNAME record for ${result.subdomain}, or repoint it at a host you control. Re-check it if ${registrableDomain(result.cname)} ever expires.`,
       evidence,
     });
   }

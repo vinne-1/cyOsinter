@@ -242,23 +242,34 @@ export async function clearFailedLogins(userId: string): Promise<void> {
     .where(eq(users.id, userId));
 }
 
+/**
+ * Removes sessions that can no longer be used.
+ *
+ * `validateSession` deletes an expired row when someone presents it, but a
+ * session nobody returns to is never presented — so abandoned rows accumulated
+ * indefinitely. They are not inert: each carries `ip_address` and `user_agent`,
+ * which is personal data outliving the purpose it was collected for, and the
+ * retention sweep covered scans, findings and snapshots but not this.
+ *
+ * Counted with `rowCount` rather than `.returning()` — materialising every
+ * deleted row to call `.length` on it is the same waste the retention sweep was
+ * fixed for.
+ */
 export async function cleanExpiredSessions(): Promise<number> {
   const now = new Date();
   const result = await db
     .delete(sessions)
-    .where(lt(sessions.expiresAt, now))
-    .returning();
+    .where(lt(sessions.expiresAt, now));
 
   // Rotation keeps spent rows so reuse stays detectable, but they only need to
   // outlive the window in which a stolen token could plausibly be replayed.
   const spent = await db
     .delete(sessions)
-    .where(and(isNotNull(sessions.rotatedAt), lt(sessions.rotatedAt, new Date(Date.now() - REFRESH_TTL_MS))))
-    .returning();
+    .where(and(isNotNull(sessions.rotatedAt), lt(sessions.rotatedAt, new Date(Date.now() - REFRESH_TTL_MS))));
 
-  const deleted = result.length + spent.length;
+  const deleted = (result.rowCount ?? 0) + (spent.rowCount ?? 0);
   if (deleted > 0) {
-    log.info({ count: deleted, expired: result.length, spent: spent.length }, "Cleaned expired sessions");
+    log.info({ count: deleted, expired: result.rowCount ?? 0, spent: spent.rowCount ?? 0 }, "Cleaned expired sessions");
   }
   return deleted;
 }

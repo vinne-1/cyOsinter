@@ -2,6 +2,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { FileWarning } from "lucide-react";
 import type { ReconModule } from "@shared/schema";
+import { usePagedList, ListPager } from "@/components/list-pager";
 import {
   Table,
   TableBody,
@@ -34,6 +35,42 @@ function deriveResponseType(v: { status?: number; accessible?: boolean }): strin
   if (s && [301, 302, 307, 308].includes(s)) return "redirect";
   if (s && s >= 500) return "server_error";
   return "other";
+}
+
+/**
+ * One response-type group, paged on its own.
+ *
+ * This is a component rather than inline JSX because each group needs its own
+ * paging state and `usePagedList` is a hook — calling it inside the `.map()`
+ * over response types would break the rules of hooks the moment the number of
+ * groups changed between renders.
+ *
+ * Measured before paging: a single group rendered 380 rows.
+ */
+function ExposureGroup({ rt, items }: { rt: string; items: any[] }) {
+  const paged = usePagedList<any>(items, rt);
+  return (
+    <div>
+      <h4 className="text-sm font-medium mb-2">{RESPONSE_TYPE_LABELS[rt] ?? rt} ({items.length})</h4>
+      <div className="overflow-x-auto">
+        <Table>
+          <TableHeader><TableRow><TableHead>Path</TableHead><TableHead>Type</TableHead><TableHead>Severity</TableHead><TableHead>Confidence</TableHead><TableHead>Evidence</TableHead></TableRow></TableHeader>
+          <TableBody>
+            {paged.items.map((f: any, i: number) => (
+              <TableRow key={`${rt}-${i}`}>
+                <TableCell className="font-mono text-sm">{f.path}</TableCell>
+                <TableCell className="text-sm">{f.type}</TableCell>
+                <TableCell><div className="flex items-center gap-1.5"><SeverityDot severity={f.severity} /><span className="text-sm capitalize">{f.severity}</span></div></TableCell>
+                <TableCell>{f.confidence ? <Badge variant="outline" className="text-xs border-0 no-default-hover-elevate no-default-active-elevate">{f.confidence}</Badge> : null}</TableCell>
+                <TableCell><EvidenceLink url={f.evidenceUrl} /></TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </div>
+      <ListPager paged={paged} label="paths" />
+    </div>
+  );
 }
 
 export function ExposedContentPanel({ mod }: { mod: ReconModule }) {
@@ -135,25 +172,7 @@ export function ExposedContentPanel({ mod }: { mod: ReconModule }) {
             const items = grouped[rt];
             if (!items?.length) return null;
             return (
-              <div key={rt}>
-                <h4 className="text-sm font-medium mb-2">{RESPONSE_TYPE_LABELS[rt] ?? rt} ({items.length})</h4>
-                <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader><TableRow><TableHead>Path</TableHead><TableHead>Type</TableHead><TableHead>Severity</TableHead><TableHead>Confidence</TableHead><TableHead>Evidence</TableHead></TableRow></TableHeader>
-                    <TableBody>
-                      {items.map((f: any, i: number) => (
-                        <TableRow key={`${rt}-${i}`}>
-                          <TableCell className="font-mono text-sm">{f.path}</TableCell>
-                          <TableCell className="text-sm">{f.type}</TableCell>
-                          <TableCell><div className="flex items-center gap-1.5"><SeverityDot severity={f.severity} /><span className="text-sm capitalize">{f.severity}</span></div></TableCell>
-                          <TableCell>{f.confidence ? <Badge variant="outline" className="text-xs border-0 no-default-hover-elevate no-default-active-elevate">{f.confidence}</Badge> : null}</TableCell>
-                          <TableCell><EvidenceLink url={f.evidenceUrl} /></TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </div>
-              </div>
+              <ExposureGroup key={rt} rt={rt} items={items} />
             );
           })}
         </CardContent>

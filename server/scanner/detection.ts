@@ -9,10 +9,17 @@ const LOGIN_PATH_PATTERNS = /\/login|\/auth|\/signin|\/wp-login/i;
 const SERVER_ERROR_PATTERNS = /500|server error|internal error|service unavailable/i;
 const NOT_FOUND_PATTERNS = /404|not found|file not found|page not found/i;
 
+/**
+ * Severity note: a 401 or 403 means the server REFUSED us — the access control
+ * did its job. It was rated `medium`, so every protected admin path a scan
+ * touched was surfaced as a medium-severity exposure and the number of them
+ * scaled with the wordlist. The status is worth recording (it proves the path
+ * exists) but it is intelligence, not a weakness.
+ */
 export function classifyPathResponse(status: number): { responseType: string; severity: string } {
   if (status === 404) return { responseType: "not_found", severity: "info" };
-  if (status === 403) return { responseType: "forbidden", severity: "medium" };
-  if (status === 401) return { responseType: "unauthorized", severity: "low" };
+  if (status === 403) return { responseType: "forbidden", severity: "info" };
+  if (status === 401) return { responseType: "unauthorized", severity: "info" };
   if (status >= 200 && status < 300) return { responseType: "success", severity: "low" };
   if ([301, 302, 307, 308].includes(status)) return { responseType: "redirect", severity: "low" };
   if (status >= 500) return { responseType: "server_error", severity: "low" };
@@ -40,14 +47,15 @@ export function validatePathResponse(
 
   if (status === 403) {
     const validated = FORBIDDEN_PATTERNS.test(bodyLower);
-    return { responseType: "forbidden", severity: "medium", validated, confidence: validated ? "high" : "medium" };
+    // Access denied — the control worked. See classifyPathResponse above.
+    return { responseType: "forbidden", severity: "info", validated, confidence: validated ? "high" : "medium" };
   }
 
   if (status === 401) {
     const bodyMatch = UNAUTHORIZED_PATTERNS.test(bodyLower);
     const urlMatch = LOGIN_PATH_PATTERNS.test(finalPath);
     const validated = bodyMatch || urlMatch;
-    return { responseType: "unauthorized", severity: "low", validated, confidence: validated ? "high" : "medium", redirectTarget: urlMatch ? finalPath : undefined };
+    return { responseType: "unauthorized", severity: "info", validated, confidence: validated ? "high" : "medium", redirectTarget: urlMatch ? finalPath : undefined };
   }
 
   if (status >= 200 && status < 300) {

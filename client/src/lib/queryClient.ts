@@ -177,6 +177,9 @@ function handleSessionExpiry(): void {
 }
 
 type UnauthorizedBehavior = "returnNull" | "throw";
+/** Any one of these beside a `data` array marks a paginated envelope. */
+const PAGINATION_KEYS = ["total", "offset", "limit", "page", "pageSize", "totalPages"] as const;
+
 export const getQueryFn: <T>(options: {
   on401: UnauthorizedBehavior;
 }) => QueryFunction<T> =
@@ -215,8 +218,26 @@ export const getQueryFn: <T>(options: {
     }
     try {
       const json = JSON.parse(text);
-      // Auto-unwrap paginated envelope: { data: [...], total, limit, offset }
-      if (json && typeof json === "object" && Array.isArray(json.data) && "total" in json && "offset" in json) {
+      // Auto-unwrap a paginated envelope down to its rows.
+      //
+      // This codebase has TWO pagination conventions and the test used to name
+      // only one: `{ data, total, limit, offset }` from `parsePagination`, and
+      // `{ data, total, page, pageSize, totalPages }` from `parsePageParams`,
+      // which the findings inbox returns. Requiring `offset` meant the second
+      // shape was handed to the component AS AN OBJECT, and the first thing any
+      // list page does with it is `.filter` — "x.filter is not a function",
+      // rendered as a full-page crash rather than a bad list.
+      //
+      // So the test is now "an array of rows beside any pagination metadata",
+      // which both conventions satisfy and a domain object with a `data` field
+      // does not.
+      if (
+        json &&
+        typeof json === "object" &&
+        !Array.isArray(json) &&
+        Array.isArray(json.data) &&
+        PAGINATION_KEYS.some((k) => k in json)
+      ) {
         return json.data;
       }
       return json;

@@ -2,6 +2,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Globe } from "lucide-react";
 import type { ReconModule } from "@shared/schema";
+import { usePagedList, ListPager } from "@/components/list-pager";
 import {
   Table,
   TableBody,
@@ -15,14 +16,22 @@ import { ModuleHeader, StatusIcon } from "./shared";
 export function WebPresencePanel({ mod }: { mod: ReconModule }) {
   const d = mod.data as Record<string, any>;
   const totalSubdomains = d.totalSubdomains ?? d.totalSubdomainsEnumerated ?? 0;
-  const discoveredDomains = d.discoveredDomains ?? (Array.isArray(d.liveSubdomains) ? d.liveSubdomains.map((domain: string) => ({ domain, ip: "-", cdn: "None", waf: false, newSinceLastRun: false })) : []);
+  const discoveredDomains = d.discoveredDomains ?? (Array.isArray(d.liveSubdomains) ? d.liveSubdomains.map((domain: string) => ({ domain, ip: "-", cdn: "None", waf: false })) : []);
+  // Discovery can return tens of thousands of hosts on a large estate — a live
+  // run against one target aggregated 48,063. Rendering that as one table is a
+  // browser-freezing scroll, not a view.
+  const pagedDomains = usePagedList<any>(discoveredDomains, null);
+  // Third state: with no prior completed scan there is nothing to compare
+  // against, so "new" and "known" are both unsupportable claims. Showing 0/Known
+  // in that case asserts nothing changed, which is not what we observed.
+  const hasChangeBaseline: boolean = d.hasChangeBaseline ?? discoveredDomains.some((x: any) => x.newSinceLastRun !== undefined);
   const liveServicesCount = d.liveServices != null ? (Array.isArray(d.liveServices) ? d.liveServices.length : Number(d.liveServices)) : discoveredDomains.length;
   return (
     <div className="space-y-4" data-testid="panel-web-presence">
       <ModuleHeader title="Web Presence Map" icon={Globe} confidence={mod.confidence || 0} generatedAt={mod.generatedAt} />
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <Card><CardContent className="p-3 text-center"><p className="text-lg font-semibold">{totalSubdomains}</p><p className="text-xs text-muted-foreground">Total Subdomains</p></CardContent></Card>
-        <Card><CardContent className="p-3 text-center"><p className="text-lg font-semibold text-green-400">{d.newSinceLastRun ?? 0}</p><p className="text-xs text-muted-foreground">New Since Last Run</p></CardContent></Card>
+        <Card><CardContent className="p-3 text-center"><p className={`text-lg font-semibold ${hasChangeBaseline ? "text-green-400" : "text-muted-foreground"}`}>{hasChangeBaseline ? (d.newSinceLastRun ?? 0) : "—"}</p><p className="text-xs text-muted-foreground">{hasChangeBaseline ? "New Since Last Run" : "No prior scan to compare"}</p></CardContent></Card>
         <Card><CardContent className="p-3 text-center"><p className="text-lg font-semibold">{liveServicesCount}</p><p className="text-xs text-muted-foreground">Live Services</p></CardContent></Card>
         <Card><CardContent className="p-3 text-center"><p className="text-lg font-semibold">{(d.screenshots || []).length}</p><p className="text-xs text-muted-foreground">Screenshots</p></CardContent></Card>
       </div>
@@ -41,17 +50,18 @@ export function WebPresencePanel({ mod }: { mod: ReconModule }) {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {discoveredDomains.map((dom: any, i: number) => (
+                {pagedDomains.items.map((dom: any, i: number) => (
                   <TableRow key={i}>
                     <TableCell className="font-mono text-sm">{dom.domain}</TableCell>
                     <TableCell className="font-mono text-sm text-muted-foreground">{dom.ip}</TableCell>
                     <TableCell>{dom.cdn ? <Badge variant="outline" className="text-xs no-default-hover-elevate no-default-active-elevate">{dom.cdn}</Badge> : <span className="text-xs text-muted-foreground">None</span>}</TableCell>
                     <TableCell><StatusIcon pass={dom.waf} /></TableCell>
-                    <TableCell>{dom.newSinceLastRun ? <Badge variant="outline" className="text-xs bg-green-600/15 text-green-400 border-0 no-default-hover-elevate no-default-active-elevate">New</Badge> : <span className="text-xs text-muted-foreground">Known</span>}</TableCell>
+                    <TableCell>{!hasChangeBaseline ? <span className="text-xs text-muted-foreground">No baseline</span> : dom.newSinceLastRun ? <Badge variant="outline" className="text-xs bg-green-600/15 text-green-400 border-0 no-default-hover-elevate no-default-active-elevate">New</Badge> : <span className="text-xs text-muted-foreground">Known</span>}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
+            <ListPager paged={pagedDomains} label="domains" />
           </div>
         </CardContent>
       </Card>
@@ -65,8 +75,14 @@ export function WebPresencePanel({ mod }: { mod: ReconModule }) {
               <span className="text-sm"><strong>{d.subdomainBruteforce.resolved?.length ?? 0}</strong> resolved</span>
               <span className="text-sm text-green-500"><strong>{d.subdomainBruteforce.liveWithHttp?.length ?? 0}</strong> with HTTP(S)</span>
             </div>
+            {/*
+              A scrollable region that cannot be focused is unreachable by
+              keyboard: a mouse user sees every subdomain, a keyboard user gets
+              the first screenful and stops. tabIndex makes it a stop; the group
+              role and label say what the stop is for.
+            */}
             {(d.subdomainBruteforce.resolved?.length ?? 0) > 0 && (
-              <div className="max-h-48 overflow-auto">
+              <div className="max-h-48 overflow-auto" tabIndex={0} role="group" aria-label="Resolved subdomains">
                 <p className="text-xs font-medium text-muted-foreground mb-1">Resolved subdomains</p>
                 <ul className="text-xs font-mono space-y-0.5">
                   {(d.subdomainBruteforce.resolved || []).slice(0, 50).map((s: string, i: number) => (

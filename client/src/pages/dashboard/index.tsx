@@ -32,6 +32,8 @@ import { SeverityChart, FindingsSummaryCard, RecentFindings } from "./stat-cards
 import { IntelligenceOverview } from "./intelligence-overview";
 import { RecentScans, ContinuousMonitoringCard, StartContinuousMonitoringDialog, ScanLauncher } from "./scan-sections";
 import { PostureHistoryCard } from "./posture-history-card";
+import { RiskFactorsCard } from "./risk-factors-card";
+import { LiveScanView, type LiveScan } from "@/components/live-scan-view";
 import { type ContinuousMonitoringStatus } from "./helpers";
 
 /** Humanises a timestamp into "just now" / "12m ago" / "3d ago". */
@@ -123,6 +125,7 @@ export default function Dashboard() {
       ? openFindings.length - findingSeries[findingSeries.length - 2]!
       : undefined;
 
+  const runningScan = scans.find((s) => s.status === "running" || s.status === "pending");
   const lastCompleted = scans.find((s) => s.status === "completed");
   const lastScanLabel = relativeTime(lastCompleted?.completedAt);
   const target = selectedWorkspace?.domain || selectedWorkspace?.name || null;
@@ -300,6 +303,10 @@ export default function Dashboard() {
             </CollapsibleContent>
           </Collapsible>
 
+          {/* A running scan is the most time-sensitive thing on the page, so it
+              goes above everything else — and disappears the moment it ends. */}
+          {runningScan && <LiveScanView scan={runningScan as unknown as LiveScan} />}
+
           {monitoringWorkspaceId && (
             <ContinuousMonitoringCard
               workspaceId={monitoringWorkspaceId}
@@ -308,6 +315,8 @@ export default function Dashboard() {
           )}
 
           <IntelligenceOverview modules={modules} />
+
+          <RiskFactorsCard findings={findings} modules={modules} />
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <SeverityChart findings={findings} />

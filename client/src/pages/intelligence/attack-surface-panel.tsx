@@ -10,6 +10,7 @@ import {
   ChevronRight,
 } from "lucide-react";
 import type { ReconModule } from "@shared/schema";
+import { usePagedList, ListPager } from "@/components/list-pager";
 import {
   Table,
   TableBody,
@@ -98,6 +99,12 @@ export function AttackSurfacePanel({ mod }: { mod: ReconModule }) {
     });
     return arr;
   }, [assetInventory, sortBy, sortDesc]);
+
+  // Sorting covers the WHOLE inventory; only the window is paged, so "worst
+  // risk first" still means worst in the estate rather than worst on this page.
+  // Re-sorting returns the reader to page 1, since the row they were looking at
+  // is no longer where they left it.
+  const pagedAssets = usePagedList(sortedAssets, `${sortBy}|${sortDesc}`);
   const { data: ipEnrichment = {} } = useQuery<Record<string, { abuseipdb?: { abuseConfidenceScore?: number; totalReports?: number; countryCode?: string; isp?: string } | null; virustotal?: { malicious?: number; suspicious?: number } | null }>>({
     queryKey: [`/api/workspaces/${selectedWorkspaceId}/ip-enrichment`],
     enabled: !!selectedWorkspaceId && ips.length > 0,
@@ -209,7 +216,7 @@ export function AttackSurfacePanel({ mod }: { mod: ReconModule }) {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {sortedAssets.map((a) => (
+                {pagedAssets.items.map((a) => (
                   <React.Fragment key={a.host}>
                     <TableRow className="cursor-pointer hover:bg-muted/30" onClick={() => setExpandedHost(expandedHost === a.host ? null : a.host)}>
                       <TableCell className="w-8">{expandedHost === a.host ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}</TableCell>
@@ -254,6 +261,7 @@ export function AttackSurfacePanel({ mod }: { mod: ReconModule }) {
                 ))}
               </TableBody>
             </Table>
+            <ListPager paged={pagedAssets} label="hosts" />
           </CardContent>
         </Card>
       )}

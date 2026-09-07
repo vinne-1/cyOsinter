@@ -19,6 +19,32 @@ services:
       timeout: 5s
       retries: 10
 
+  # Tor SOCKS5 proxy — the transport the dark-web module needs to reach .onion
+  # services at all. Without it `isTorAvailable()` is false and every .onion
+  # source is skipped, which the panel correctly reports as an INCOMPLETE check
+  # rather than a clean one. It is opt-in via the `darkweb` profile because the
+  # rest of the product does not need it and an operator should choose to run a
+  # Tor client:
+  #
+  #     docker compose --profile darkweb up -d tor
+  #
+  # Bootstrapping a circuit takes ~20-30s from cold; the healthcheck waits for a
+  # real exit rather than for the port to open, because an open SOCKS port with
+  # no circuit accepts connections and then fails every request.
+  tor:
+    image: dperson/torproxy:latest
+    container_name: cyshield-tor
+    restart: unless-stopped
+    profiles: ["darkweb"]
+    ports:
+      - "${TOR_SOCKS_PORT:-9050}:9050"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf --max-time 25 --socks5-hostname 127.0.0.1:9050 https://check.torproject.org/api/ip | grep -q '\"IsTor\":true'"]
+      interval: 20s
+      timeout: 30s
+      retries: 10
+      start_period: 45s
+
   ollama:
     image: ollama/ollama
     container_name: cyshield-ollama

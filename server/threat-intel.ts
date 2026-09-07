@@ -1,3 +1,4 @@
+import { isSecurityFinding } from "./scanner/finding-taxonomy";
 import { createLogger } from "./logger";
 import { storage } from "./storage";
 
@@ -220,10 +221,23 @@ export async function enrichFindingsWithThreatIntel(
 ): Promise<number> {
   try {
     const result = await storage.getFindings(workspaceId, { limit: 10000 });
-    const allFindings = result.data;
+    /*
+     * Enrich security rows only.
+     *
+     * The route returns `enrichedCount` to the operator as "N findings
+     * enriched", and a `recon` row is not a finding anyone triages — counting
+     * it inflates the number, and stamping threat context onto it spends a
+     * database write per row that no view will ever read.
+     *
+     * Note the OTX endpoint used here (`/indicators/<type>/<value>/general`)
+     * DOES answer without a key — verified live, 200. It is `passive_dns` that
+     * 429s anonymously, and this module never asks for it. Do not gate this on
+     * OTX_API_KEY by analogy with passive-sources.ts.
+     */
+    const allFindings = result.data.filter(isSecurityFinding);
 
     log.info(
-      { workspaceId, findingCount: allFindings.length },
+      { workspaceId, findingCount: allFindings.length, totalRows: result.data.length },
       "Starting threat intel enrichment",
     );
 

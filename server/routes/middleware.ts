@@ -16,20 +16,13 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction): v
   res.status(403).json({ message: "Forbidden: admin endpoints are restricted to localhost" });
 }
 
-/** Validates a URL is safe to fetch (blocks SSRF to internal networks) */
-export function isSafeExternalUrl(raw: string): boolean {
-  try {
-    const u = new URL(raw);
-    if (!["http:", "https:"].includes(u.protocol)) return false;
-    const hostname = u.hostname.toLowerCase();
-    if (hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1") return false;
-    if (/^10\.\d/.test(hostname)) return false;
-    if (/^172\.(1[6-9]|2\d|3[01])\./.test(hostname)) return false;
-    if (/^192\.168\./.test(hostname)) return false;
-    if (hostname === "169.254.169.254" || hostname.endsWith(".internal")) return false;
-    if (hostname === "0.0.0.0" || hostname === "[::1]") return false;
-    return true;
-  } catch {
-    return false;
-  }
-}
+
+/**
+ * Outbound URL safety lives in `server/utils/ssrf.ts`.
+ *
+ * `isSafeExternalUrl` used to live here as a hostname string blocklist, which
+ * meant two guards existed and disagreed: a host that merely RESOLVES to
+ * 127.0.0.1, and decimal/octal/hex IP literals, passed the string check and
+ * were refused by the resolving one. Use `isSafeOutboundUrl` / `isPrivateHost`.
+ */
+

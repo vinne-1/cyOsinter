@@ -8,10 +8,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const httpGet = vi.fn();
 const httpGetNoRedirect = vi.fn();
 const httpGetMainPage = vi.fn();
+const httpRequest = vi.fn();
 vi.mock("../../../server/scanner/http.js", () => ({
   httpGet: (...a: unknown[]) => httpGet(...a),
   httpGetNoRedirect: (...a: unknown[]) => httpGetNoRedirect(...a),
   httpGetMainPage: (...a: unknown[]) => httpGetMainPage(...a),
+  httpRequest: (...a: unknown[]) => httpRequest(...a),
   parseSetCookie: (strings: string[]) =>
     strings.map((s) => {
       const lower = s.toLowerCase();
@@ -35,7 +37,7 @@ vi.mock("tls", () => ({ connect: () => ({ once() { return this; }, destroy() { /
 const resolveCname = vi.fn();
 vi.mock("dns/promises", () => ({ resolveCname: (...a: unknown[]) => resolveCname(...a) }));
 
-import { runVerificationGate } from "../../../server/scanner/verification-gate";
+import { runVerificationGate, resetVerificationBaselines } from "../../../server/scanner/verification-gate";
 
 interface F {
   title: string; description: string; severity: string; category: string;
@@ -49,7 +51,8 @@ const mk = (o: Partial<F> & { category: string; affectedAsset: string }): F => (
 
 beforeEach(() => {
   httpGet.mockReset(); httpGetNoRedirect.mockReset(); httpGetMainPage.mockReset();
-  tcpConnect.mockReset(); resolveCname.mockReset();
+  tcpConnect.mockReset(); resolveCname.mockReset(); httpRequest.mockReset();
+  resetVerificationBaselines();
 });
 
 describe("runVerificationGate", () => {
@@ -134,5 +137,96 @@ describe("runVerificationGate", () => {
     );
     expect(confirmed).toHaveLength(0);
     expect(withheld).toHaveLength(1);
+  });
+
+  /**
+   * The gate exists to catch exactly this: a host that answers 200 for every
+   * path makes any guessed path look exposed. Before the response oracle, a
+   * marker-less finding was confirmed on a live 2xx alone, so the gate
+   * rubber-stamped the false positives it was built to stop.
+   */
+  it("withholds a marker-less content finding when the host answers 200 for any path", async () => {
+    const spaShell = "<!doctype html><html><head><title>Acme</title></head><body><div id=root>Welcome to Acme, the leading provider of widgets</div></body></html>";
+    httpGet.mockResolvedValue({ status: 200, headers: {}, body: spaShell, finalUrl: "https://x.com/actuator/env" });
+    const { confirmed, withheld } = await runVerificationGate(
+      [mk({ title: "Actuator env exposed", category: "api_exposure", affectedAsset: "x.com", evidence: [{ url: "https://x.com/actuator/env" }] })],
+    );
+    expect(confirmed).toHaveLength(0);
+    expect(withheld).toHaveLength(1);
+    expect(withheld[0].reason).toMatch(/catch-all/i);
+  });
+
+  it("confirms a marker-less content finding that differs from the host's not-found page", async () => {
+    httpGet.mockImplementation(async (url: string) =>
+      url.includes("nxprobe")
+        ? { status: 404, headers: {}, body: "<html><body>Sorry, that page could not be found here</body></html>", finalUrl: url }
+        : { status: 200, headers: {}, body: '{"propertySources":[{"name":"systemEnvironment"}]}', finalUrl: url },
+    );
+    const { confirmed, withheld } = await runVerificationGate(
+      [mk({ title: "Actuator env exposed", category: "api_exposure", affectedAsset: "x.com", evidence: [{ url: "https://x.com/actuator/env" }] })],
+    );
+    expect(withheld).toHaveLength(0);
+    expect(confirmed).toHaveLength(1);
+  });
+
+  it("treats a reflected arbitrary Origin as a CORS defect, and a same-origin ACAO as none", async () => {
+    httpRequest.mockResolvedValue({
+      status: 200,
+      headers: { "access-control-allow-origin": "https://cyshield-cors-probe.example", "access-control-allow-credentials": "true" },
+      body: "", finalUrl: "https://x.com/api",
+    });
+    const bad = await runVerificationGate(
+      [mk({ title: "CORS", category: "cors_misconfiguration", affectedAsset: "x.com", evidence: [{ url: "https://x.com/api" }] })],
+    );
+    expect(bad.confirmed).toHaveLength(1);
+
+    httpRequest.mockResolvedValue({
+      status: 200,
+      headers: { "access-control-allow-origin": "https://x.com", "access-control-allow-credentials": "true" },
+      body: "", finalUrl: "https://x.com/api",
+    });
+    const good = await runVerificationGate(
+      [mk({ title: "CORS", category: "cors_misconfiguration", affectedAsset: "x.com", evidence: [{ url: "https://x.com/api" }] })],
+    );
+    expect(good.confirmed).toHaveLength(0);
+  });
+
+  /**
+   * PATCH is the ordinary partial-update verb of every REST API. Counting it as
+   * a dangerous method reported every correctly built API as a finding.
+   */
+  it("does not treat an advertised PATCH as a dangerous method", async () => {
+    httpRequest.mockImplementation(async (_url: string, method: string) =>
+      method === "OPTIONS"
+        ? { status: 204, headers: { allow: "GET, HEAD, OPTIONS, PATCH, POST" }, body: "", finalUrl: "https://x.com/api" }
+        : { status: 405, headers: {}, body: "", finalUrl: "https://x.com/api" },
+    );
+    const { confirmed, withheld } = await runVerificationGate(
+      [mk({ title: "Dangerous methods", category: "http_methods", affectedAsset: "x.com", evidence: [{ url: "https://x.com/api" }] })],
+    );
+    expect(confirmed).toHaveLength(0);
+    expect(withheld).toHaveLength(1);
+  });
+
+  it("confirms cross-site tracing only when TRACE actually echoes the request", async () => {
+    httpRequest.mockImplementation(async (_url: string, method: string) =>
+      method === "OPTIONS"
+        ? { status: 200, headers: { allow: "GET, TRACE" }, body: "", finalUrl: "https://x.com/" }
+        : { status: 200, headers: {}, body: "TRACE / HTTP/1.1\r\nHost: x.com\r\n", finalUrl: "https://x.com/" },
+    );
+    const echoing = await runVerificationGate(
+      [mk({ title: "TRACE enabled", category: "http_methods", affectedAsset: "x.com", evidence: [{ url: "https://x.com/" }] })],
+    );
+    expect(echoing.confirmed).toHaveLength(1);
+
+    httpRequest.mockImplementation(async (_url: string, method: string) =>
+      method === "OPTIONS"
+        ? { status: 200, headers: { allow: "GET, TRACE" }, body: "", finalUrl: "https://x.com/" }
+        : { status: 405, headers: {}, body: "Method Not Allowed", finalUrl: "https://x.com/" },
+    );
+    const advertisedOnly = await runVerificationGate(
+      [mk({ title: "TRACE enabled", category: "http_methods", affectedAsset: "x.com", evidence: [{ url: "https://x.com/" }] })],
+    );
+    expect(advertisedOnly.confirmed).toHaveLength(0);
   });
 });

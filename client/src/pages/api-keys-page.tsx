@@ -117,14 +117,28 @@ function CreateKeyDialog() {
             </div>
             <div className="space-y-2">
               <Label>Scope</Label>
+              {/*
+                Each option says what it PERMITS. The scope is enforced on every
+                request by `enforceApiKeyScope`, so this choice is the actual
+                blast radius of the key if it leaks — naming the tiers "Read /
+                Scan / Full" alone invited picking the widest one because it
+                sounded the most complete.
+
+                `aria-label` because a Radix SelectTrigger takes its accessible
+                name from the attribute, not from the adjacent <Label>.
+              */}
               <Select value={scope} onValueChange={setScope}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectTrigger aria-label="API key scope"><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="read">Read</SelectItem>
-                  <SelectItem value="scan">Scan</SelectItem>
-                  <SelectItem value="full">Full</SelectItem>
+                  <SelectItem value="read">Read — view data only</SelectItem>
+                  <SelectItem value="scan">Scan — view data, start and cancel scans</SelectItem>
+                  <SelectItem value="full">Full — everything your account can do</SelectItem>
                 </SelectContent>
               </Select>
+              <p className="text-xs text-muted-foreground">
+                No API key can create or revoke API keys, whatever its scope — that needs a signed-in session,
+                so revoking a leaked key cannot be undone with the leaked key.
+              </p>
             </div>
             <div className="space-y-2">
               <Label>Expiry Date (optional)</Label>

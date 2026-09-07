@@ -353,7 +353,7 @@ export default function ScheduledScans() {
                         <Clock className="w-3 h-3" />
                         <span>{cronToHuman(schedule.cronExpression)}</span>
                       </div>
-                      <div className="flex items-center gap-3 text-[10px] text-muted-foreground/70">
+                      <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
                         {schedule.lastRunAt && (
                           <span>Last run: {new Date(schedule.lastRunAt).toLocaleString()}</span>
                         )}

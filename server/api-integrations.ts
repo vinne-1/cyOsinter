@@ -407,16 +407,42 @@ export async function enrichIP(ip: string): Promise<IPEnrichment> {
   return { abuseipdb, virustotal, shodanInternetDB };
 }
 
-export async function enrichIPs(ips: string[]): Promise<Record<string, IPEnrichment>> {
-  const unique = Array.from(new Set(ips)).filter((ip) => !isPrivateIP(ip)).slice(0, MAX_IPS_PER_BATCH);
-  const result: Record<string, IPEnrichment> = {};
+export interface IPEnrichmentResult {
+  enrichment: Record<string, IPEnrichment>;
+  /** Public IPs the caller asked about, after de-duplication. */
+  requested: number;
+  /** How many were actually enriched — at most MAX_IPS_PER_BATCH. */
+  enriched: number;
+  /** True when the batch cap hid some of them. */
+  truncated: boolean;
+}
+
+/**
+ * Enriches a batch of IPs, and REPORTS what it did not do.
+ *
+ * The cap is deliberate — each IP costs several third-party calls plus a 500ms
+ * pace — but it used to return a bare map, so a caller that asked about 228 IPs
+ * got 10 back with nothing saying the other 218 were skipped. A reader takes 10
+ * rows as the whole picture, which is the same "a capped look reads as a
+ * complete one" failure that `probeCoverage` and the crawler's `truncated` flag
+ * exist to prevent. Measured on a live workspace: 228 IP assets, 10 enriched.
+ */
+export async function enrichIPs(ips: string[]): Promise<IPEnrichmentResult> {
+  const publicIps = Array.from(new Set(ips)).filter((ip) => !isPrivateIP(ip));
+  const unique = publicIps.slice(0, MAX_IPS_PER_BATCH);
+  const enrichment: Record<string, IPEnrichment> = {};
 
   for (const ip of unique) {
-    result[ip] = await enrichIP(ip);
+    enrichment[ip] = await enrichIP(ip);
     await sleep(500); // Small delay between IPs to avoid rate limits
   }
 
-  return result;
+  return {
+    enrichment,
+    requested: publicIps.length,
+    enriched: unique.length,
+    truncated: publicIps.length > unique.length,
+  };
 }
 
 // --- BGPView API (free, no API key) ---

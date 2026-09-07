@@ -81,7 +81,7 @@ export function RecentScans({ scans, workspaceId }: { scans: Scan[]; workspaceId
                   </div>
                   {isRunning && (s.progressMessage || (s.progressPercent ?? 0) > 0) && (
                     <div className="mt-2 space-y-1">
-                      <Progress value={s.progressPercent ?? 0} className="h-1.5" />
+                      <Progress value={s.progressPercent ?? 0} className="h-1.5" aria-label={`Scan progress for ${scan.target}: ${s.progressPercent ?? 0} percent`} />
                       <p className="text-xs text-muted-foreground truncate">{s.progressMessage}</p>
                       {s.estimatedSecondsRemaining != null && s.estimatedSecondsRemaining > 0 && (
                         <p className="text-xs text-muted-foreground flex items-center gap-1">
@@ -153,7 +153,7 @@ export function ContinuousMonitoringCard({ workspaceId, onStop }: { workspaceId:
         </Button>
       </CardHeader>
       <CardContent className="space-y-3">
-        <Progress value={status?.progressPercent ?? 0} className="h-2" data-testid="progress-continuous-monitoring" />
+        <Progress value={status?.progressPercent ?? 0} className="h-2" data-testid="progress-continuous-monitoring" aria-label={`Continuous monitoring progress: ${status?.progressPercent ?? 0} percent`} />
         <p className="text-sm text-muted-foreground">Iteration {status?.iteration ?? 0}</p>
         <p className="text-xs text-muted-foreground truncate">{status?.progressMessage ?? "Loading..."}</p>
       </CardContent>
@@ -259,7 +259,21 @@ export function ScanLauncher() {
         status: "pending",
         workspaceId: selectedWorkspaceId || undefined,
         autoGenerateReport: autoGen ?? false,
-        mode: "gold",
+        /*
+         * No mode. This panel has no mode selector, so it has nothing to say.
+         *
+         * It used to hardcode "gold" — the most aggressive profile — which did
+         * two wrong things at once. It overrode the workspace DEFAULT scan
+         * profile (the star on the profile card), so an operator who set a
+         * low-and-slow default got the heaviest mode from this button anyway.
+         * And it applied gold to the "Passive OSINT (non-intrusive)" option,
+         * whose own description says it is "safe when only passive testing is
+         * authorized" — the request contradicted the label the user had read.
+         *
+         * Omitting it lets the server resolve: named profile, then the
+         * workspace default, then "standard". Mode is a statement about the
+         * rate the TARGET sees, so a UI that does not ask should not answer.
+         */
       });
       return res.json();
     },
@@ -305,9 +319,14 @@ export function ScanLauncher() {
       mutation.mutate({ scanType: "full", autoGen: autoGenerateReport });
       toast({ title: "Full scan started", description: `EASM + OSINT scan initiated against ${effectiveTarget}${autoGenerateReport ? " (report will be auto-generated)" : ""}` });
     } else {
-      for (const scanType of selectedTypes) {
-        mutation.mutate({ scanType, autoGen: autoGenerateReport });
-      }
+      // Auto-generate is requested ONCE for the batch, not per scan. Each
+      // report describes the whole workspace, so asking every scan for one
+      // produced N near-identical reports from a toast that promises "a
+      // report" — and the flag only started meaning anything once it was
+      // actually wired, so the duplication had never shown up before.
+      selectedTypes.forEach((scanType, i) => {
+        mutation.mutate({ scanType, autoGen: i === 0 ? autoGenerateReport : false });
+      });
       toast({ title: "Scans launched", description: `${selectedTypes.length} scan(s) initiated against ${effectiveTarget}${autoGenerateReport ? " (report will be auto-generated)" : ""}` });
     }
   };

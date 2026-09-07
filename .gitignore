@@ -38,3 +38,37 @@ tests/e2e/.auth-state.json
 /*.png
 /*-scan.json
 /live-findings.json
+
+# Working captures and scan reports that show REAL customer data.
+#
+# `.gitignore` already says scan output is "outputs, not source", but its globs
+# only covered the repo root and docx/pdf — so a rendered .md report and 40
+# UI captures of a live customer workspace were one `git add .` from a public
+# remote. `capture-ui.mjs` deliberately picks the workspace with the MOST
+# findings, which is by definition a real estate, and the captures name its
+# hosts, IPs and unremediated weaknesses.
+#
+# The screenshots README publishes are deliberately of hackthissite.org, a
+# legal CTF target, and are committed by name. Anything else here is working
+# evidence: keep it local.
+/*-osint-easm-report.md
+/*-report.md
+docs/screenshots/*
+!docs/screenshots/login.png
+!docs/screenshots/dashboard-overview.png
+!docs/screenshots/dashboard-stats.png
+!docs/screenshots/easm.png
+!docs/screenshots/easm-assets.png
+!docs/screenshots/osint.png
+!docs/screenshots/findings.png
+!docs/screenshots/findings-list.png
+!docs/screenshots/finding-critical-detail.png
+!docs/screenshots/intelligence.png
+!docs/screenshots/reports.png
+!docs/screenshots/threat-intel.png
+!docs/screenshots/attack-paths.png
+!docs/screenshots/compliance.png
+!docs/screenshots/ai-insights.png
+!docs/screenshots/integrations.png
+!docs/screenshots/arch-current.png
+!docs/screenshots/arch-planned.png

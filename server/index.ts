@@ -12,11 +12,45 @@ import { startScheduler, registerScanTrigger, stopScheduler } from "./scan-sched
 import { triggerScan } from "./scan-trigger";
 import { startQueuePoller, stopQueuePoller } from "./scan-queue";
 import { startSlaMonitor, stopSlaMonitor } from "./sla-monitor";
+import { startRetentionSweep, stopRetentionSweep } from "./retention-sweep";
 import { pool } from "./db";
 import { PostgresRateLimitStore, startRateLimitCleanup, stopRateLimitCleanup } from "./rate-limit-store";
 
 const app = express();
 const httpServer = createServer(app);
+
+/*
+ * Whether to believe `X-Forwarded-For`.
+ *
+ * This is off by default and MUST be turned on when the app runs behind a
+ * reverse proxy, because everything that identifies a caller by address depends
+ * on it. Express sets `req.ip` from the socket unless told otherwise, so behind
+ * a proxy every request appears to come from the proxy:
+ *
+ *  - the per-IP limiters (login 10/min, register 3/min) collapse into ONE bucket
+ *    for the entire deployment — the login limiter exists to slow credential
+ *    stuffing, and shared like that it instead locks out every legitimate user
+ *    once any attacker spends the budget;
+ *  - `audit_logs.ip_address` records the proxy for every entry, so the trail
+ *    cannot say where an action came from.
+ *
+ * It is not simply enabled by default because that is the opposite failure: with
+ * no proxy in front, `X-Forwarded-For` is attacker-controlled, and trusting it
+ * lets anyone bypass those same per-IP limits by varying a header. Only the
+ * operator knows which deployment this is, so only the operator can say.
+ *
+ * Accepts express's own syntax: `true`, a hop count, or a comma-separated list
+ * of trusted IPs/CIDRs (preferred — `TRUST_PROXY=10.0.0.0/8`).
+ */
+const trustProxy = process.env.TRUST_PROXY?.trim();
+if (trustProxy) {
+  const value = trustProxy === "true"
+    ? true
+    : /^\d+$/.test(trustProxy)
+      ? Number(trustProxy)
+      : trustProxy.split(",").map((v) => v.trim()).filter(Boolean);
+  app.set("trust proxy", value);
+}
 
 declare module "http" {
   interface IncomingMessage {
@@ -32,8 +66,35 @@ declare module "http" {
 // not. We disable that one directive (set to null) so the rest of the CSP still applies.
 // HSTS is likewise disabled: over HTTP it's ignored anyway, and it would pin HTTPS on hosts
 // that have no TLS. Front this app with a TLS-terminating reverse proxy for HTTPS in prod.
+/*
+ * HSTS is applied only to responses that actually arrived over TLS.
+ *
+ * It used to be off unconditionally, with sound reasoning: this app is often
+ * self-hosted over plain HTTP on a LAN, and an HSTS header pins HTTPS for a year
+ * on a host that may have no TLS at all — locking operators out of their own
+ * install. But "off always" also means an operator who DOES front it with a
+ * TLS-terminating proxy gets no HSTS, which is exactly the deployment that needs
+ * it (ASVS 5.0 V3.4.1).
+ *
+ * `req.secure` answers the question directly and per-request: true for a direct
+ * TLS connection, and true behind a proxy that sets `X-Forwarded-Proto: https`
+ * — provided TRUST_PROXY is configured, which that deployment must set anyway
+ * for rate limiting and audit attribution to work. A plain-HTTP LAN install
+ * never sees the header, so nothing is pinned and nobody is locked out.
+ *
+ * A browser ignores HSTS on a plain-HTTP response anyway, so this is not merely
+ * caution — sending it there would be meaningless as well as risky.
+ */
+const hstsPolicy = helmet.hsts({
+  maxAge: 31_536_000, // one year — the ASVS V3.4.1 minimum
+  includeSubDomains: true,
+  preload: false, // preloading is irreversible for a domain; the operator's call
+});
+app.use((req, res, next) => (req.secure ? hstsPolicy(req, res, next) : next()));
+
 app.use(
   helmet({
+    // Handled per-request above, so helmet's unconditional header is off here.
     hsts: false,
     contentSecurityPolicy: process.env.NODE_ENV === "production" ? {
       directives: {
@@ -90,6 +151,30 @@ app.use("/api/auth/login", rateLimit({
   legacyHeaders: false,
   message: { message: "Too many sign-in attempts from this address. Wait a minute and try again." },
 }));
+// SSO is an unauthenticated, session-minting surface reached over the same
+// threat model as password login, so it gets the same shared-store treatment.
+// The path-prefix limiter above does NOT cover it: `/api/auth/sso/login` does
+// not start with `/api/auth/login`, so without this it had only the blunt
+// 600/min guard. `/sso/login` also starts an outbound round trip to the IdP and
+// records a pending-login entry, so an unlimited one is a way to spend somebody
+// else's IdP quota as well as this server's memory.
+app.use("/api/auth/sso", rateLimit({
+  windowMs: 60_000, max: 20,
+  store: new PostgresRateLimitStore("sso"),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: "Too many single sign-on attempts from this address. Wait a minute and try again." },
+}));
+// Anti-automation on password change (ASVS V6.3.1). Authenticated, so this is
+// not the credential-stuffing surface login is — but it verifies a password, and
+// an endpoint that verifies a password is an oracle for guessing one.
+app.use("/api/auth/change-password", rateLimit({
+  windowMs: 60_000, max: 10,
+  store: new PostgresRateLimitStore("change-password"),
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: "Too many password change attempts. Wait a minute and try again." },
+}));
 app.use("/api/auth/register", rateLimit({
   windowMs: 60_000, max: 3,
   store: new PostgresRateLimitStore("register"),
@@ -109,7 +194,20 @@ app.use("/api/workspaces/:id/code-leaks", rateLimit({ windowMs: 60_000, max: 2, 
 
 // Stricter rate limits for AI/enrichment endpoints (expensive, long-running)
 const aiRateLimit = rateLimit({ windowMs: 60_000, max: 3, message: { message: "Too many AI requests, please try again later" } });
-app.use("/api/workspaces/:id/ai-insights", aiRateLimit);
+/*
+ * Limit the INFERENCE path, not the panel's data fetch.
+ *
+ * `app.use` mounts by PREFIX, so `/ai-insights` also covered
+ * `GET /ai-insights` — which runs no model at all, it reads findings and recon
+ * modules out of Postgres and returns them. Sharing a 3/min budget with a
+ * 30-minute Ollama call meant an operator flipping between four workspaces in a
+ * minute got **"Too many AI requests"** for requests that used no AI, and the
+ * message sent them to debug the wrong thing — the same failure this codebase
+ * documents for `no-domain` vs `corpus-unreachable`.
+ *
+ * `/ai-insights/summary` is the only route here that calls a model.
+ */
+app.use("/api/workspaces/:id/ai-insights/summary", aiRateLimit);
 app.use("/api/workspaces/:id/findings/enrich-all", aiRateLimit);
 app.use("/api/workspaces/:id/imports/:id/consolidate", aiRateLimit);
 
@@ -162,6 +260,11 @@ app.use((req, res, next) => {
   // Marks findings that blow their remediation deadline. The sweep existed but
   // was never scheduled, so every finding read sla_breached = false forever.
   startSlaMonitor();
+
+  // Applies each workspace's configured data-retention policy. Without this
+  // the policy was only ever enforced if a superadmin called the admin route
+  // by hand, i.e. never — see server/retention-sweep.ts.
+  startRetentionSweep();
   startRateLimitCleanup();
 
   app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
@@ -226,6 +329,9 @@ app.use((req, res, next) => {
       stopScheduler();
       stopQueuePoller();
       stopSlaMonitor();
+      // Was omitted while its four siblings were stopped, so the daily interval
+      // kept the event loop alive past shutdown.
+      stopRetentionSweep();
       stopRateLimitCleanup();
       await new Promise<void>((resolve) => httpServer.close(() => resolve()));
       await pool.end();

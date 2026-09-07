@@ -17,6 +17,9 @@ import {
 import type { ReconModule } from "@shared/schema";
 import { RansomwarePanel } from "./ransomware-panel";
 import { CodeLeakPanel } from "./code-leak-panel";
+import { MobileAppsPanel } from "./mobile-apps-panel";
+import { BreachExposurePanel } from "./breach-exposure-panel";
+import { DarkWebPanel } from "./dark-web-panel";
 
 type Risk = "high" | "medium" | "low";
 
@@ -140,7 +143,13 @@ export default function BrandThreatsPage() {
 
       <RansomwarePanel workspaceId={selectedWorkspaceId} />
 
+      <DarkWebPanel workspaceId={selectedWorkspaceId} />
+
       <CodeLeakPanel workspaceId={selectedWorkspaceId} />
+
+      <MobileAppsPanel workspaceId={selectedWorkspaceId} />
+
+      <BreachExposurePanel workspaceId={selectedWorkspaceId} />
 
       {isLoading ? (
         <div className="space-y-4">

@@ -1,8 +1,12 @@
 import { createLogger } from "./logger";
 import { storage } from "./storage";
+import { isSecurityFinding } from "./scanner/finding-taxonomy";
 import type { Finding } from "@shared/schema";
 
 const log = createLogger("attack-simulation");
+
+/** Statuses that mean the work is done — see the filter in runAttackSimulation. */
+const CLOSED_STATUSES = new Set(["resolved", "false_positive", "accepted_risk", "closed"]);
 
 export interface PlaybookStep {
   order: number;
@@ -307,10 +311,26 @@ export async function simulateAttack(
     }
 
     const result = await storage.getFindings(workspaceId, { limit: 10000 });
-    const allFindings = result.data;
+    /*
+     * Only open security rows are steps an attacker could take today.
+     *
+     * A `recon` or `control` row is not a rung on an attack chain, and a
+     * REMEDIATED finding is the opposite of one — leaving closed rows in means
+     * fixing an issue never clears the path it was part of, so the simulation
+     * keeps reporting the organisation as exploitable through a hole that no
+     * longer exists.
+     */
+    const allFindings = result.data.filter(
+      (f) => isSecurityFinding(f) && !CLOSED_STATUSES.has(f.status ?? "open"),
+    );
 
     log.info(
-      { workspaceId, playbookId, findingsCount: allFindings.length },
+      {
+        workspaceId,
+        playbookId,
+        findingsCount: allFindings.length,
+        totalRows: result.data.length,
+      },
       "Running attack simulation",
     );
 

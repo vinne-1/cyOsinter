@@ -1,4 +1,5 @@
 import { createLogger } from "../logger.js";
+import { formatCount } from "../utils/format.js";
 import {
   DIRECTORY_WORDLIST_SOURCE, STANDARD_DIRECTORY_CAP, STANDARD_SITEMAP_LIMIT,
   GOLD_DIRECTORY_CAP, GOLD_SITEMAP_LIMIT, GOLD_PORTS, STANDARD_PORTS,
@@ -14,7 +15,8 @@ import { extractEmailsFromText, generateBackupFilePaths, extractSensitiveRobotsP
 import { runWithConcurrency, makeConcurrencyProgress } from "./utils.js";
 import { discoverAPIs } from "./api-discovery.js";
 import { scanSecrets } from "./secret-scanner.js";
-import { establishSoft404Fingerprint, classifyPathResults, buildExposedPathFindings } from "./osint-directory-scan.js";
+import { establishResponseBaseline, classifyPathResults, buildExposedPathFindings } from "./osint-directory-scan.js";
+import { isSoftNotFound } from "./response-oracle.js";
 import { runWordPressChecks } from "./wordpress-checks.js";
 import { runGithubDorks } from "./github-dork.js";
 import { runPeopleOsint } from "./people-osint.js";
@@ -103,10 +105,13 @@ export async function runOSINTScan(domain: string, onProgress?: ScanProgressCall
   checkAborted(signal);
   await report("Analyzed SPF/DMARC. Running directory bruteforce...", 25, "dns_email", 90);
 
-  const soft404Fingerprint = await establishSoft404Fingerprint(domain);
-  if (soft404Fingerprint) {
-    log.info({ domain }, "Soft-404 fingerprint established");
-  }
+  // How this host answers paths that cannot exist. Every 200 below is judged
+  // against it, so a catch-all route cannot turn the wordlist into findings.
+  const responseBaseline = await establishResponseBaseline(domain);
+  log.info(
+    { domain, calibrated: responseBaseline.calibrated, catchAll: responseBaseline.catchAll, shapes: responseBaseline.samples.length },
+    responseBaseline.calibrated ? "not-found baseline established" : "not-found baseline UNAVAILABLE — falling back to content proof alone",
+  );
 
   const baseDirPaths = await loadDirectoryWordlist(directoryCap);
   const backupPaths = generateBackupFilePaths(domain, gold);
@@ -138,7 +143,10 @@ export async function runOSINTScan(domain: string, onProgress?: ScanProgressCall
   await report(`Checked ${dirPaths.length} paths. Processing sitemap and main page...`, 65, "directory_bruteforce", 45);
 
   // Classify path check results into findings using extracted module
-  const { findings: pathFindings, exposedPaths } = classifyPathResults(domain, pathCheckResults, soft404Fingerprint, now);
+  const { findings: pathFindings, exposedPaths, suppressed } = classifyPathResults(domain, pathCheckResults, responseBaseline, now);
+  if (suppressed.length > 0) {
+    log.info({ domain, suppressed: suppressed.length, sample: suppressed.slice(0, 5) }, "path findings withheld — 200 responses without positive content proof");
+  }
   results.findings.push(...pathFindings);
   results.findings.push(...buildExposedPathFindings(domain, exposedPaths, now));
 
@@ -210,10 +218,7 @@ export async function runOSINTScan(domain: string, onProgress?: ScanProgressCall
       }, signal);
       for (const { path: rPath, result } of robotsResults.filter(r => r != null)) {
         if (!result || result.status !== 200 || !result.body) continue;
-        if (soft404Fingerprint) {
-          const fp = `${result.body.length}:${result.body.slice(0, 100).replace(/\s+/g, "")}`;
-          if (fp === soft404Fingerprint) continue;
-        }
+        if (isSoftNotFound(responseBaseline, rPath, result)) continue;
         results.findings.push({
           title: `Sensitive Path from robots.txt Accessible on ${domain}: ${rPath}`,
           description: `A path listed in robots.txt (${rPath}) is publicly accessible. This path was hidden from crawlers but responds with content, potentially exposing sensitive data.`,
@@ -426,7 +431,7 @@ export async function runOSINTScan(domain: string, onProgress?: ScanProgressCall
     for (const { redacted, breachCount } of hibpResults) {
       results.findings.push({
         title: `Breached Password Detected in Exposed File on ${domain}`,
-        description: `A password extracted from an exposed configuration file has been found in ${breachCount.toLocaleString()} known data breach(es). This indicates the credential is compromised.`,
+        description: `A password extracted from an exposed configuration file has been found in ${formatCount(breachCount)} known data breach(es). This indicates the credential is compromised.`,
         severity: "critical",
         category: "leaked_credential",
         affectedAsset: domain,
@@ -435,7 +440,7 @@ export async function runOSINTScan(domain: string, onProgress?: ScanProgressCall
         evidence: [{
           type: "osint",
           description: "Password found in known data breaches",
-          snippet: `Redacted credential: ${redacted}\nFound in ${breachCount.toLocaleString()} known breach(es)`,
+          snippet: `Redacted credential: ${redacted}\nFound in ${formatCount(breachCount)} known breach(es)`,
           source: "Have I Been Pwned Pwned Passwords API (k-anonymity)",
           verifiedAt: now,
         }],

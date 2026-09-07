@@ -1,8 +1,9 @@
-import { storage } from "../storage";
+import { storage, FULL_SET_LIMIT } from "../storage";
+import { selectReportFindings } from "../report-scope";
 import { enrichIPs } from "../api-integrations";
 import { getOllamaConfig } from "../api-integrations";
 import { generateReportSummary } from "../ai-service";
-import { isSafeExternalUrl } from "./middleware";
+import { isSafeOutboundUrl } from "../utils/ssrf.js";
 import { createLogger } from "../logger";
 
 const routeLog = createLogger("routes");
@@ -14,10 +15,24 @@ export async function buildReportContent(
   findingIds: string[] | undefined,
   reportType?: string
 ): Promise<{ content: Record<string, unknown>; summary: string }> {
-  const { data: allFindings } = await storage.getFindings(workspaceId);
-  let includedFindings = (findingIds?.length ?? 0) > 0
-    ? allFindings.filter((f) => findingIds!.includes(f.id))
-    : allFindings;
+  const { data: allFindings } = await storage.getFindings(workspaceId, { limit: FULL_SET_LIMIT });
+  /*
+   * The findings register is SECURITY findings.
+   *
+   * A `control` finding records a protection that is in place ("DNSSEC
+   * Detection", "security.txt File") and a `recon` finding is a neutral
+   * technology fact ("Apache Detection", "robots.txt file"). Neither is work,
+   * and neither belongs in a register a client reads as their outstanding
+   * exposure. Measured before this: a technical report for one workspace listed
+   * **14 findings where the security work was 4**, and its executive summary
+   * counted all fourteen.
+   *
+   * An EXPLICIT `findingIds` selection is honoured as given — if an operator
+   * picked specific rows, that is their call, not something to second-guess.
+   * The technology inventory reaches the report through its own recon sections
+   * either way, so nothing is lost by keeping it out of the register.
+   */
+  let includedFindings = selectReportFindings(allFindings, findingIds);
 
   if (reportType === "executive_summary") {
     includedFindings = includedFindings.filter((f) => {
@@ -36,11 +51,20 @@ export async function buildReportContent(
       for (const e of evidence) {
         const url = e.url as string | undefined;
         if (!url || typeof url !== "string" || !url.startsWith("http")) continue;
-        if (!isSafeExternalUrl(url)) continue;
+        // The DNS-resolving guard, not the old string blocklist: an evidence
+        // URL is scanner-produced but the scan TARGET is user-chosen, so a host
+        // an attacker controls can simply resolve to 127.0.0.1 and no amount of
+        // hostname pattern-matching would see it.
+        if (!(await isSafeOutboundUrl(url))) continue;
         try {
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), 5000);
-          const res = await fetch(url, { method: "HEAD", signal: controller.signal, redirect: "follow" });
+          // `redirect: "manual"` because following one re-opens the hole the
+          // guard just closed: the first URL is checked, then a 302 sends the
+          // request to 169.254.169.254 unchecked. For a HEAD re-verification a
+          // redirect is itself the answer — the resource moved — so there is
+          // nothing to gain from chasing it.
+          const res = await fetch(url, { method: "HEAD", signal: controller.signal, redirect: "manual" });
           clearTimeout(timer);
           e.reVerifiedAt = now;
           e.validated = res.ok;
@@ -54,7 +78,7 @@ export async function buildReportContent(
     }
   }
 
-  const { data: modules } = await storage.getReconModules(workspaceId);
+  const { data: modules } = await storage.getReconModules(workspaceId, { limit: FULL_SET_LIMIT });
   const modulesByType = (modules as ReconModule[]).reduce((acc, m) => {
     if (!(m.moduleType in acc)) acc[m.moduleType] = m;
     return acc;
@@ -187,15 +211,22 @@ export async function buildReportContent(
     wafCoverage: p.wafCoverage,
   }));
 
-  const { data: ipAssets } = await storage.getAssets(workspaceId);
+  const { data: ipAssets } = await storage.getAssets(workspaceId, { limit: FULL_SET_LIMIT });
   const ipsFromAssets = ipAssets.filter((a) => a.type === "ip").map((a) => a.value);
   const publicIPs = attackSurface?.publicIPs as Array<{ ip: string }> | undefined;
   const ipsFromSurface = (publicIPs ?? []).map((p) => (typeof p === "string" ? p : p?.ip)).filter(Boolean);
   const allIPs = Array.from(new Set([...ipsFromAssets, ...ipsFromSurface]));
   if (allIPs.length > 0) {
     try {
-      const ipEnrichment = await enrichIPs(allIPs);
-      content.ipEnrichment = ipEnrichment;
+      const result = await enrichIPs(allIPs);
+      content.ipEnrichment = result.enrichment;
+      // Recorded so the report can say "10 of 228" rather than implying the
+      // ten it lists are every IP the estate has.
+      content.ipEnrichmentCoverage = {
+        requested: result.requested,
+        enriched: result.enriched,
+        truncated: result.truncated,
+      };
     } catch (err) {
       routeLog.error({ err }, "IP enrichment error");
     }

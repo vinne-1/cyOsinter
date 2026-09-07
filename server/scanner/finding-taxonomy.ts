@@ -206,9 +206,93 @@ export function classifyObservation(
   return { kind: "recon", category: "unclassified", skip: true, reason: "no rule matched an info-severity observation" };
 }
 
-/** Convenience: the categories this taxonomy can emit, for UI filters and docs. */
+/**
+ * Security categories emitted DIRECTLY by detector modules, without passing
+ * through `classifyObservation`.
+ *
+ * Only the Nuclei path is routed by this file; every native detector sets its
+ * own `category` literal. Listing them here makes `SECURITY_CATEGORIES` the
+ * single source of truth for "every security category the engine can produce",
+ * which downstream consumers need in order to be complete.
+ *
+ * That completeness is not cosmetic. `compliance-mapper.ts` keys its
+ * framework mapping on this vocabulary, and a category missing from it maps to
+ * no control at all — so the control silently renders "No Data" rather than
+ * the failure it should be. A live workspace showed nine of ten OWASP controls
+ * as unassessed for exactly this reason: 27 of its 31 findings were
+ * `cookie_security`, which no mapping covered.
+ */
+const DETECTOR_CATEGORIES = [
+  "brand_threat",
+  "certificate_authority",
+  "cloud_exposure",
+  "container_exposure",
+  "dark_web",
+  "data_leak",
+  "http_methods",
+  "infrastructure_disclosure",
+  "leaked_credential",
+  "network_exposure",
+  "osint_exposure",
+  "outdated_software",
+  "threat_intelligence",
+  "waf_bypass",
+  "web_application",
+] as const;
+
+/**
+ * Every security category the engine can emit — routed or native.
+ *
+ * Used for UI filters, docs, and the compliance mapping's coverage guard.
+ */
 export const SECURITY_CATEGORIES: readonly string[] = Array.from(
-  new Set([...SECURITY_ROUTES.map((r) => r.category), "vulnerability"]),
+  new Set([...SECURITY_ROUTES.map((r) => r.category), "vulnerability", ...DETECTOR_CATEGORIES]),
 ).sort();
 
 export const KNOWN_CONTROLS: readonly string[] = POSITIVE_CONTROLS.map((c) => c.control);
+
+/**
+ * Is this row WORK, as opposed to good news or a neutral fact?
+ *
+ * `security` is the only kind that belongs in the triage inbox, the security
+ * score, the SLA clock, a trend, a compliance mapping or a client's findings
+ * register. A `control` finding records a protection that IS in place
+ * ("DNSSEC Detection", "security.txt File") and a `recon` finding is a
+ * technology observation ("Apache Detection", "robots.txt file").
+ *
+ * This exists as one function because the rule was open-coded and kept being
+ * MISSED — each time in a place nobody was looking, each time found by
+ * reconciling a number rather than by a test:
+ *
+ *   SLA summary and sweep     `control` findings carried remediation deadlines
+ *                             and would page somebody as an overdue breach
+ *   trend endpoints           `/trends` said 14 open findings where the inbox
+ *                             said 4
+ *   report content            a client's register listed 14 rows for 4 findings
+ *   DOCX register             …and opened with "DNSSEC Detection", a control
+ *                             that is WORKING, as the first row a client reads
+ *   finding groups            groups titled after a technology fact, claiming
+ *                             five instances of outstanding work
+ *   asset risk scoring        a recon row raised a host's risk score; on one
+ *                             workspace 10 of 14 scored rows were not work
+ *   attack simulation         a remediated finding still matched an attack
+ *                             chain, so fixing it never cleared the path
+ *   scan diff                 "Apache Detection" reported as a NEW FINDING,
+ *                             and counted into `riskDelta`
+ *   AI insights panel        "has 14 security findings" where the inbox
+ *                             showed 4, in those words, to the operator
+ *   threat-intel enrichment   `enrichedCount` reported to the operator counted
+ *                             rows nobody triages
+ *
+ * The sweep that found the last four enumerated every read of the findings
+ * table rather than waiting to trip over the next one. Do that after adding a
+ * consumer. One place deliberately does NOT filter by status —
+ * `differential-reporting` — because which rows are closed is the diff's own
+ * subject matter, and removing them deletes the "fixed" half of the answer.
+ *
+ * A row written before the `kind` column existed reads as `security`, so
+ * nothing stops being counted by accident — the default is the safe direction.
+ */
+export function isSecurityFinding(f: { kind?: string | null }): boolean {
+  return (f.kind ?? "security") === "security";
+}

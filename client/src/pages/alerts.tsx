@@ -142,7 +142,7 @@ export default function Alerts() {
                         </Badge>
                       </div>
                       <p className="text-xs text-muted-foreground">{alert.message}</p>
-                      <p className="text-[10px] text-muted-foreground/60">
+                      <p className="text-[10px] text-muted-foreground">
                         {alert.createdAt ? new Date(alert.createdAt).toLocaleString() : ""}
                       </p>
                     </div>

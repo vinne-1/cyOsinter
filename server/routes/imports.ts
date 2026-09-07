@@ -1,6 +1,6 @@
 import { Router } from "express";
 import multer from "multer";
-import { storage } from "../storage";
+import { storage, FULL_SET_LIMIT } from "../storage";
 import { createLogger } from "../logger";
 import { parseNmap, nmapToTextSummary } from "../parsers/nmap";
 import { consolidateScanResults } from "../ai-service";
@@ -71,7 +71,7 @@ importsRouter.post("/workspaces/:workspaceId/imports/:id/consolidate", wsWrite, 
     if (!ws) return res.status(404).json({ message: "Workspace not found" });
     const scan = await storage.getUploadedScan(id);
     if (!scan || scan.workspaceId !== workspaceId) return res.status(404).json({ message: "Import not found" });
-    const { data: existingFindings } = await storage.getFindings(workspaceId);
+    const { data: existingFindings } = await storage.getFindings(workspaceId, { limit: FULL_SET_LIMIT });
     const parsedData = scan.parsedData as { hosts?: Array<{ address: string; hostname?: string; ports: Array<{ port: number; protocol: string; state: string; service?: string; version?: string }> }>; rawSummary?: string } | null;
     const textForAI = parsedData?.hosts?.length
       ? nmapToTextSummary({ hosts: parsedData.hosts, rawSummary: parsedData.rawSummary })

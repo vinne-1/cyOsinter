@@ -5,7 +5,7 @@ import { db } from "../db";
 import { apiKeys, workspaceMembers } from "@shared/schema";
 import type { User, Session } from "@shared/schema";
 import { validateSession } from "../auth";
-import { sendError } from "./response";
+import { sendError, sendNotFound } from "./response";
 import { createLogger } from "../logger";
 
 const log = createLogger("auth-middleware");
@@ -15,6 +15,12 @@ declare global {
     interface Request {
       user?: User;
       session?: Session;
+      /**
+       * Set only when the caller authenticated with an API key. Absent for
+       * session auth, which carries the user's full authority. Read by
+       * `enforceApiKeyScope` to narrow what the key may do.
+       */
+      apiKeyScope?: string;
     }
   }
 }
@@ -25,9 +31,16 @@ function extractBearerToken(req: Request): string | null {
   return header.slice(7);
 }
 
+/**
+ * Resolves an API key to its owner AND the scope recorded on the key.
+ *
+ * The scope has to travel with the user: `requireAuth` used to return only the
+ * user, so the caller's authority was indistinguishable from a full session and
+ * `api_keys.scope` had no way to be enforced downstream.
+ */
 async function authenticateApiKey(
   key: string,
-): Promise<User | null> {
+): Promise<{ user: User; scope: string } | null> {
   const keyHash = crypto.createHash("sha256").update(key).digest("hex");
 
   const [record] = await db
@@ -55,7 +68,8 @@ async function authenticateApiKey(
     .where(eq(users.id, record.userId))
     .limit(1);
 
-  return user ?? null;
+  if (!user) return null;
+  return { user, scope: record.scope };
 }
 
 /**
@@ -75,12 +89,15 @@ export async function requireAuth(
 
     // API key auth (keys prefixed with csk_)
     if (token.startsWith("csk_")) {
-      const user = await authenticateApiKey(token);
-      if (!user) {
+      const authed = await authenticateApiKey(token);
+      if (!authed) {
         sendError(res, 401, "Invalid or expired API key");
         return;
       }
-      req.user = user;
+      req.user = authed.user;
+      // `enforceApiKeyScope` narrows the request from here; without this the
+      // key would carry the owner's full authority regardless of its scope.
+      req.apiKeyScope = authed.scope;
       return next();
     }
 
@@ -118,8 +135,13 @@ export async function optionalAuth(
     if (!token) return next();
 
     if (token.startsWith("csk_")) {
-      const user = await authenticateApiKey(token);
-      if (user) req.user = user;
+      const authed = await authenticateApiKey(token);
+      if (authed) {
+        req.user = authed.user;
+        // Carry the scope here too, so a route behind optionalAuth cannot be
+        // used to sidestep the narrowing that requireAuth's path applies.
+        req.apiKeyScope = authed.scope;
+      }
       return next();
     }
 
@@ -186,7 +208,24 @@ export function requireWorkspaceRole(...roles: string[]) {
         )
         .limit(1);
 
-      if (!member || !roles.includes(member.role)) {
+      // Non-membership and insufficient role are DIFFERENT answers, and
+      // collapsing them into one 403 leaks exactly what the 404 convention
+      // exists to hide.
+      //
+      // A 403 tells the caller "this workspace exists and you may not touch
+      // it", which is a membership oracle: iterate workspace ids, and every 403
+      // is a confirmed tenant. The bare-ID routes already return 404 for a
+      // non-member for this reason; this middleware did not, so the same
+      // resource leaked or did not depending on which route reached it.
+      //
+      // A member with the wrong role is a different case: they already know the
+      // workspace exists, so 404 would be a lie and 403 is the honest, useful
+      // answer.
+      if (!member) {
+        sendNotFound(res, "Workspace");
+        return;
+      }
+      if (!roles.includes(member.role)) {
         sendError(res, 403, "Insufficient workspace permissions");
         return;
       }

@@ -49,7 +49,12 @@ export async function buildReconModules(
         totalSubdomains: easmResults.subdomains.length,
         totalSubdomainsEnumerated: easmResults.subdomains.length,
         liveServices: liveCount,
-        newSinceLastRun: 0,
+        // Counted from the per-host flags rather than hardcoded. `null` when no
+        // host carried a verdict, i.e. there was no baseline to compare with.
+        newSinceLastRun: discoveredDomains.some((d) => d.newSinceLastRun !== undefined)
+          ? discoveredDomains.filter((d) => d.newSinceLastRun === true).length
+          : null,
+        hasChangeBaseline: discoveredDomains.some((d) => d.newSinceLastRun !== undefined),
         screenshots: [],
         discoveredDomains,
         liveSubdomains: dnsRecon?.liveSubdomains || [],
@@ -114,7 +119,16 @@ export async function buildReconModules(
         domainToIp.set(d.domain, (d as any).ip || "-");
       }
 
-      const assetInventory: Array<{ host: string; ip: string; category: string; riskScore: number; tlsGrade: string; waf: string; cdn: string }> = [];
+      // Where each host came from, and how many independent sources agreed.
+      // Carried onto the inventory so a report can say WHY it believes a host
+      // exists rather than only asserting that it does.
+      const discoverySources = easmResults.reconData.discoverySources || {};
+      const discoveryConfidence = easmResults.reconData.discoveryConfidence || {};
+
+      const assetInventory: Array<{
+        host: string; ip: string; category: string; riskScore: number; tlsGrade: string;
+        waf: string; cdn: string; discoveredBy: string[]; discoveryConfidence: string;
+      }> = [];
       for (const host of Object.keys(wafByHost)) {
         const wafInfo = wafByHost[host];
         const hostTls = perAssetTls?.[host];
@@ -141,6 +155,13 @@ export async function buildReconModules(
           tlsGrade: hostTlsGrade,
           waf: wafInfo.waf ? wafInfo.wafProvider : "",
           cdn: wafInfo.cdn !== "None" ? wafInfo.cdn : "",
+          discoveredBy: discoverySources[host] || [],
+          // A host we have actually reached over HTTPS is confirmed by
+          // observation, which outranks any number of indexes agreeing: an
+          // index can be stale, a live handshake cannot.
+          discoveryConfidence: perAssetTls?.[host] || wafByHost[host]
+            ? "confirmed"
+            : (discoveryConfidence[host] || "low"),
         });
       }
       if (assetInventory.length === 0 && ips.length > 0) {
@@ -152,6 +173,9 @@ export async function buildReconModules(
           tlsGrade,
           waf: mainWaf.detected ? mainWaf.provider : "",
           cdn: mainCdn !== "None" ? mainCdn : "",
+          // The apex is the scan target: we resolved and fetched it directly.
+          discoveredBy: ["scan-target"],
+          discoveryConfidence: "confirmed",
         });
       }
 
@@ -446,6 +470,79 @@ export async function buildReconModules(
   // Phase 2: Advanced detection recon modules
   const easm = easmResults?.reconData;
   const osint = osintResults?.reconData;
+
+  // ── Routed footprint (BGP) ────────────────────────────────────────────────
+  // Surfaced even when nothing was attributed, because the interesting content
+  // is often the REFUSALS: "we saw AS13335 and did not expand it, here is why"
+  // is what stops a reader assuming the scan simply missed the address space.
+  if (easm?.asnFootprint) {
+    const f = easm.asnFootprint;
+    modules.push({
+      moduleType: "routed_footprint",
+      data: {
+        source: "BGP routing data (RIPEstat, BGPView)",
+        unavailable: f.unavailable,
+        asns: f.asns,
+        ownedPrefixes: f.ownedPrefixes,
+        ownedAddressCount: f.ownedAddressCount,
+        ownedAsnCount: f.asns.filter((a) => a.attribution === "owned").length,
+        refusedCount: f.asns.filter((a) => a.attribution !== "owned").length,
+        notes: f.notes,
+        verifiedAt: new Date().toISOString(),
+      },
+      // An unavailable routing lookup is reported at low confidence rather than
+      // omitted, so "could not check" stays visible instead of looking like
+      // "nothing found".
+      confidence: f.unavailable ? 20 : 90,
+    });
+  }
+
+  // ── Discovery health ──────────────────────────────────────────────────────
+  // Which sources answered, which did NOT, and how well corroborated each
+  // discovered host is. Without this the subdomain count is a number with no
+  // stated reliability, and a silently rate-limited source is indistinguishable
+  // from one that genuinely had nothing.
+  const crawlCoverage = osint?.crawl ?? null;
+  const permutation = easm?.permutationDiscovery ?? null;
+  const faviconClusters = easm?.faviconClusters ?? null;
+  const probeCoverage = easm?.probeCoverage ?? null;
+  if (easm?.passiveSources || easm?.discoverySources || easm?.passiveSourcesFailed || crawlCoverage || permutation || faviconClusters || probeCoverage) {
+    const provenance = easm?.discoverySources ?? {};
+    const confidences = Object.values(easm?.discoveryConfidence ?? {});
+    const tally = { high: 0, medium: 0, low: 0 } as Record<string, number>;
+    for (const c of confidences) tally[c] = (tally[c] ?? 0) + 1;
+
+    const bestCorroborated = Object.entries(provenance)
+      .map(([host, sources]) => ({ host, sources }))
+      .sort((a, b) => b.sources.length - a.sources.length)
+      .slice(0, 15);
+
+    const sourcesAnswered = Object.keys(easm?.passiveSources ?? {}).length;
+    const sourcesFailed = easm?.passiveSourcesFailed ?? [];
+    modules.push({
+      moduleType: "discovery_health",
+      data: {
+        source: "Passive discovery aggregation",
+        bySource: easm?.passiveSources ?? {},
+        sourcesAnswered,
+        sourcesFailed,
+        confidenceTally: tally,
+        totalHosts: Object.keys(provenance).length,
+        bestCorroborated,
+        crawl: crawlCoverage,
+        // Hosts only permutation found are in no public index by definition, so
+        // this number is the clearest measure of what passive sources missed.
+        permutation,
+        // Which hosts are the same application. The singleton is the interesting one.
+        faviconClusters,
+        // Present only when discovery outran the profile's probe budget.
+        probeCoverage,
+        verifiedAt: new Date().toISOString(),
+      },
+      // Confidence in the DISCOVERY, which drops as sources go missing.
+      confidence: sourcesFailed.length === 0 ? 95 : Math.max(40, 95 - sourcesFailed.length * 10),
+    });
+  }
 
   if (easm?.subdomainTakeover && easm.subdomainTakeover.length > 0) {
     modules.push({

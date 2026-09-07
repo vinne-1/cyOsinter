@@ -52,6 +52,34 @@ export function computePriority(severity: string): number {
   return priorityMap[severity] ?? 5;
 }
 
+/**
+ * A representative CVSS base score for a severity band.
+ *
+ * Used only when a detector did not supply one. Most do; the ones that do not
+ * produced a report where the two MEDIUM findings showed "CVSS: -" while the
+ * INFO and LOW findings showed 2.0 and 3.5 — so the most serious items on the
+ * page looked LESS quantified than the least serious, which reads to a client
+ * as though nobody assessed them.
+ *
+ * Derived here at the choke point rather than in each detector, for the same
+ * reason `computePriority` and `computeDueDate` are: a detector added later
+ * inherits it without its author having to remember.
+ *
+ * These are band midpoints, not a vector computed for this deployment. A
+ * detector that can say something more precise should still set `cvssScore`
+ * itself, and that value always wins.
+ */
+export function computeCvssScore(severity: string): string {
+  const bandScore: Record<string, string> = {
+    critical: "9.0",
+    high: "7.5",
+    medium: "5.3",
+    low: "3.5",
+    info: "2.0",
+  };
+  return bandScore[severity] ?? "2.0";
+}
+
 export async function checkSLABreaches(workspaceId: string): Promise<number> {
   try {
     const openFindings = await db

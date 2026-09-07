@@ -76,6 +76,7 @@ const AuthPage = React.lazy(() => import("@/pages/auth"));
 const AuditLogPage = React.lazy(() => import("@/pages/audit-log"));
 const WebhookConfigPage = React.lazy(() => import("@/pages/webhook-config"));
 const ApiKeysPage = React.lazy(() => import("@/pages/api-keys-page"));
+const AccountPage = React.lazy(() => import("@/pages/account"));
 const FindingGroupsPage = React.lazy(() => import("@/pages/finding-groups"));
 const ScanComparisonPage = React.lazy(() => import("@/pages/scan-comparison"));
 const ThreatIntelPage = React.lazy(() => import("@/pages/threat-intel"));
@@ -108,6 +109,7 @@ function Router() {
         <Route path="/audit-log" component={AuditLogPage} />
         <Route path="/webhook-config" component={WebhookConfigPage} />
         <Route path="/api-keys" component={ApiKeysPage} />
+        <Route path="/account" component={AccountPage} />
         <Route path="/finding-groups" component={FindingGroupsPage} />
         <Route path="/scan-comparison" component={ScanComparisonPage} />
         <Route path="/threat-intel" component={ThreatIntelPage} />

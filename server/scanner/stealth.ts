@@ -135,6 +135,63 @@ export function resolveProfile(mode?: string | null): ScanProfile {
  * single scan. Requests acquire a slot (bounded by httpConcurrency), then wait
  * a jittered interval since the last dispatch before firing.
  */
+/**
+ * Deployment-wide ceiling on concurrent outbound requests.
+ *
+ * `httpConcurrency` is a PER-SCAN budget, and `runWithStealth` builds a fresh
+ * controller per scan — so the limit multiplied by however many scans ran at
+ * once. With the default `SCAN_CONCURRENCY=3` and the standard profile's 64,
+ * one deployment could hold **192** concurrent sockets: enough to exhaust file
+ * descriptors in a small container, trip upstream rate limits, and get the
+ * egress address blocked.
+ *
+ * It was worse than a resource problem for safe mode. An operator choosing
+ * "low-and-slow" is stating an intent about the rate the TARGET sees; three
+ * concurrent safe scans quietly emitted three times it. Pacing stays per-scan
+ * because it is per-target politeness and should not serialise unrelated
+ * targets — but the socket ceiling has to be global, because sockets are a
+ * property of the deployment, not of a scan.
+ *
+ * Set with `SCANNER_MAX_OUTBOUND`. Zero or negative disables the ceiling.
+ */
+const GLOBAL_MAX_OUTBOUND = (() => {
+  const raw = Number.parseInt(process.env.SCANNER_MAX_OUTBOUND ?? "", 10);
+  return Number.isFinite(raw) ? raw : 96;
+})();
+
+/** A plain counting semaphore with FIFO waiters. */
+class Semaphore {
+  private active = 0;
+  private readonly waiters: Array<() => void> = [];
+
+  constructor(private readonly max: number) {}
+
+  acquire(): Promise<void> {
+    if (this.max <= 0 || this.active < this.max) {
+      this.active++;
+      return Promise.resolve();
+    }
+    return new Promise<void>((resolve) => {
+      this.waiters.push(() => { this.active++; resolve(); });
+    });
+  }
+
+  release(): void {
+    this.active--;
+    this.waiters.shift()?.();
+  }
+
+  get inFlight(): number { return this.active; }
+  get queued(): number { return this.waiters.length; }
+}
+
+const globalOutbound = new Semaphore(GLOBAL_MAX_OUTBOUND);
+
+/** Outbound saturation, for the admin status endpoint and tests. */
+export function outboundStats(): { inFlight: number; queued: number; max: number } {
+  return { inFlight: globalOutbound.inFlight, queued: globalOutbound.queued, max: GLOBAL_MAX_OUTBOUND };
+}
+
 export class StealthController {
   private active = 0;
   private readonly waiters: Array<() => void> = [];
@@ -176,10 +233,19 @@ export class StealthController {
 
   /** Run an async task under the controller's concurrency + pacing budget. */
   async run<T>(fn: () => Promise<T>): Promise<T> {
+    // Per-scan budget first, deployment ceiling second. Taking the global slot
+    // first would let one scan sit on scarce global capacity while blocked on
+    // its own much smaller limit — the safe profile allows 2, so it would pin
+    // global slots it cannot use.
     await this.acquireSlot();
     try {
-      await this.pace();
-      return await fn();
+      await globalOutbound.acquire();
+      try {
+        await this.pace();
+        return await fn();
+      } finally {
+        globalOutbound.release();
+      }
     } finally {
       this.releaseSlot();
     }

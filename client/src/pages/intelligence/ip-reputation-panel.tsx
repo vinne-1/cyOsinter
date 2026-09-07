@@ -7,8 +7,8 @@ import { Shield } from "lucide-react";
 
 export function IPReputationPanel() {
   const { selectedWorkspaceId } = useDomain();
-  const { data: ipEnrichment = {}, isLoading } = useQuery<
-    Record<string, {
+  const { data: ipData, isLoading } = useQuery<{
+    enrichment: Record<string, {
       abuseipdb?: {
         ipAddress?: string;
         abuseConfidenceScore?: number;
@@ -37,12 +37,18 @@ export function IPReputationPanel() {
         tags?: string[];
         vulns?: string[];
       } | null;
-    }>
-  >({
+    }>;
+    requested: number;
+    enriched: number;
+    truncated: boolean;
+  }>({
     queryKey: [`/api/workspaces/${selectedWorkspaceId}/ip-enrichment`],
     enabled: !!selectedWorkspaceId,
   });
-  const entries = Object.entries(ipEnrichment);
+  // The endpoint used to return a bare map. It now reports its own coverage,
+  // because enrichment is capped per batch and ten rows presented as the whole
+  // estate is the "a capped look reads as a complete one" failure.
+  const entries = Object.entries(ipData?.enrichment ?? {});
   if (isLoading) {
     return (
       <div className="space-y-4" data-testid="panel-ip-reputation">
@@ -86,6 +92,18 @@ export function IPReputationPanel() {
       <p className="text-sm text-muted-foreground">
         Threat intelligence for public IPs discovered in this workspace. Shodan InternetDB (open ports, hostnames, CVEs) works with no API key; AbuseIPDB and VirusTotal add reputation data when keys are configured.
       </p>
+      {/* Without this the reader takes the rows below as every public IP in the
+          estate. Enrichment is capped per batch — each IP costs several
+          third-party calls — so on a large estate most of them are simply not
+          looked at, and that has to be said rather than inferred. */}
+      {ipData?.truncated && (
+        <p className="rounded-md border border-[hsl(var(--sev-medium))]/30 bg-[hsl(var(--sev-medium))]/10 p-3 text-xs text-muted-foreground">
+          Showing <span className="font-medium text-foreground">{ipData.enriched}</span> of{" "}
+          <span className="font-medium text-foreground">{ipData.requested}</span> public IPs.
+          Enrichment is rate-limited per batch, so the remainder were not checked — this is not a
+          finding that they are clean.
+        </p>
+      )}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {entries.map(([ip, data]) => {
           const abuse = data?.abuseipdb;

@@ -2,7 +2,7 @@ import { eq, desc, and, sql, lt, asc, count, inArray } from "drizzle-orm";
 import { db } from "./db";
 import { workspaces, assets, scans, findings, reports, reconModules, continuousMonitoring, uploadedScans, postureSnapshots, alerts, scheduledScans, scanProfiles, workspaceMembers } from "@shared/schema";
 import type { Workspace, InsertWorkspace, Asset, InsertAsset, Scan, InsertScan, Finding, InsertFinding, Report, InsertReport, ReconModule, InsertReconModule, ContinuousMonitoring, InsertContinuousMonitoring, UploadedScan, InsertUploadedScan, PostureSnapshot, InsertPostureSnapshot, Alert, InsertAlert, ScheduledScan, InsertScheduledScan, ScanProfile, InsertScanProfile, WorkspaceMember } from "@shared/schema";
-import { computeDueDate, computePriority } from "./finding-workflow";
+import { computeDueDate, computePriority, computeCvssScore } from "./finding-workflow";
 
 export interface PaginationOpts {
   limit?: number;
@@ -38,7 +38,10 @@ export interface IStorage {
   deleteScan(id: string): Promise<void>;
 
   getFindings(workspaceId: string, opts?: PaginationOpts): Promise<PaginatedResult<Finding>>;
-  getAllFindings(): Promise<Finding[]>;
+  // Deliberately no `getAllFindings()`. It existed with zero callers: an
+  // unbounded select across EVERY workspace, which is a cross-tenant read the
+  // moment anyone reaches for the convenient-sounding name. Findings are always
+  // fetched per workspace, and the caller decides the page size.
   getFinding(id: string): Promise<Finding | undefined>;
   findingExists(workspaceId: string, title: string, affectedAsset: string, category: string): Promise<boolean>;
   createFinding(finding: InsertFinding): Promise<Finding>;
@@ -101,6 +104,25 @@ export interface IStorage {
 }
 
 const DEFAULT_LIMIT = 500;
+
+/**
+ * The limit a caller passes when it needs the WHOLE set, not a page.
+ *
+ * `DEFAULT_LIMIT` is a sensible page for a list endpoint and a silent wrong
+ * answer for anything that filters, counts or exports afterwards — the caller
+ * gets 500 rows and no indication there were more. Measured on live data:
+ * report generation and IP enrichment both did `getAssets(workspaceId)` with no
+ * limit and then filtered for `type === "ip"`. Assets are ordered by
+ * `firstSeen DESC`, so the oldest fall off the end:
+ *
+ *   Bigbasket            228 IP assets, only 159 inside the first 500  (30% lost)
+ *   mydesk.theranym.com    2 IP assets,   0 inside the first 500      (all lost)
+ *
+ * The client's report simply omitted them. Use this whenever the result is
+ * consumed rather than displayed; it is a guard rail, not a page size, so it is
+ * deliberately far above any realistic estate.
+ */
+export const FULL_SET_LIMIT = 20_000;
 
 export class DatabaseStorage implements IStorage {
   async getWorkspaces(): Promise<Workspace[]> {
@@ -248,10 +270,6 @@ export class DatabaseStorage implements IStorage {
     return { data, total, limit, offset };
   }
 
-  async getAllFindings(): Promise<Finding[]> {
-    return db.select().from(findings).orderBy(desc(findings.discoveredAt));
-  }
-
   async getFinding(id: string): Promise<Finding | undefined> {
     const [finding] = await db.select().from(findings).where(eq(findings.id, id));
     return finding;
@@ -279,10 +297,20 @@ export class DatabaseStorage implements IStorage {
     // `discoveredAt` is omitted from InsertFinding (the column defaults to now),
     // so the clock starts at insert time.
     const discoveredAt = new Date();
+    // Only `security` findings are WORK, so only they get a remediation clock.
+    // A `control` finding records a protection that is in place and a `recon`
+    // finding is a neutral fact — giving either a deadline meant the sweep
+    // eventually marked it breached and paged somebody about good news.
+    const isWork = (finding.kind ?? "security") === "security";
     const withSla: InsertFinding = {
       ...finding,
       priority: finding.priority ?? computePriority(finding.severity),
-      dueDate: finding.dueDate ?? computeDueDate(finding.severity, discoveredAt),
+      dueDate: finding.dueDate ?? (isWork ? computeDueDate(finding.severity, discoveredAt) : null),
+      // Same reasoning as the SLA fields above. Without this, detectors that do
+      // not set a score left the column NULL and the report rendered "CVSS: -"
+      // — which appeared on the two MEDIUM findings while LOW and INFO showed
+      // numbers, making the worst items look the least assessed.
+      cvssScore: finding.cvssScore ?? computeCvssScore(finding.severity),
     };
 
     const [created] = await db.insert(findings).values(withSla).returning();

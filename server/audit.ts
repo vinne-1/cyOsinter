@@ -91,15 +91,38 @@ export function logAuditAsync(entry: AuditEntry): void {
  * `req.ip` already applies that policy; the header is read only as a fallback
  * for the un-proxied case where `req.ip` is undefined.
  */
+/**
+ * The caller's address, as far as the deployment can honestly determine it.
+ *
+ * `req.ip` is the only value worth consulting: Express already derives it from
+ * `X-Forwarded-For` when `trust proxy` is configured, and deliberately ignores
+ * that header when it is not — because an unproxied deployment lets the client
+ * set it to anything. Reading the header here as a fallback (as this used to)
+ * was both dead code, since `req.ip` is always set, and the wrong instinct: it
+ * would have re-introduced the spoofable value that Express's setting exists to
+ * gate. See TRUST_PROXY in server/index.ts.
+ */
 export function clientIp(req: Request): string | null {
-  if (req.ip) return req.ip;
-  const fwd = req.headers["x-forwarded-for"];
-  if (typeof fwd === "string") return fwd.split(",")[0]!.trim();
-  return req.socket?.remoteAddress ?? null;
+  return req.ip ?? req.socket?.remoteAddress ?? null;
 }
 
 /** Prefix segments that are routing scaffolding, not part of the resource path. */
 const PREFIX_SEGMENTS = new Set(["api", "v1", "v2"]);
+
+/**
+ * Whether a path segment is an identifier rather than a collection name.
+ *
+ * Used only to reject a bad NAME (see describeMutation), never to decide which
+ * segments are ids — that stays positional, because a short or non-hex id such
+ * as `/scans/abc` would fool any shape test.
+ */
+function looksLikeId(segment: string): boolean {
+  return (
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(segment) || // uuid
+    /^\d+$/.test(segment) ||                                                          // numeric id
+    /^[0-9a-f]{24,}$/i.test(segment)                                                  // long hex blob
+  );
+}
 
 const VERB_BY_METHOD: Record<string, string> = {
   POST: "created",
@@ -130,7 +153,19 @@ export function describeMutation(
   const collections = segments.filter((_, i) => i % 2 === 0);
   const ids = segments.filter((_, i) => i % 2 === 1);
 
-  const noun = collections[collections.length - 1];
+  // Walk back to the last segment that actually names a collection. On a
+  // well-formed REST path that is simply the last one; the loop only matters
+  // when the path does not alternate, in which case an id would otherwise
+  // become the resource type and produce an action like
+  // `c7de255b_7ff9_4e2e_aa41_0dd77591f071_deleted` — unbounded garbage that
+  // lands in the audit viewer's action facet list, one entry per record ever
+  // touched.
+  //
+  // This does NOT contradict the position rule above. Position still decides
+  // which segments are ids; this is only a last-step sanity check on the name
+  // we are about to publish, so a route that does not follow the convention
+  // degrades to the generic action instead of inventing a new one.
+  const noun = [...collections].reverse().find((c) => !looksLikeId(c));
   if (!noun) {
     return { action: "resource_changed", resourceType: null, resourceId: ids[ids.length - 1] ?? null };
   }
@@ -165,18 +200,43 @@ export function auditMutations(req: Request, res: Response, next: NextFunction):
 
   const ip = clientIp(req);
 
+  /*
+   * Resolve the path NOW, not inside the `finish` handler.
+   *
+   * `req.path` derives from `req.url`, which Express REWRITES as it descends
+   * into a mounted sub-router — and `finish` fires after the handler has already
+   * sent the response, while that rewrite is still in effect. Reading it late
+   * therefore recorded the path relative to whichever router answered:
+   *
+   *   POST   /api/workspaces      →  "/"                 → `resource_changed`, no resourceType
+   *   DELETE /api/workspaces/:id  →  "/<uuid>"           → `<uuid>_deleted`, a junk action name
+   *   POST   /api/workspaces/:id/assets → "/<uuid>/assets" → the uuid read as the collection
+   *
+   * That was 501 of ~1200 audit rows — every workspace create, and the answer to
+   * "who deleted this workspace" was an unnamed row with a NULL resource type.
+   * Only `app.use("/api", ...)` routers escaped it, because their prefix matches
+   * the one this middleware is mounted at and nothing further is stripped.
+   *
+   * `req.originalUrl` is the one value Express never rewrites, so it is the only
+   * safe source here. Capturing synchronously also means a later rewrite by any
+   * middleware cannot affect what we record.
+   */
+  // `|| req.path` only for exotic callers that construct a bare request
+  // object; Express itself always sets originalUrl.
+  const auditPath = (req.originalUrl || req.path || "").split("?")[0] || req.path;
+  const described = describeMutation(method, auditPath);
+
   res.on("finish", () => {
     // Only successful mutations are auditable events; failures are covered by
     // application logs and would otherwise let anyone flood the trail with 4xx.
     if (res.statusCode < 200 || res.statusCode >= 300) return;
 
-    const { action, resourceType, resourceId } = describeMutation(method, req.path);
     logAuditAsync({
       userId: req.user?.id ?? null,
-      action,
-      resourceType,
-      resourceId,
-      metadata: { method, path: req.path, status: res.statusCode },
+      action: described.action,
+      resourceType: described.resourceType,
+      resourceId: described.resourceId,
+      metadata: { method, path: auditPath, status: res.statusCode },
       ipAddress: ip,
     });
   });

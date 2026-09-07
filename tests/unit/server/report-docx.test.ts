@@ -144,3 +144,60 @@ describe("generateReportDocx", () => {
     expect(text).not.toContain("People / Employee Exposure");
   });
 });
+
+/**
+ * The verification stamp is the strongest claim the report makes: a live probe
+ * reproduced this finding, and here is when. Buried among the other evidence
+ * snippets it read as one more anonymous line, so it now gets its own heading —
+ * and must not be duplicated back into the evidence blob.
+ */
+describe("verification provenance", () => {
+  it("prints the re-verification under its own heading", async () => {
+    const buf = await generateReportDocx({
+      ...baseInput,
+      findings: [{
+        title: "Missing HSTS",
+        severity: "medium",
+        category: "transport_security",
+        affectedAsset: "example.com",
+        evidenceText: "Strict-Transport-Security: absent",
+        verification: {
+          status: "confirmed",
+          detail: "strict-transport-security still missing",
+          checkedAt: "2026-02-03T10:11:12.000Z",
+        },
+      }],
+    });
+    const text = await docText(buf);
+    expect(text).toContain("Verification");
+    expect(text).toContain("Reproduced by a live probe at scan time");
+    expect(text).toContain("2026-02-03 10:11:12 UTC");
+    expect(text).toContain("strict-transport-security still missing");
+  });
+
+  it("describes an unverifiable finding honestly rather than as confirmed", async () => {
+    const buf = await generateReportDocx({
+      ...baseInput,
+      findings: [{
+        title: "Nuclei template match",
+        severity: "low",
+        category: "vulnerability",
+        affectedAsset: "example.com",
+        verification: { status: "unverifiable", detail: "kept: not actively reproducible" },
+      }],
+    });
+    const text = await docText(buf);
+    expect(text).toContain("Not reproducible by an active probe");
+    expect(text).not.toContain("Reproduced by a live probe");
+    expect(text).toContain("time not recorded");
+  });
+
+  it("omits the section entirely for a finding the gate never stamped", async () => {
+    const buf = await generateReportDocx({
+      ...baseInput,
+      findings: [{ title: "Imported finding", severity: "low", category: "vulnerability", affectedAsset: "example.com" }],
+    });
+    const text = await docText(buf);
+    expect(text).not.toContain("Reproduced by a live probe");
+  });
+});

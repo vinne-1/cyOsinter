@@ -1,10 +1,11 @@
 name: CI
 
 # Runs on every push to main and every PR:
-#   verify   - TypeScript + 679 unit tests
+#   verify   - TypeScript + the unit suite
 #   e2e      - Playwright against a real Postgres
 #   security - npm audit (high/critical block) + dependency review
 #   codeql   - static analysis, security-extended queries
+#   image    - the container actually builds, and still runs unprivileged
 
 on:
   push:
@@ -184,3 +185,46 @@ jobs:
 
       - name: Analyse
         uses: github/codeql-action/analyze@v3
+
+  # ── The deliverable ─────────────────────────────────────────────────────────
+  # For a self-hosted product the container IS the artefact, and nothing here
+  # built it: a Dockerfile change could break the only thing customers actually
+  # run and every other job would stay green.
+  #
+  # The non-root assertion is the part worth keeping. The image ran as root
+  # while executing external scanners and driving a browser against
+  # attacker-controlled pages — root in the container being the first half of
+  # most escapes — and a `USER` line is exactly the kind of thing a later edit
+  # drops without noticing.
+  image:
+    name: Container Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: docker build -t cyshield:ci .
+
+      - name: Refuse an image that runs as root
+        run: |
+          uid="$(docker run --rm cyshield:ci id -u)"
+          echo "container uid: $uid"
+          if [ "$uid" = "0" ]; then
+            echo "::error::Image runs as root. Restore the USER directive in the Dockerfile."
+            exit 1
+          fi
+
+      # Nuclei stores templates under the RUNNING user's home, so updating them
+      # as root leaves the runtime user with a scanner that silently finds
+      # nothing. Assert the templates are where the runtime user will look.
+      - name: Nuclei is usable by the runtime user
+        run: |
+          docker run --rm cyshield:ci sh -c 'nuclei -version' 2>&1 | head -3
+          docker run --rm cyshield:ci sh -c 'ls -d "$HOME/nuclei-templates" >/dev/null'
+
+      - name: Image declares a healthcheck
+        run: |
+          hc="$(docker inspect --format '{{if .Config.Healthcheck}}yes{{else}}no{{end}}' cyshield:ci)"
+          echo "healthcheck declared: $hc"
+          [ "$hc" = "yes" ] || { echo "::error::Image has no HEALTHCHECK"; exit 1; }

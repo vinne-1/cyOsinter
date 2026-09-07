@@ -16,6 +16,7 @@ import { eq, and, or, isNull, ne, lt, sql } from "drizzle-orm";
 import { createLogger } from "./logger";
 import { computeDueDate, computePriority } from "./finding-workflow";
 import { logAudit } from "./audit";
+import { emitAlert } from "./notifications";
 
 const log = createLogger("sla-monitor");
 
@@ -79,6 +80,21 @@ async function backfillDueDates(): Promise<number> {
  * used: that version issued one SELECT plus one UPDATE per finding, which does
  * not scale past a few thousand rows.
  */
+/**
+ * The SLA clock applies to WORK, and only `security` findings are work.
+ *
+ * A `control` finding records a protection that IS in place and a `recon`
+ * finding is a neutral fact; neither has anything to remediate. Both were
+ * getting a `dueDate` at creation and were swept like everything else, so once
+ * the deadline passed the sweep marked them breached and emitted an
+ * `sla_breached` alert — and a webhook — for good news. Measured on live data:
+ * 15 non-security rows carried deadlines, 2 of them `control`.
+ *
+ * `kind` defaults to "security" in the schema, so rows written before the
+ * column existed are still swept; this narrows nothing that should be counted.
+ */
+const SECURITY_ONLY = or(isNull(findings.kind), eq(findings.kind, "security"));
+
 export async function runSlaSweep(): Promise<SlaSweepResult> {
   const backfilledDueDates = await backfillDueDates();
 
@@ -91,6 +107,7 @@ export async function runSlaSweep(): Promise<SlaSweepResult> {
       and(
         eq(findings.slaBreached, false),
         lt(findings.dueDate, new Date()),
+        SECURITY_ONLY,
         // Only work that is still outstanding can breach.
         ne(findings.workflowState, TERMINAL_STATES[0]!),
         ne(findings.workflowState, TERMINAL_STATES[1]!),
@@ -117,6 +134,54 @@ export async function runSlaSweep(): Promise<SlaSweepResult> {
         }, {}),
       },
     });
+
+    /*
+     * Alert per workspace, so the breach reaches the people responsible for it.
+     *
+     * This sweep marked findings overdue and wrote an audit row, and that was
+     * all — nothing was ever emitted, so `sla_breach` (offered as a subscribable
+     * event on the webhook config page) could not occur. A deadline that passes
+     * silently is not a deadline.
+     *
+     * ONE alert per workspace per sweep, not one per finding: a sweep can mark
+     * dozens at once, and paging somebody once per row is how an alert channel
+     * gets muted. Grouping is the same discipline `checkCookieSecurity` follows.
+     */
+    const byWorkspace = new Map<string, Array<{ severity: string }>>();
+    for (const f of breached) {
+      const list = byWorkspace.get(f.workspaceId) ?? [];
+      list.push({ severity: f.severity });
+      byWorkspace.set(f.workspaceId, list);
+    }
+
+    // `Array.from` because the compile target is es2018, where iterating a Map
+    // directly is not permitted without downlevelIteration.
+    for (const [workspaceId, items] of Array.from(byWorkspace.entries())) {
+      const bySeverity = items.reduce<Record<string, number>>((acc, f) => {
+        acc[f.severity] = (acc[f.severity] ?? 0) + 1;
+        return acc;
+      }, {});
+      // The alert's own severity tracks the worst finding that breached, so a
+      // batch of lows does not page like a missed critical.
+      const worst = ["critical", "high", "medium", "low"].find((sev) => bySeverity[sev] > 0) ?? "info";
+
+      try {
+        await emitAlert({
+          workspaceId,
+          type: "sla_breached",
+          title: `${items.length} finding${items.length === 1 ? "" : "s"} passed the remediation deadline`,
+          message:
+            `${items.length} open finding${items.length === 1 ? " has" : "s have"} passed the remediation deadline set by the SLA policy` +
+            ` (${Object.entries(bySeverity).map(([sev, n]) => `${n} ${sev}`).join(", ")}).`,
+          severity: worst,
+          metadata: { count: items.length, bySeverity },
+        });
+      } catch (err) {
+        // A failed alert must not stop the sweep marking the remaining
+        // workspaces' findings — the marking is the part that must not be lost.
+        log.error({ err, workspaceId }, "Failed to emit SLA breach alert");
+      }
+    }
   }
 
   // Cases carry their own deadline — the unit of WORK can blow its SLA even
@@ -165,6 +230,10 @@ export async function getSlaSummary(workspaceId: string): Promise<{
     .where(
       and(
         eq(findings.workspaceId, workspaceId),
+        // Same rule as the sweep: the SLA panel counts outstanding WORK, and a
+        // control being in place is not work. Counting it made the dashboard's
+        // "open" number disagree with the findings inbox for no visible reason.
+        SECURITY_ONLY,
         ne(findings.status, "resolved"),
         ne(findings.status, "false_positive"),
         ne(findings.status, "accepted_risk"),

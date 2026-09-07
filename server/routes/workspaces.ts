@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { parsePagination } from "./response";
 import { z } from "zod";
 import { storage } from "../storage";
 import { createLogger } from "../logger";
@@ -71,8 +72,14 @@ workspacesRouter.patch("/:id", async (req, res) => {
     const ws = await storage.getWorkspace(req.params.id);
     if (!ws) return res.status(404).json({ message: "Workspace not found" });
     // Only owner/admin can update workspace settings
+    // 404 for a non-member, 403 only for a member with the wrong role — the same
+    // split `requireWorkspaceRole` makes. Collapsing both into 403 turns this
+    // route into a membership oracle: iterate workspace ids and every 403 is a
+    // confirmed tenant. A member with an insufficient role already knows the
+    // workspace exists, so 403 is the honest answer there.
     const membership = await storage.getWorkspaceMember(ws.id, req.user!.id);
-    if (!membership || !["owner", "admin"].includes(membership.role)) {
+    if (!membership) return res.status(404).json({ message: "Workspace not found" });
+    if (!["owner", "admin"].includes(membership.role)) {
       return res.status(403).json({ message: "Forbidden" });
     }
     const parsed = updateWorkspaceSchema.parse(req.body);
@@ -93,8 +100,10 @@ workspacesRouter.delete("/:id", async (req, res) => {
     const ws = await storage.getWorkspace(req.params.id);
     if (!ws) return res.status(404).json({ message: "Workspace not found" });
     // Only owner can delete a workspace
+    // Same split as PATCH above: non-member ⇒ 404, wrong role ⇒ 403.
     const membership = await storage.getWorkspaceMember(ws.id, req.user!.id);
-    if (!membership || membership.role !== "owner") {
+    if (!membership) return res.status(404).json({ message: "Workspace not found" });
+    if (membership.role !== "owner") {
       return res.status(403).json({ message: "Forbidden" });
     }
     await storage.deleteWorkspace(req.params.id);
@@ -110,8 +119,7 @@ const wsWrite = requireWorkspaceRole("owner", "admin", "analyst");
 
 workspacesRouter.get("/:workspaceId/assets", wsAuth, async (req, res) => {
   try {
-    const limit = Math.min(parseInt(String(req.query.limit ?? "500"), 10) || 500, 5000);
-    const offset = Math.max(parseInt(String(req.query.offset ?? "0"), 10) || 0, 0);
+    const { limit, offset } = parsePagination(req.query, { defaultLimit: 500, maxLimit: 5000 });
     const result = await storage.getAssets(req.params.workspaceId as string, { limit, offset });
     res.json(result);
   } catch (err) {

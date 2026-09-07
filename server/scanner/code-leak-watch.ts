@@ -119,10 +119,20 @@ export function findSecretsInText(
   const seen = new Set<string>();
 
   for (const p of SECRET_PATTERNS) {
+    // A pattern whose shape is not distinctive on its own (a UUID, a bare hex
+    // run) only counts when the surrounding text names the service. Skipping
+    // this check here would mean a repository file with any UUID in it reported
+    // as a leaked Heroku key — the detector set carries the guard, so every
+    // consumer of it must honour the guard.
+    if (p.requiresContext && !p.requiresContext.test(text)) continue;
+
     // Patterns are module-level and carry /g, so lastIndex must be reset or a
     // previous file's scan position leaks into this one.
     p.pattern.lastIndex = 0;
-    const match = p.pattern.exec(text);
+    let match = p.pattern.exec(text);
+    while (match && p.validate && !p.validate(match[1] ?? match[0])) {
+      match = p.pattern.exec(text);
+    }
     if (match && !seen.has(p.name)) {
       seen.add(p.name);
       found.push({

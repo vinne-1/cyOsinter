@@ -14,6 +14,7 @@ import { analyticsRouter } from "./analytics";
 import { scanProfilesRouter } from "./scan-profiles";
 import { integrationsTicketsRouter } from "./integrations-tickets";
 import { authRouter } from "./auth";
+import { ssoRouter } from "./sso";
 import { healthRouter } from "./health";
 import { auditRouter } from "./audit";
 import { webhooksRouter } from "./webhooks";
@@ -25,8 +26,10 @@ import { playbooksRouter } from "./playbooks";
 import { assetRiskRouter } from "./asset-risk";
 import { threatIntelRouter } from "./threat-intel";
 import { brandThreatsRouter } from "./brand-threats";
+import { darkWebRouter } from "./dark-web";
 import { casesRouter } from "./cases";
 import { requireAuth } from "./auth-middleware";
+import { enforceApiKeyScope } from "./api-key-scope";
 import { auditMutations } from "../audit";
 import { errorHandler } from "./response";
 
@@ -47,10 +50,18 @@ export async function registerRoutes(
   // Auth router is mounted first so /auth/login, /auth/register, /auth/refresh
   // respond before the global requireAuth middleware runs.
   app.use("/api", authRouter);
+  app.use("/api", ssoRouter);
 
   // ── Global authentication gate ──
   // Every /api route registered AFTER this line requires a valid session or API key.
   app.use("/api", requireAuth);
+
+  // ── API key scope ──
+  // Narrows what a `csk_` key may do to the scope recorded on it. Mounted here,
+  // over the whole /api surface, for the same reason as the audit middleware
+  // below: a route added later is covered without its author remembering.
+  // Session-authenticated requests pass straight through.
+  app.use("/api", enforceApiKeyScope);
 
   // ── Audit trail ──
   // Mounted after the auth gate (so req.user is set) and before the resource
@@ -80,6 +91,7 @@ export async function registerRoutes(
   app.use("/api", assetRiskRouter);
   app.use("/api", threatIntelRouter);
   app.use("/api", brandThreatsRouter);
+  app.use("/api", darkWebRouter);
   app.use("/api", casesRouter);
 
   // Standalone asset routes that don't fit under /api/workspaces

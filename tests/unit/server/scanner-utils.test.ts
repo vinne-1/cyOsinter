@@ -84,11 +84,12 @@ describe("classifyPathResponse", () => {
   });
 
   it("classifies 403 as forbidden", () => {
-    expect(classifyPathResponse(403)).toEqual({ responseType: "forbidden", severity: "medium" });
+    // A refusal is the access control working, not a medium-severity exposure.
+    expect(classifyPathResponse(403)).toEqual({ responseType: "forbidden", severity: "info" });
   });
 
   it("classifies 401 as unauthorized", () => {
-    expect(classifyPathResponse(401)).toEqual({ responseType: "unauthorized", severity: "low" });
+    expect(classifyPathResponse(401)).toEqual({ responseType: "unauthorized", severity: "info" });
   });
 
   it("classifies 200 as success", () => {

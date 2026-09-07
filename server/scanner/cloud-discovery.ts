@@ -2,6 +2,8 @@ import dns from "dns/promises";
 import { createLogger } from "../logger.js";
 import { runWithConcurrency } from "./utils.js";
 import { stealthFetch } from "./stealth.js";
+import { httpGet } from "./http.js";
+import { looksLikeBucketListing } from "./body-signatures.js";
 
 const log = createLogger("cloud-discovery");
 
@@ -51,6 +53,10 @@ export interface CloudDiscoveryResults {
     url: string;
     accessible: boolean;
     status: number;
+    /** The bucket name is the domain itself, not a guessed variant. */
+    exactName: boolean;
+    /** Anonymous requests get a full object listing back. */
+    listable: boolean;
   }>;
   cloudServices: Array<{
     provider: string;
@@ -64,7 +70,10 @@ export interface CloudDiscoveryResults {
     category: string;
     affectedAsset: string;
     remediation: string;
+    evidence?: Array<Record<string, unknown>>;
   }>;
+  /** Buckets that answered 200 without proving they are listable. */
+  unconfirmed: Array<{ url: string; reason: string }>;
   duration: number;
 }
 
@@ -72,6 +81,17 @@ interface BucketCheckTarget {
   provider: string;
   name: string;
   url: string;
+  /**
+   * True when the bucket name IS the domain (or its dashed form), rather than a
+   * guessed variant like `<domain>-media`.
+   *
+   * The distinction decides what we are allowed to claim. S3 answers 403 for any
+   * bucket that exists ANYWHERE in the world, so `acme-com-dev` almost certainly
+   * "exists" — in a stranger's account. Reporting that as the customer's asset is
+   * an attribution error, and it is the kind that erodes trust in every other
+   * finding in the report.
+   */
+  exactName: boolean;
 }
 
 /**
@@ -93,29 +113,30 @@ export function buildBucketTargets(domain: string): BucketCheckTarget[] {
   for (const suffix of suffixes) {
     const name = baseName + suffix;
     const dotVariant = dotName + suffix;
+    const exactName = suffix === "";
 
     // AWS S3
-    targets.push({ provider: "AWS", name, url: `https://${name}.s3.amazonaws.com` });
+    targets.push({ provider: "AWS", name, url: `https://${name}.s3.amazonaws.com`, exactName });
     if (name !== dotVariant) {
-      targets.push({ provider: "AWS", name: dotVariant, url: `https://${dotVariant}.s3.amazonaws.com` });
+      targets.push({ provider: "AWS", name: dotVariant, url: `https://${dotVariant}.s3.amazonaws.com`, exactName });
     }
 
     // Azure Blob
-    targets.push({ provider: "Azure", name, url: `https://${name}.blob.core.windows.net` });
+    targets.push({ provider: "Azure", name, url: `https://${name}.blob.core.windows.net`, exactName });
 
     // GCP Storage
-    targets.push({ provider: "GCP", name, url: `https://storage.googleapis.com/${name}` });
+    targets.push({ provider: "GCP", name, url: `https://storage.googleapis.com/${name}`, exactName });
     if (name !== dotVariant) {
-      targets.push({ provider: "GCP", name: dotVariant, url: `https://storage.googleapis.com/${dotVariant}` });
+      targets.push({ provider: "GCP", name: dotVariant, url: `https://storage.googleapis.com/${dotVariant}`, exactName });
     }
 
     // DigitalOcean Spaces (S3-compatible, region-scoped). A few common regions.
     for (const region of ["nyc3", "sfo3", "ams3"]) {
-      targets.push({ provider: "DigitalOcean", name, url: `https://${name}.${region}.digitaloceanspaces.com` });
+      targets.push({ provider: "DigitalOcean", name, url: `https://${name}.${region}.digitaloceanspaces.com`, exactName });
     }
 
     // Firebase Realtime Database — publicly-readable DB check (/.json returns data).
-    targets.push({ provider: "Firebase", name, url: `https://${name}.firebaseio.com/.json` });
+    targets.push({ provider: "Firebase", name, url: `https://${name}.firebaseio.com/.json`, exactName });
   }
 
   // ── S3-compatible providers beyond the big three ──────────────────────────
@@ -127,28 +148,29 @@ export function buildBucketTargets(domain: string): BucketCheckTarget[] {
   // things up carry nearly all the value for a fraction of the traffic.
   for (const suffix of SECONDARY_SUFFIXES) {
     const name = baseName + suffix;
+    const exactName = suffix === "";
 
     // Wasabi — S3-compatible, region in the hostname.
     for (const region of ["s3", "s3.eu-central-1", "s3.us-west-1"]) {
-      targets.push({ provider: "Wasabi", name, url: `https://${name}.${region}.wasabisys.com` });
+      targets.push({ provider: "Wasabi", name, url: `https://${name}.${region}.wasabisys.com`, exactName });
     }
 
     // Alibaba Cloud OSS.
     for (const region of ["oss-cn-hangzhou", "oss-us-west-1", "oss-ap-southeast-1"]) {
-      targets.push({ provider: "Alibaba", name, url: `https://${name}.${region}.aliyuncs.com` });
+      targets.push({ provider: "Alibaba", name, url: `https://${name}.${region}.aliyuncs.com`, exactName });
     }
 
     // Linode / Akamai Object Storage.
     for (const region of ["us-east-1", "eu-central-1"]) {
-      targets.push({ provider: "Linode", name, url: `https://${name}.${region}.linodeobjects.com` });
+      targets.push({ provider: "Linode", name, url: `https://${name}.${region}.linodeobjects.com`, exactName });
     }
 
     // Scaleway Object Storage.
-    targets.push({ provider: "Scaleway", name, url: `https://${name}.s3.fr-par.scw.cloud` });
+    targets.push({ provider: "Scaleway", name, url: `https://${name}.s3.fr-par.scw.cloud`, exactName });
 
     // Backblaze B2 — the /file/<bucket>/ form is the one reachable without an
     // account-scoped hostname.
-    targets.push({ provider: "Backblaze", name, url: `https://f000.backblazeb2.com/file/${name}/` });
+    targets.push({ provider: "Backblaze", name, url: `https://f000.backblazeb2.com/file/${name}/`, exactName });
   }
 
   // Cloudflare R2 is deliberately absent. A public R2 bucket is served from
@@ -240,6 +262,7 @@ export async function runCloudDiscovery(
   const buckets: CloudDiscoveryResults["buckets"] = [];
   const allCloudServices: CloudDiscoveryResults["cloudServices"] = [];
   const findings: CloudDiscoveryResults["findings"] = [];
+  const unconfirmed: CloudDiscoveryResults["unconfirmed"] = [];
 
   // Check bucket targets concurrently
   const bucketResults = await runWithConcurrency(
@@ -279,25 +302,57 @@ export async function runCloudDiscovery(
         url: result.target.url,
         accessible: result.status === 200,
         status: result.status,
+        exactName: result.target.exactName,
+        listable: false,
       });
 
       if (result.status === 200) {
+        // A 200 from a bucket hostname is not a public bucket. Providers answer
+        // 200 with their own landing page, an error document, or a single
+        // public object. Fetch the body and require the provider's own listing
+        // root before claiming the contents are enumerable.
+        const listing = await httpGet(result.target.url);
+        const listable = !!listing && looksLikeBucketListing(listing.body);
+        buckets[buckets.length - 1].listable = listable;
+
+        if (!listable) {
+          unconfirmed.push({ url: result.target.url, reason: "HTTP 200 but the response is not an object listing" });
+          continue;
+        }
+
+        // Ownership: an exact-name bucket is the customer's by any reasonable
+        // reading. A guessed variant that happens to exist may belong to anyone
+        // — say so rather than asserting it is theirs.
         findings.push({
-          title: `Publicly Accessible ${result.target.provider} Storage Bucket`,
-          description: `The ${result.target.provider} storage bucket "${result.target.name}" at ${result.target.url} returned HTTP 200, indicating it is publicly accessible. This may expose sensitive data.`,
-          severity: "high",
+          title: `Publicly Listable ${result.target.provider} Storage Bucket${result.target.exactName ? "" : " (ownership unconfirmed)"}`,
+          description: result.target.exactName
+            ? `The ${result.target.provider} storage bucket "${result.target.name}" at ${result.target.url} returns a full object listing to anonymous requests. Anyone can enumerate and download its contents.`
+            : `A ${result.target.provider} storage bucket named "${result.target.name}" — a guessed variant of your domain — returns a full object listing to anonymous requests. Bucket namespaces are global, so this bucket may belong to an unrelated party; confirm ownership before acting, and treat the listing itself as the evidence.`,
+          severity: result.target.exactName ? "high" : "medium",
           category: "cloud_exposure",
           affectedAsset: result.target.url,
-          remediation: `Review and restrict the bucket access policy for "${result.target.name}". Remove public access and implement proper IAM policies.`,
+          remediation: `Confirm whether "${result.target.name}" is yours. If it is, remove public read/list permissions and enable the provider's public-access block.`,
+          evidence: [{
+            type: "http_response",
+            description: "Anonymous object listing returned by the bucket",
+            url: result.target.url,
+            snippet: (listing?.body ?? "").slice(0, 500),
+            source: "cloud-discovery",
+            verifiedAt: new Date().toISOString(),
+          }],
         });
-      } else if (result.status === 403) {
+      } else if (result.status === 403 && result.target.exactName) {
+        // Only for an exact-name match. Every provider answers 403 for a bucket
+        // that exists anywhere in the world, so a 403 on a guessed variant like
+        // `<domain>-dev` says nothing about this customer at all — reporting one
+        // finding per guessed suffix was manufacturing noise from the wordlist.
         findings.push({
           title: `${result.target.provider} Storage Bucket Exists (Access Denied)`,
-          description: `The ${result.target.provider} storage bucket "${result.target.name}" at ${result.target.url} exists but returned HTTP 403. While not publicly readable, the bucket's existence is confirmed and may be targeted for misconfiguration.`,
-          severity: "low",
+          description: `A ${result.target.provider} bucket named "${result.target.name}" — exactly your domain name — exists but denies anonymous access. Its contents are not exposed; the name is recorded because it is the obvious first guess for anyone probing your storage.`,
+          severity: "info",
           category: "cloud_exposure",
           affectedAsset: result.target.url,
-          remediation: `Ensure bucket "${result.target.name}" has proper access controls. Consider using a less predictable bucket name.`,
+          remediation: `Confirm the bucket is yours and that its access policy is intentional. Bucket names are guessable by design, so access control is the only control that matters here.`,
         });
       }
     }
@@ -337,9 +392,9 @@ export async function runCloudDiscovery(
   const duration = Date.now() - startTime;
 
   log.info(
-    { domain, buckets: buckets.length, cloudServices: allCloudServices.length, findings: findings.length, duration },
+    { domain, buckets: buckets.length, cloudServices: allCloudServices.length, findings: findings.length, unconfirmed: unconfirmed.length, duration },
     "Cloud discovery complete",
   );
 
-  return { buckets, cloudServices: allCloudServices, findings, duration };
+  return { buckets, cloudServices: allCloudServices, findings, unconfirmed, duration };
 }

@@ -1,16 +1,14 @@
 import { Router } from "express";
 import { z } from "zod";
-import { eq, lt, sql, count } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db } from "../db";
-import {
-  retentionPolicies,
-  scans,
-  findings,
-  postureSnapshots,
-} from "@shared/schema";
+import { retentionPolicies } from "@shared/schema";
 import { requireAuth, requireRole, requireWorkspaceRole } from "./auth-middleware";
 import { sendError, sendValidationError, sendNotFound } from "./response";
 import { createLogger } from "../logger";
+// Lives in server/retention-sweep.ts so it can also run unattended on an
+// interval; this route is now just a manual trigger for the same code.
+import { runRetentionCleanup } from "../retention-sweep";
 
 const log = createLogger("retention");
 
@@ -113,78 +111,3 @@ retentionRouter.post("/retention/cleanup", requireAuth, requireRole("superadmin"
     sendError(res, 500, "Cleanup failed");
   }
 });
-
-// ── Retention Cleanup ──
-
-function daysAgo(days: number): Date {
-  return new Date(Date.now() - days * 24 * 60 * 60 * 1000);
-}
-
-/**
- * For each workspace with a retention policy, deletes records older than the
- * configured retention days. Returns counts of deleted records by type.
- */
-export async function runRetentionCleanup(): Promise<{ deleted: Record<string, number> }> {
-  const deleted: Record<string, number> = {
-    scans: 0,
-    findings: 0,
-    snapshots: 0,
-  };
-
-  try {
-    const policies = await db.select().from(retentionPolicies);
-
-    for (const policy of policies) {
-      const workspaceId = policy.workspaceId;
-
-      // Delete old scans
-      if (policy.scanRetentionDays) {
-        const cutoff = daysAgo(policy.scanRetentionDays);
-        const result = await db
-          .delete(scans)
-          .where(
-            sql`${scans.workspaceId} = ${workspaceId} AND ${scans.completedAt} IS NOT NULL AND ${scans.completedAt} < ${cutoff}`,
-          )
-          .returning();
-        deleted.scans += result.length;
-      }
-
-      // Delete old findings
-      if (policy.findingRetentionDays) {
-        const cutoff = daysAgo(policy.findingRetentionDays);
-        const result = await db
-          .delete(findings)
-          .where(
-            sql`${findings.workspaceId} = ${workspaceId} AND ${findings.discoveredAt} < ${cutoff}`,
-          )
-          .returning();
-        deleted.findings += result.length;
-      }
-
-      // Delete old snapshots
-      if (policy.snapshotRetentionDays) {
-        const cutoff = daysAgo(policy.snapshotRetentionDays);
-        const result = await db
-          .delete(postureSnapshots)
-          .where(
-            sql`${postureSnapshots.workspaceId} = ${workspaceId} AND ${postureSnapshots.snapshotAt} < ${cutoff}`,
-          )
-          .returning();
-        deleted.snapshots += result.length;
-      }
-
-      // Update lastCleanupAt
-      await db
-        .update(retentionPolicies)
-        .set({ lastCleanupAt: new Date() })
-        .where(eq(retentionPolicies.id, policy.id));
-    }
-
-    log.info({ deleted }, "Retention cleanup completed");
-  } catch (err) {
-    log.error({ err }, "Retention cleanup failed");
-    throw err;
-  }
-
-  return { deleted };
-}

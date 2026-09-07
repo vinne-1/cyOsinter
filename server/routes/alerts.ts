@@ -1,4 +1,5 @@
 import { Router } from "express";
+import { parsePagination } from "./response";
 import { storage } from "../storage";
 import { createLogger } from "../logger";
 import { requireWorkspaceRole } from "./auth-middleware";
@@ -13,7 +14,7 @@ export const alertsRouter = Router();
 // GET /api/workspaces/:workspaceId/alerts
 alertsRouter.get("/workspaces/:workspaceId/alerts", wsAuth, async (req, res) => {
   try {
-    const limit = Math.min(parseInt(String(req.query.limit) || "50", 10) || 50, 200);
+    const { limit } = parsePagination(req.query, { defaultLimit: 50, maxLimit: 200 });
     const alertsList = await storage.getAlerts(req.params.workspaceId as string, limit);
     res.json(alertsList);
   } catch (err) {

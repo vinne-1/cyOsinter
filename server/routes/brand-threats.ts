@@ -7,6 +7,8 @@ import { sendError, sendValidationError } from "./response";
 import { scanForLookalikes } from "../scanner/typosquat";
 import { checkRansomwareExposure } from "../scanner/ransomware-watch";
 import { watchForCodeLeaks, isCodeLeakConfigured } from "../scanner/code-leak-watch";
+import { findBrandedApps } from "../scanner/mobile-app-monitor";
+import { checkBreachExposure } from "../scanner/breach-exposure";
 
 const log = createLogger("brand-threats");
 
@@ -15,6 +17,8 @@ export const brandThreatsRouter = Router();
 const MODULE_TYPE = "brand_threats";
 const RANSOMWARE_MODULE_TYPE = "ransomware_exposure";
 const CODE_LEAK_MODULE_TYPE = "code_leak";
+const MOBILE_APP_MODULE_TYPE = "mobile_apps";
+const BREACH_MODULE_TYPE = "breach_exposure";
 
 const wsRead = requireWorkspaceRole("owner", "admin", "analyst", "viewer");
 const wsWrite = requireWorkspaceRole("owner", "admin", "analyst");
@@ -261,5 +265,139 @@ brandThreatsRouter.post("/workspaces/:workspaceId/code-leaks", wsWrite, async (r
   } catch (err) {
     log.error({ err }, "Code leak sweep failed");
     sendError(res, 500, "Code leak sweep failed");
+  }
+});
+
+/** Most recent mobile-app store sweep for the workspace, or null. */
+brandThreatsRouter.get("/workspaces/:workspaceId/mobile-apps", wsRead, async (req, res) => {
+  try {
+    const modules = await storage.getReconModulesByType(
+      req.params.workspaceId as string,
+      MOBILE_APP_MODULE_TYPE,
+    );
+    const latest = [...modules].sort(
+      (a, b) => new Date(b.generatedAt ?? 0).getTime() - new Date(a.generatedAt ?? 0).getTime(),
+    )[0];
+    res.json(latest ?? null);
+  } catch (err) {
+    log.error({ err }, "Failed to load mobile app sweep");
+    sendError(res, 500, "Failed to load mobile app sweep");
+  }
+});
+
+/**
+ * Searches public app stores for apps carrying the workspace's brand.
+ *
+ * Reads Apple's public Search API only. Android is not covered and the result
+ * says so — see mobile-app-monitor.ts.
+ */
+brandThreatsRouter.post("/workspaces/:workspaceId/mobile-apps", wsWrite, async (req, res) => {
+  try {
+    const workspaceId = req.params.workspaceId as string;
+    const workspace = await storage.getWorkspace(workspaceId);
+    if (!workspace) return sendError(res, 404, "Workspace not found");
+
+    const target = (workspace.domain ?? workspace.name ?? "").trim().toLowerCase();
+    if (!target) return sendValidationError(res, "No target domain set for this workspace");
+
+    const result = await findBrandedApps(target);
+
+    // A store outage must not be stored as "no apps found" — that reads as a
+    // clean bill for a check that never ran.
+    if (result.unavailable) {
+      return sendError(res, 503, "App store search is unavailable; no conclusion could be drawn");
+    }
+
+    const module = await storage.createReconModule({
+      workspaceId,
+      scanId: null,
+      target,
+      moduleType: MOBILE_APP_MODULE_TYPE,
+      data: { ...result, scannedAt: new Date().toISOString() },
+      // Ownership is confirmed from the developer's own published website, so a
+      // sweep that resolved any official app is a direct observation. Without
+      // one, everything found is "brand in use by others", which is a lead.
+      confidence: result.official.length > 0 ? 90 : 70,
+    });
+
+    log.info(
+      { workspaceId, target, official: result.official.length, thirdParty: result.thirdParty.length },
+      "Mobile app sweep complete",
+    );
+    res.status(201).json(module);
+  } catch (err) {
+    log.error({ err }, "Mobile app sweep failed");
+    sendError(res, 500, "Mobile app sweep failed");
+  }
+});
+
+/** Most recent breach-corpus check for the workspace, or null. */
+brandThreatsRouter.get("/workspaces/:workspaceId/breach-exposure", wsRead, async (req, res) => {
+  try {
+    const modules = await storage.getReconModulesByType(
+      req.params.workspaceId as string,
+      BREACH_MODULE_TYPE,
+    );
+    const latest = [...modules].sort(
+      (a, b) => new Date(b.generatedAt ?? 0).getTime() - new Date(a.generatedAt ?? 0).getTime(),
+    )[0];
+    res.json(latest ?? null);
+  } catch (err) {
+    log.error({ err }, "Failed to load breach exposure");
+    sendError(res, 500, "Failed to load breach exposure");
+  }
+});
+
+/**
+ * Checks the public breach corpus for records naming this workspace's domain.
+ *
+ * Reads breach METADATA only — incident name, date, record count and data
+ * classes. No credential, hash or email address is requested or received, and
+ * per-account exposure is deliberately out of scope (see breach-exposure.ts).
+ */
+brandThreatsRouter.post("/workspaces/:workspaceId/breach-exposure", wsWrite, async (req, res) => {
+  try {
+    const workspaceId = req.params.workspaceId as string;
+    const workspace = await storage.getWorkspace(workspaceId);
+    if (!workspace) return sendError(res, 404, "Workspace not found");
+
+    const target = (workspace.domain ?? workspace.name ?? "").trim().toLowerCase();
+    if (!target) return sendValidationError(res, "No target domain set for this workspace");
+
+    const result = await checkBreachExposure(target);
+
+    // Neither case may be stored as "you appear in no breach" — that is the
+    // reassuring half of a conclusion we did not reach. They get different
+    // status codes because they need different fixes: one is the operator's
+    // configuration, the other is somebody else's service being down.
+    if (result.unavailableReason === "no-domain") {
+      return sendValidationError(
+        res,
+        `This workspace has no domain set ("${target}" is a name, not a domain). Set the workspace domain to run this check.`,
+      );
+    }
+    if (result.unavailable) {
+      return sendError(res, 503, "Breach corpus is unavailable; no conclusion could be drawn");
+    }
+
+    const module = await storage.createReconModule({
+      workspaceId,
+      scanId: null,
+      target,
+      moduleType: BREACH_MODULE_TYPE,
+      data: { ...result, scannedAt: new Date().toISOString() },
+      // A verified record in the public corpus is a direct observation. An
+      // unverified one is a lead, so a result made only of those is weaker.
+      confidence: result.confirmed.length > 0 ? 95 : result.unverified.length > 0 ? 60 : 85,
+    });
+
+    log.info(
+      { workspaceId, target, confirmed: result.confirmed.length, unverified: result.unverified.length },
+      "Breach exposure check complete",
+    );
+    res.status(201).json(module);
+  } catch (err) {
+    log.error({ err }, "Breach exposure check failed");
+    sendError(res, 500, "Breach exposure check failed");
   }
 });

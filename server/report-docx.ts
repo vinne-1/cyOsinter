@@ -23,6 +23,8 @@ export interface ReportFinding {
   remediation?: string;
   evidenceText?: string;
   evidenceImageKey?: string;
+  /** Live re-verification record left by the fail-closed gate. */
+  verification?: { status: string; detail?: string; checkedAt?: string };
 }
 
 export interface ReportDocxInput {
@@ -77,7 +79,21 @@ export interface ReportDocxInput {
   images?: Record<string, Buffer>;
   /** Count of detected candidates the live verification gate withheld (fail-closed). */
   withheldCount?: number;
+  /**
+   * The security rating, decomposed by risk factor.
+   *
+   * Carried in rather than computed here so the document and the dashboard read
+   * from one implementation — a report that grades an estate differently from
+   * the screen the client just looked at is worse than one that omits the grade.
+   */
+  rating?: {
+    overall: number;
+    factors: FactorScore[];
+    ceiling: CeilingAnalysis;
+  };
 }
+
+import { gradeForScore as gradeLetter, type FactorScore, type CeilingAnalysis } from "@shared/risk-factors";
 
 const SEV_COLOR: Record<string, string> = {
   critical: "C00000", high: "E03C31", medium: "E69138", low: "F1C232", info: "9FC5E8",
@@ -181,6 +197,21 @@ function findingBlock(idx: number, f: ReportFinding, images?: Record<string, Buf
   if (f.evidenceImageKey && images && images[f.evidenceImageKey]) {
     out.push(...imageParagraph(images[f.evidenceImageKey]));
   }
+  if (f.verification) {
+    // Printed under its own heading rather than buried in the evidence blob:
+    // "a live probe reproduced this, at this time" is the claim that makes the
+    // finding defensible, and a reader has to be able to find it.
+    out.push(p("Verification", { bold: true, spacingAfter: 40 }));
+    const when = f.verification.checkedAt
+      ? `${new Date(f.verification.checkedAt).toISOString().replace("T", " ").slice(0, 19)} UTC`
+      : "time not recorded";
+    const status = f.verification.status === "confirmed"
+      ? "Reproduced by a live probe at scan time"
+      : f.verification.status === "unverifiable"
+        ? "Not reproducible by an active probe - retained on the basis of the source that reported it"
+        : f.verification.status;
+    out.push(p(`${status} (${when}).${f.verification.detail ? ` Observed: ${f.verification.detail}` : ""}`));
+  }
   if (f.remediation) {
     out.push(p("Remediation", { bold: true, spacingAfter: 40 }));
     out.push(p(f.remediation));
@@ -258,8 +289,97 @@ export async function generateReportDocx(input: ReportDocxInput): Promise<Buffer
     ],
   }));
 
+  // ── Security rating by risk factor ──
+  //
+  // Placed before the findings register because it is the page a board reads.
+  // Two departures from how a commercial rating report presents the same thing,
+  // both deliberate:
+  //
+  //  · a factor no check assessed is printed "Not assessed", never 100. A rating
+  //    vendor awards a perfect score to factors it has no telemetry for, which
+  //    reads as excellence and is really an absence of evidence;
+  //  · the recommendation is the ceiling, not a per-issue decimal. The score is
+  //    banded, so fixing one of several findings at the capping severity moves
+  //    nothing — only clearing the band lifts the cap, and that is what is said.
+  if (input.rating) {
+    const { overall, factors, ceiling } = input.rating;
+    children.push(h2("4.1  Security Rating by Risk Factor"));
+    children.push(p(
+      `Overall security rating: ${overall}/100 (grade ${gradeLetter(overall)}). Each factor below is scored independently from the findings attributed to it.`,
+    ));
+
+    children.push(new Table({
+      width: { size: 100, type: WidthType.PERCENTAGE },
+      rows: [
+        new TableRow({ children: [
+          cell([new Paragraph({ children: [t("Risk factor", { bold: true, size: 17 })] })], { width: 30 }),
+          cell([new Paragraph({ children: [t("Score", { bold: true, size: 17 })] })], { width: 12 }),
+          cell([new Paragraph({ children: [t("Grade", { bold: true, size: 17 })] })], { width: 10 }),
+          cell([new Paragraph({ children: [t("Open", { bold: true, size: 17 })] })], { width: 10 }),
+          cell([new Paragraph({ children: [t("Basis", { bold: true, size: 17 })] })], { width: 38 }),
+        ] }),
+        ...factors.map((f) => {
+          const na = f.state === "not_assessed";
+          return new TableRow({ children: [
+            cell([new Paragraph({ children: [t(f.title, { size: 17, bold: true })] })], { width: 30 }),
+            cell([new Paragraph({ children: [t(na ? "Not assessed" : String(f.score), { size: 17, color: na ? GREY : undefined, italics: na })] })], { width: 12 }),
+            cell([new Paragraph({ children: [t(f.grade ?? "–", { size: 17, bold: true })] })], { width: 10 }),
+            cell([new Paragraph({ children: [t(na ? "–" : String(f.findingCount), { size: 17 })] })], { width: 10 }),
+            cell([new Paragraph({ children: [t(f.reason, { size: 15, color: GREY })] })], { width: 38 }),
+          ] });
+        }),
+      ],
+    }));
+
+    const notAssessed = factors.filter((f) => f.state === "not_assessed");
+    if (notAssessed.length) {
+      children.push(p(
+        `${notAssessed.length} factor(s) are reported as "Not assessed" rather than scored: ` +
+        `${notAssessed.map((f) => f.title).join(", ")}. No check capable of judging these ran during this ` +
+        `assessment. They are deliberately not shown as 100 — a perfect score would state an assurance ` +
+        `this assessment did not earn, and would be indistinguishable from an area genuinely found clean.`,
+        { size: 17, italics: true, color: GREY },
+      ));
+    }
+
+    if (ceiling.cappedBy) {
+      children.push(h2("4.2  What Would Move the Rating"));
+      if (ceiling.binding === "ceiling") {
+        children.push(p(
+          `The rating cannot exceed ${ceiling.currentCeiling} while any ${ceiling.cappedBy}-severity finding remains open. ` +
+          `There ${ceiling.blockingCount === 1 ? "is" : "are"} currently ${ceiling.blockingCount} such finding${ceiling.blockingCount === 1 ? "" : "s"}. ` +
+          `Clearing all of them raises the rating to approximately ${ceiling.ceilingIfCleared}` +
+          (ceiling.gain > 0 ? ` (a gain of ${ceiling.gain} points)` : "") + `.`,
+        ));
+        children.push(p(
+          `Remediating only some of them will not change the rating: the cap is set by the presence of any one ` +
+          `finding at that severity, not by how many there are. This is stated plainly because a per-issue ` +
+          `"score impact" figure would imply a gradual improvement that does not occur.`,
+          { size: 17, italics: true, color: GREY },
+        ));
+      } else {
+        // Volume, not the band, is the constraint here — the ceiling is not
+        // binding, and telling the reader partial fixes are worthless would be
+        // false and would discourage exactly the work that helps.
+        children.push(p(
+          `${ceiling.blockingCount} open ${ceiling.cappedBy}-severity findings are currently holding the rating at ` +
+          `${ceiling.score}. Clearing all of them raises it to approximately ${ceiling.ceilingIfCleared}` +
+          (ceiling.gain > 0 ? ` (a gain of ${ceiling.gain} points)` : "") + `.`,
+        ));
+        children.push(p(
+          `At this volume the rating is set by how many findings are open rather than by the severity band, so ` +
+          `progress is incremental: each finding closed improves the rating, and there is no threshold that must ` +
+          `be reached before any benefit appears.`,
+          { size: 17, italics: true, color: GREY },
+        ));
+      }
+    }
+
+    children.push(new Paragraph({ children: [new PageBreak()] }));
+  }
+
   // Findings register
-  children.push(h2("4.1  Findings Register"));
+  children.push(h2(input.rating ? "4.3  Findings Register" : "4.1  Findings Register"));
   children.push(new Table({
     width: { size: 100, type: WidthType.PERCENTAGE },
     rows: [

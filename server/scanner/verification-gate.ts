@@ -19,7 +19,8 @@
 import * as net from "net";
 import * as tls from "tls";
 import * as dns from "dns/promises";
-import { httpGet, httpGetNoRedirect, httpGetMainPage, parseSetCookie } from "./http.js";
+import { httpGet, httpGetNoRedirect, httpGetMainPage, httpRequest, parseSetCookie } from "./http.js";
+import { calibrate, isSoftNotFound, type ResponseBaseline } from "./response-oracle.js";
 import { createLogger } from "../logger.js";
 
 const log = createLogger("verification-gate");
@@ -184,19 +185,41 @@ async function probeTransportSecurity(f: GateFinding): Promise<ProbeOutcome> {
   return { reproduced: !redirectsHttps, detail: redirectsHttps ? "http redirects to https" : "no https upgrade" };
 }
 
+/**
+ * The attacker-origin probe.
+ *
+ * A reflected-origin CORS misconfiguration is INVISIBLE to a request that sends
+ * no `Origin` header — the server has nothing to reflect, so it returns no
+ * `Access-Control-Allow-Origin` and the check silently concludes "safe". This
+ * probe sends an origin the target cannot legitimately trust and looks at what
+ * comes back; reflection of that exact value with credentials enabled is the
+ * defect, and nothing weaker is.
+ */
 async function probeCors(f: GateFinding): Promise<ProbeOutcome> {
   const url = firstEvidenceUrl(f) ?? ensureUrl(f.affectedAsset);
-  // http.ts helpers don't set custom Origin; use a direct guarded fetch via httpGet is
-  // insufficient. Re-check the reflected/wildcard ACAO as returned to a normal request.
-  const res = await httpGet(url);
+  const attackerOrigin = "https://cyshield-cors-probe.example";
+  const res = (await httpRequest(url, "GET", { Origin: attackerOrigin })) ?? (await httpGet(url));
   if (!res) return { reproduced: false, detail: "host unreachable" };
   const lower: Record<string, string> = {};
   for (const [k, v] of Object.entries(res.headers)) lower[k.toLowerCase()] = v;
   const acao = lower["access-control-allow-origin"];
-  const acac = lower["access-control-allow-credentials"];
-  // Only a genuinely dangerous combination counts: wildcard is low-risk without creds.
-  const dangerous = (acao === "*" && acac === "true") || (!!acao && acao !== "*" && acac === "true");
-  return { reproduced: dangerous, detail: dangerous ? `ACAO=${acao} with credentials` : `ACAO=${acao ?? "none"}` };
+  const acac = (lower["access-control-allow-credentials"] ?? "").toLowerCase();
+
+  // Reflecting an arbitrary origin lets any site read the response as the
+  // victim. `*` cannot carry credentials at all (browsers refuse the pair), so
+  // wildcard without credentials is not the same defect.
+  if (acao === attackerOrigin) {
+    return {
+      reproduced: true,
+      detail: acac === "true"
+        ? "reflects an arbitrary Origin with Access-Control-Allow-Credentials: true"
+        : "reflects an arbitrary Origin",
+    };
+  }
+  if (acao === "*" && acac === "true") {
+    return { reproduced: true, detail: "ACAO=* declared alongside credentials" };
+  }
+  return { reproduced: false, detail: `ACAO=${acao ?? "none"} for an untrusted Origin` };
 }
 
 async function probeCookieSecurity(f: GateFinding): Promise<ProbeOutcome> {
@@ -262,24 +285,68 @@ async function probeReflection(f: GateFinding): Promise<ProbeOutcome> {
   return { reproduced: reflected, detail: reflected ? "payload reflected unencoded" : "payload not reflected" };
 }
 
+/**
+ * Dangerous HTTP methods.
+ *
+ * Two corrections over reading `Allow` from a GET:
+ *
+ * - `PATCH` is not a dangerous method. It is the ordinary partial-update verb of
+ *   every REST API, and counting it meant any correctly built API advertising
+ *   its own methods was reported as a finding.
+ * - TRACE is verified by actually issuing one. A server that merely lists TRACE
+ *   in `Allow` but does not echo the request is not vulnerable to cross-site
+ *   tracing, and the echo is the whole defect.
+ *
+ * PUT and DELETE are judged on advertisement alone and never exercised — the
+ * scanner does not write to or delete from a target to prove a point.
+ */
 async function probeHttpMethods(f: GateFinding): Promise<ProbeOutcome> {
   const url = firstEvidenceUrl(f) ?? ensureUrl(f.affectedAsset);
-  const res = await httpGet(url);
-  if (!res) return { reproduced: false, detail: "unreachable" };
-  const allow = (res.headers["allow"] ?? res.headers["Allow"] ?? "").toUpperCase();
-  const risky = ["PUT", "DELETE", "TRACE", "CONNECT", "PATCH"].filter((m) => allow.includes(m));
-  return { reproduced: risky.length > 0, detail: risky.length > 0 ? `Allow: ${risky.join(", ")}` : `Allow: ${allow || "n/a"}` };
+  const options = (await httpRequest(url, "OPTIONS")) ?? (await httpGet(url));
+  if (!options) return { reproduced: false, detail: "unreachable" };
+  const allow = (options.headers["allow"] ?? options.headers["Allow"] ?? "").toUpperCase();
+
+  const trace = await httpRequest(url, "TRACE");
+  const traceEchoes = !!trace && trace.status >= 200 && trace.status < 300 && /TRACE\s+\S+\s+HTTP\/1\.[01]/i.test(trace.body);
+  if (traceEchoes) return { reproduced: true, detail: "TRACE is enabled and echoes the request (cross-site tracing)" };
+
+  const risky = ["PUT", "DELETE", "CONNECT"].filter((m) => new RegExp(`\\b${m}\\b`).test(allow));
+  if (risky.length > 0) return { reproduced: true, detail: `Allow advertises ${risky.join(", ")}` };
+  return { reproduced: false, detail: allow ? `Allow: ${allow} — no dangerous method` : "no dangerous method confirmed" };
+}
+
+/**
+ * Baselines for "how does this origin answer a path that cannot exist", cached
+ * for the lifetime of one gate run. Calibration costs several requests, so it
+ * is paid once per origin, not once per finding.
+ */
+const baselineCache = new Map<string, ResponseBaseline | null>();
+
+async function baselineFor(url: string): Promise<ResponseBaseline | null> {
+  let origin: string;
+  try { origin = new URL(url).origin; } catch { return null; }
+  if (!baselineCache.has(origin)) {
+    try { baselineCache.set(origin, await calibrate(origin, ["bare", "dir"])); }
+    catch { baselineCache.set(origin, null); }
+  }
+  return baselineCache.get(origin) ?? null;
+}
+
+/** Exposed for tests and for callers that scan the same host repeatedly. */
+export function resetVerificationBaselines(): void {
+  baselineCache.clear();
 }
 
 async function probeExposedContent(f: GateFinding): Promise<ProbeOutcome> {
   // leaked_credential / data_leak / *_disclosure / api_exposure / cloud/container /
-  // secret_exposure: the URL must still return 2xx AND, when we have a content marker,
-  // that marker must still be present. 200-alone is insufficient for a content leak.
+  // secret_exposure: the URL must still return 2xx AND the response must be
+  // distinguishable from what this host returns for a path that does not exist.
   const url = firstEvidenceUrl(f);
   if (!url) return { reproduced: false, detail: "no reproducible URL" };
   const res = await httpGet(url);
   if (!res) return { reproduced: false, detail: "unreachable" };
   if (res.status < 200 || res.status >= 300) return { reproduced: false, detail: `status ${res.status}` };
+
   const snippet = firstSnippet(f);
   if (snippet) {
     // Compare on a distinctive slice of the recorded snippet (avoid whole-line noise).
@@ -289,8 +356,22 @@ async function probeExposedContent(f: GateFinding): Promise<ProbeOutcome> {
       return { reproduced: present, detail: present ? "content marker still served" : "content marker gone" };
     }
   }
-  // No usable marker but a live 2xx on a path the detector flagged as exposed.
-  return { reproduced: true, detail: `live 2xx at ${url}` };
+
+  // Without a marker, a live 2xx used to be accepted outright — which made the
+  // gate rubber-stamp exactly the findings it exists to catch, because a host
+  // with a catch-all route answers 200 for every path a detector guessed. Ask
+  // the host what it does with a path that certainly does not exist, and refuse
+  // to confirm anything that looks the same.
+  let path = url;
+  try { path = new URL(url).pathname; } catch { /* keep the raw string */ }
+  const baseline = await baselineFor(url);
+  if (isSoftNotFound(baseline, path, res)) {
+    return { reproduced: false, detail: "response is this host's catch-all page for non-existent paths, not the exposed resource" };
+  }
+  if (!baseline?.calibrated) {
+    return { reproduced: false, detail: "no content marker recorded and the host's not-found behaviour could not be established" };
+  }
+  return { reproduced: true, detail: `live 2xx at ${url}, distinct from this host's not-found response` };
 }
 
 async function probeSslIssue(f: GateFinding): Promise<ProbeOutcome> {

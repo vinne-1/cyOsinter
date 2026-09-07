@@ -1,4 +1,5 @@
 import { jsPDF } from "jspdf";
+import { formatReportDate, formatReportDateOnly } from "./utils/format";
 
 interface ReportPdfInput {
   title: string;
@@ -97,7 +98,7 @@ export function generateReportPdfBuffer(input: ReportPdfInput): Buffer {
   doc.setFontSize(9);
   doc.setFont("helvetica", "normal");
   doc.setTextColor(100, 100, 100);
-  doc.text(`Generated: ${input.generatedAt ? new Date(input.generatedAt).toLocaleString() : "N/A"}`, MARGIN, y);
+  doc.text(`Generated: ${formatReportDate(input.generatedAt)}`, MARGIN, y);
   doc.setTextColor(0, 0, 0);
   y += 14;
 
@@ -173,7 +174,7 @@ export function generateReportPdfBuffer(input: ReportPdfInput): Buffer {
   if (postureTrend && postureTrend.length > 0) {
     y = addSectionTitle(doc, y, "Posture Trend");
     y = addTable(doc, y, ["Date", "Surface Risk", "Security Score", "Findings"], postureTrend.map((p) => [
-      new Date(p.snapshotAt).toLocaleDateString(),
+      formatReportDateOnly(p.snapshotAt),
       p.surfaceRiskScore != null ? String(p.surfaceRiskScore) : "\u2014",
       p.securityScore != null ? String(p.securityScore) : "\u2014",
       String(p.findingsCount ?? "\u2014"),
@@ -220,7 +221,7 @@ export function generateReportPdfBuffer(input: ReportPdfInput): Buffer {
     doc.setFontSize(8);
     doc.setTextColor(128, 128, 128);
     doc.text(`Page ${i} of ${pageCount} | ${input.title}`, MARGIN, PAGE_HEIGHT - 10);
-    doc.text(input.generatedAt ? new Date(input.generatedAt).toLocaleString() : "", PAGE_WIDTH - MARGIN - 50, PAGE_HEIGHT - 10);
+    doc.text(formatReportDate(input.generatedAt), PAGE_WIDTH - MARGIN - 50, PAGE_HEIGHT - 10);
     doc.setTextColor(0, 0, 0);
   }
 

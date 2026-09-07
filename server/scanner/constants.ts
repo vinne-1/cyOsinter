@@ -13,7 +13,23 @@ export const STANDARD_SITEMAP_LIMIT = 500;
 export const STANDARD_SUBDOMAIN_CERT_CHECK = 3;
 
 export const GOLD_SUBDOMAIN_WORDLIST_CAP = 0; // 0 = no cap (use full wordlist)
-export const GOLD_PROBE_BATCH = 0;
+/**
+ * Gold probe ceiling.
+ *
+ * This was `0` — meaning NO cap — which was safe while passive discovery
+ * returned a few hundred hosts. Adding the keyed datasets changed that by orders
+ * of magnitude: a live aggregation for github.com now returns **48,063** hosts
+ * (Chaos alone contributes 47,691). Probing every one means 48k DNS resolutions
+ * plus 48k HTTP probes plus per-asset TLS and headers for each live result —
+ * hours of scanning and a great deal of outbound traffic, from a value that was
+ * chosen when "all of them" meant a few hundred.
+ *
+ * A finite ceiling with the truncation RECORDED is the honest form: the scan
+ * says it probed 5,000 of 48,063 rather than silently doing either. Same
+ * reasoning as the crawler recording `truncated`, which exists because a partial
+ * crawl bounds what the active tests could possibly have found.
+ */
+export const GOLD_PROBE_BATCH = 5000;
 export const GOLD_NUCLEI_DOMAINS = 0;
 export const GOLD_DIRECTORY_CAP = 0;
 export const GOLD_SITEMAP_LIMIT = 5000;
@@ -81,48 +97,13 @@ export const OSINT_DOCUMENT_PATHS = [
 export const OSINT_INFRA_PATHS = "/phpinfo.php /info.php /server-status /api-docs /openapi.json /debug /trace /actuator /actuator/health /admin/login /wp-admin /administrator /manager /console /config.yml /docker-compose.yml /.dockerignore /kubernetes /health /metrics /graphql /api/v1 /api/v2 /swagger-ui /redoc /.terraform /terraform.tfstate".split(" ");
 export const DOCUMENT_EXTENSIONS = /\.(pdf|doc|docx|xlsx|xls|csv|sql|zip|tar|tar\.gz|bak|old|log|dump)$/i;
 
-export interface EvidenceItem {
-  [key: string]: unknown;
-  type: string;
-  description: string;
-  url?: string;
-  snippet?: string;
-  source?: string;
-  verifiedAt?: string;
-  raw?: Record<string, unknown>;
-}
-
-export interface VerifiedFinding {
-  title: string;
-  description: string;
-  severity: string;
-  category: string;
-  /**
-   * security | control | recon. Optional because most modules only ever produce
-   * security findings; omitted means "security", which matches the column
-   * default so a module that does not think about this cannot accidentally hide
-   * a real weakness. See scanner/finding-taxonomy.ts.
-   */
-  kind?: string;
-  affectedAsset: string;
-  cvssScore: string;
-  remediation: string;
-  evidence: EvidenceItem[];
-}
-
-export interface ScanResults {
-  subdomains: string[];
-  assets: Array<{ type: string; value: string; tags: string[] }>;
-  findings: VerifiedFinding[];
-  reconData: ReconData;
-}
-
-export type ScanProgressCallback = (msg: string, percent: number, step: string, etaSeconds?: number) => Promise<void>;
-
-export interface ScanOptions {
-  signal?: AbortSignal;
-  mode?: "standard" | "gold" | "safe";
-}
+// These shapes have a single definition in types.ts and are re-exported here so
+// the many modules importing from constants.js keep working. They were declared
+// in BOTH files and had already drifted apart — `kind` existed on one copy only,
+// so a finding setting it type-checked from one import path and failed from the
+// other.
+export type { EvidenceItem, VerifiedFinding, ScanResults, ScanProgressCallback, ScanOptions } from "./types.js";
+import type { ScanOptions } from "./types.js";
 
 export function isGold(options?: ScanOptions): boolean {
   return options?.mode === "gold";

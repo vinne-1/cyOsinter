@@ -1,3 +1,4 @@
+import { gradeForScore } from "@shared/risk-factors";
 /**
  * Single source of truth for finding severity presentation.
  *
@@ -85,10 +86,17 @@ export function countBySeverity<T extends { severity: string }>(
  * Letter grade for a 0–100 posture score. Mirrors how the score itself is
  * computed in shared/scoring.ts — an A means nothing critical is outstanding.
  */
+const GRADE_PRESENTATION: Record<string, { tone: string; color: string }> = {
+  A: { tone: "Strong", color: "hsl(var(--sev-ok))" },
+  B: { tone: "Good", color: "hsl(var(--sev-ok))" },
+  C: { tone: "Fair", color: "hsl(var(--sev-medium))" },
+  D: { tone: "Weak", color: "hsl(var(--sev-high))" },
+  F: { tone: "Critical", color: "hsl(var(--sev-critical))" },
+};
+
 export function scoreGrade(score: number): { grade: string; tone: string; color: string } {
-  if (score >= 90) return { grade: "A", tone: "Strong", color: "hsl(var(--sev-ok))" };
-  if (score >= 80) return { grade: "B", tone: "Good", color: "hsl(var(--sev-ok))" };
-  if (score >= 65) return { grade: "C", tone: "Fair", color: "hsl(var(--sev-medium))" };
-  if (score >= 50) return { grade: "D", tone: "Weak", color: "hsl(var(--sev-high))" };
-  return { grade: "F", tone: "Critical", color: "hsl(var(--sev-critical))" };
+  // The letter comes from shared/risk-factors so the hero, the risk-factor card
+  // and the exported report cannot grade the same score differently.
+  const grade = gradeForScore(score);
+  return { grade, ...GRADE_PRESENTATION[grade]! };
 }

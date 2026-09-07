@@ -1,5 +1,8 @@
 import { useState, useEffect } from "react";
+import { LiveScanView, type LiveScan } from "@/components/live-scan-view";
 import { useQuery, useMutation } from "@tanstack/react-query";
+import { useListQuery } from "@/hooks/use-list-query";
+import { usePagedList, ListPager } from "@/components/list-pager";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Button } from "@/components/ui/button";
@@ -80,6 +83,22 @@ interface ScanProfile {
   mode: string;
 }
 
+/**
+ * The one definition of the assets query key.
+ *
+ * React Query matches keys by ARRAY ELEMENT, not by substring, so a query keyed
+ * `.../assets?limit=5000` is NOT invalidated by `.../assets`. Three call sites
+ * (the list, and the two dialogs that add data) must therefore agree on the
+ * exact string, and they silently diverged the moment the limit was added.
+ *
+ * The explicit limit is load-bearing, not cosmetic: the EASM page filters and
+ * counts client-side, so the default page of 500 changed the ANSWERS on the two
+ * live workspaces holding 743 and 1067 assets.
+ */
+function assetsQueryKey(workspaceId: string | null | undefined): string | null {
+  return workspaceId ? `/api/workspaces/${workspaceId}/assets?limit=5000` : null;
+}
+
 function NewScanDialog() {
   const [open, setOpen] = useState(false);
   const [scanType, setScanType] = useState<"easm" | "full" | "dast">("full");
@@ -111,7 +130,7 @@ function NewScanDialog() {
     onSuccess: () => {
       if (selectedWorkspaceId) {
         queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${selectedWorkspaceId}/scans`] });
-        queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${selectedWorkspaceId}/assets`] });
+        queryClient.invalidateQueries({ queryKey: [assetsQueryKey(selectedWorkspaceId)] });
         queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${selectedWorkspaceId}/findings`] });
         queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${selectedWorkspaceId}/recon-modules`] });
       }
@@ -243,7 +262,7 @@ function AddAssetDialog() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${selectedWorkspaceId}/assets`] });
+      queryClient.invalidateQueries({ queryKey: [assetsQueryKey(selectedWorkspaceId)] });
       toast({ title: "Asset added" });
       setOpen(false);
       form.reset();
@@ -329,19 +348,46 @@ export default function EASM() {
   });
 
   const hasRunningScans = scans.some((s) => s.status === "running" || s.status === "pending");
-  const { data: assets = [], isLoading: loadingAssets } = useQuery<Asset[]>({
-    queryKey: [`/api/workspaces/${selectedWorkspaceId}/assets`],
-    enabled: !!selectedWorkspaceId,
+  /**
+   * Assets, fetched whole rather than one default page.
+   *
+   * This page filters and counts CLIENT-side, so a page of 500 is not a display
+   * limit — it silently changes the answers. Measured on live data: two
+   * workspaces hold 743 and 1067 assets, so 243 and 567 of them were invisible.
+   * The per-type tiles undercounted, and searching for one of the missing hosts
+   * rendered "No assets found" for an asset that exists.
+   *
+   * `useListQuery` keeps the server's `total`, so if an estate ever exceeds even
+   * this ceiling the page can say so instead of quietly showing a subset.
+   */
+  // React Query matches query keys by ARRAY ELEMENT, not by substring, so an
+  // invalidation of `.../assets` does NOT match a query keyed `.../assets?limit=5000`.
+  // Defining the path once keeps the fetch and the two invalidations in step;
+  // they silently diverged the moment the limit was added to the URL.
+  const assetsKey = assetsQueryKey(selectedWorkspaceId);
+
+  const {
+    items: assets,
+    total: assetTotal,
+    truncated: assetsTruncated,
+    isLoading: loadingAssets,
+  } = useListQuery<Asset>(assetsKey, {
     refetchInterval: hasRunningScans ? 4000 : false,
   });
 
   const easmScans = scans.filter((s) => s.type === "easm" || s.type === "full");
+  const runningEasmScan = easmScans.find((s) => s.status === "running" || s.status === "pending");
 
   const filteredAssets = assets.filter((a) => {
     const matchesSearch = a.value.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesType = typeFilter === "all" || a.type === typeFilter;
     return matchesSearch && matchesType;
   });
+
+  // The full set stays loaded so search and the type tiles still see every
+  // asset; only the rendered window is bounded. 1,067 <tr> elements is not a
+  // table anyone reads — it is a scroll.
+  const pagedAssets = usePagedList(filteredAssets, `${searchQuery}|${typeFilter}`);
 
   const assetsByType = assets.reduce((acc, a) => {
     acc[a.type] = (acc[a.type] || 0) + 1;
@@ -399,6 +445,8 @@ export default function EASM() {
         })}
       </div>
 
+      {runningEasmScan && <LiveScanView scan={runningEasmScan as unknown as LiveScan} />}
+
       {easmScans.length > 0 && (
         <Card data-testid="card-easm-scans">
           <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
@@ -434,7 +482,7 @@ export default function EASM() {
                     </div>
                     {isRunning && (s.progressMessage || (s.progressPercent ?? 0) > 0) && (
                       <div className="mt-2 space-y-1">
-                        <Progress value={s.progressPercent ?? 0} className="h-1.5" />
+                        <Progress value={s.progressPercent ?? 0} className="h-1.5" aria-label={`Scan progress for ${scan.target}: ${s.progressPercent ?? 0} percent`} />
                         <p className="text-xs text-muted-foreground truncate">{s.progressMessage}</p>
                         {s.estimatedSecondsRemaining != null && s.estimatedSecondsRemaining > 0 && (
                           <p className="text-xs text-muted-foreground flex items-center gap-1">
@@ -460,7 +508,17 @@ export default function EASM() {
       <Card data-testid="card-assets-table">
         <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
           <CardTitle className="text-sm font-medium">
-            Discovered Assets ({filteredAssets.length})
+            {/* The workspace total is the fact; the filtered count is a view of
+                it. Showing only the filtered number made the title read
+                "Discovered Assets (0)" directly above "1,067 assets in this
+                workspace" — the same "the count reflects the filter, not the
+                data" defect the list endpoints were fixed for. */}
+            Discovered Assets ({assetTotal.toLocaleString()})
+            {filteredAssets.length !== assetTotal && (
+              <span className="ml-2 text-xs font-normal text-muted-foreground">
+                {filteredAssets.length.toLocaleString()} shown
+              </span>
+            )}
           </CardTitle>
           <div className="flex items-center gap-2">
             <div className="relative">
@@ -476,11 +534,43 @@ export default function EASM() {
           </div>
         </CardHeader>
         <CardContent>
+          {assetsTruncated && (
+            <p className="mb-2 text-xs text-muted-foreground">
+              Showing {assets.length} of {assetTotal} assets. Search and the counts above cover the
+              loaded set only — narrow the scan or export the full inventory to see the rest.
+            </p>
+          )}
           {filteredAssets.length === 0 ? (
+            /* "Nothing here" and "nothing MATCHES" are different facts, and the
+               second is the common one on a populated workspace. Telling a
+               reader with 1,067 assets to "run an EASM scan" because their
+               search matched nothing sends them to redo work they have already
+               done — the same could-not-see versus is-not-there confusion this
+               product corrects everywhere else. */
             <div className="text-center py-12">
-              <Globe className="w-10 h-10 text-muted-foreground/40 mx-auto mb-3" />
-              <p className="text-sm text-muted-foreground">No assets found</p>
-              <p className="text-xs text-muted-foreground mt-1">Add assets manually or run an EASM scan</p>
+              <Globe className="w-10 h-10 text-muted-foreground/40 mx-auto mb-3" aria-hidden="true" />
+              {assets.length === 0 ? (
+                <>
+                  <p className="text-sm text-muted-foreground">No assets yet</p>
+                  <p className="text-xs text-muted-foreground mt-1">Add assets manually or run an EASM scan</p>
+                </>
+              ) : (
+                <>
+                  <p className="text-sm text-muted-foreground">
+                    No assets match {searchQuery ? <>“<span className="font-mono">{searchQuery}</span>”</> : "this filter"}
+                  </p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {assetTotal.toLocaleString()} asset{assetTotal === 1 ? "" : "s"} in this workspace.
+                  </p>
+                  <Button
+                    variant="outline" size="sm" className="mt-3"
+                    onClick={() => { setSearchQuery(""); setTypeFilter("all"); }}
+                    data-testid="button-clear-asset-filters"
+                  >
+                    Clear filters
+                  </Button>
+                </>
+              )}
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -495,7 +585,7 @@ export default function EASM() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredAssets.map((asset) => {
+                  {pagedAssets.items.map((asset) => {
                     const Icon = assetTypeIcons[asset.type] || Globe;
                     return (
                       <TableRow key={asset.id} data-testid={`row-asset-${asset.id}`}>
@@ -537,6 +627,7 @@ export default function EASM() {
                   })}
                 </TableBody>
               </Table>
+              <ListPager paged={pagedAssets} label="assets" />
             </div>
           )}
         </CardContent>

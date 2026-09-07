@@ -74,7 +74,13 @@ export function ModuleHeader({ title, icon: Icon, confidence, generatedAt }: { t
         </div>
         <div>
           <h3 className="text-base font-semibold">{title}</h3>
-          {freshness && <p className={`text-[10px] ${freshness.fresh ? "text-muted-foreground/50" : "text-yellow-500/70"}`}>{freshness.text}</p>}
+          {/*
+            Tokens, not opacity. `text-muted-foreground/50` measured 2.65:1
+            against the panel background — an opacity modifier stacked on
+            already-tinted text, which is the documented way contrast regresses
+            here. At 10px this is small text, so it needs the full 4.5:1.
+          */}
+          {freshness && <p className={`text-[10px] ${freshness.fresh ? "text-muted-foreground" : "text-yellow-600 dark:text-yellow-500"}`}>{freshness.text}</p>}
         </div>
       </div>
       <ConfidenceBadge confidence={confidence} />

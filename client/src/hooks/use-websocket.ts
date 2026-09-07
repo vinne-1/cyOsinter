@@ -28,12 +28,30 @@ function connect(workspaceId: string): void {
   ws = new WebSocket(getWsUrl());
 
   ws.onopen = () => {
-    ws?.send(JSON.stringify({ type: "subscribe", workspaceId }));
+    // The socket carries no credential of its own, so the subscribe message has
+    // to. The server validates the session AND workspace membership before it
+    // will send anything: previously it accepted any workspaceId from any
+    // anonymous socket and streamed that tenant's findings.
+    const token = localStorage.getItem("auth_token");
+    if (!token) {
+      ws?.close();
+      return;
+    }
+    ws?.send(JSON.stringify({ type: "subscribe", workspaceId, token }));
   };
 
   ws.onmessage = (event) => {
     try {
       const msg = JSON.parse(event.data) as WsMessage;
+      // Control frames from the subscribe handshake are not app events.
+      if (msg.type === "subscribed") return;
+      if (msg.type === "error") {
+        // A rejected subscription will not start working on its own, so stop
+        // the reconnect loop from hammering the server with the same refusal.
+        currentWorkspaceId = null;
+        ws?.close();
+        return;
+      }
       Array.from(handlers).forEach((handler) => {
         handler(msg);
       });

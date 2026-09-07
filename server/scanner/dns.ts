@@ -31,16 +31,50 @@ const fastResolver = makeResolver(2500, 2);
 // where completeness matters more than raw speed.
 const recordResolver = makeResolver(5000, 2);
 
-export async function resolveDNS(hostname: string): Promise<{ ips: string[]; cnames: string[] }> {
-  const result = { ips: [] as string[], cnames: [] as string[] };
-  // Resolve A and CNAME concurrently — they are independent, so serializing
-  // them doubled per-host latency across the whole wordlist.
-  const [a, c] = await Promise.allSettled([
+export interface ResolvedHost {
+  /** IPv4 addresses. */
+  ips: string[];
+  /** IPv6 addresses. A host may have these and no A record at all. */
+  ipv6: string[];
+  cnames: string[];
+  /**
+   * Whether the name exists. Computed HERE rather than by each caller.
+   *
+   * Six call sites open-coded `ips.length === 0 && cnames.length === 0`, so
+   * adding IPv6 meant six chances to forget one — and a caller added later would
+   * inherit the old, IPv4-only meaning of "live" by default.
+   */
+  resolved: boolean;
+}
+
+/**
+ * Resolves a hostname across A, AAAA and CNAME.
+ *
+ * **AAAA was missing.** This function backs every discovery path — the wordlist
+ * bruteforce, permutation, and certificate-SAN validation — and it asked only
+ * for A and CNAME. A host published solely on IPv6 therefore resolved to nothing
+ * and was discarded as non-existent, so an entire class of asset (increasingly
+ * ordinary: cloud load balancers, modern ingress, v6-only estates) was invisible
+ * to discovery.
+ *
+ * The inconsistency was visible inside this codebase: `isPrivateHost` checks
+ * both A and AAAA precisely because ignoring AAAA there was a security hole,
+ * while discovery ignored it and silently lost assets.
+ *
+ * All three queries run concurrently, so this costs one more DNS query per host
+ * but no additional latency.
+ */
+export async function resolveDNS(hostname: string): Promise<ResolvedHost> {
+  const result: ResolvedHost = { ips: [], ipv6: [], cnames: [], resolved: false };
+  const [a, aaaa, c] = await Promise.allSettled([
     fastResolver.resolve4(hostname),
+    fastResolver.resolve6(hostname),
     fastResolver.resolveCname(hostname),
   ]);
   if (a.status === "fulfilled") result.ips = a.value;
+  if (aaaa.status === "fulfilled") result.ipv6 = aaaa.value;
   if (c.status === "fulfilled") result.cnames = c.value;
+  result.resolved = result.ips.length > 0 || result.ipv6.length > 0 || result.cnames.length > 0;
   // Non-existent names are the overwhelmingly common case during bruteforce;
   // logging each failure floods the logs and adds no signal, so stay silent.
   return result;

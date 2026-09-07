@@ -1,6 +1,8 @@
 import { Router } from "express";
+import { selectReportFindings } from "../report-scope";
+import { parsePagination } from "./response";
 import { z } from "zod";
-import { storage } from "../storage";
+import { storage, FULL_SET_LIMIT } from "../storage";
 import { createLogger } from "../logger";
 import { requireWorkspaceRole } from "./auth-middleware";
 import { createReportSchema } from "./schemas";
@@ -15,8 +17,7 @@ const wsWrite = requireWorkspaceRole("owner", "admin", "analyst");
 
 reportsRouter.get("/workspaces/:workspaceId/reports", wsAuth, async (req, res) => {
   try {
-    const limit = Math.min(parseInt(String(req.query.limit ?? "500"), 10) || 500, 5000);
-    const offset = Math.max(parseInt(String(req.query.offset ?? "0"), 10) || 0, 0);
+    const { limit, offset } = parsePagination(req.query, { defaultLimit: 500, maxLimit: 5000 });
     const result = await storage.getReports(req.params.workspaceId as string, { limit, offset });
     res.json(result);
   } catch (err) { res.status(500).json({ message: "Internal server error" }); }
@@ -73,13 +74,11 @@ reportsRouter.get("/workspaces/:workspaceId/reports/:reportId/export", wsAuth, a
     if (report.workspaceId !== workspaceId) return res.status(404).json({ message: "Report not found" });
     if (report.status !== "completed") return res.status(400).json({ message: "Report not yet completed" });
 
-    const { data: allFindings } = await storage.getFindings(workspaceId);
+    const { data: allFindings } = await storage.getFindings(workspaceId, { limit: FULL_SET_LIMIT });
     // An empty/absent findingIds means "all findings" — this mirrors
     // buildReportContent(). Filtering against an empty list here produced an
     // empty findings table in exports while the summary still counted them all.
-    const includeAllFindings = (report.findingIds?.length ?? 0) === 0;
-    const reportFindings = allFindings
-      .filter((f) => includeAllFindings || report.findingIds!.includes(f.id))
+    const reportFindings = selectReportFindings(allFindings, report.findingIds)
       .map((f) => ({
         id: f.id,
         title: f.title,

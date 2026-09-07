@@ -6,6 +6,8 @@
  */
 
 import { createLogger } from "../logger";
+import { analyzeCsp, buildCspFinding } from "./csp-analysis.js";
+import { looksLikeDirectoryListing } from "./body-signatures.js";
 import { stealthFetch } from "./stealth.js";
 
 const log = createLogger("dast-lite");
@@ -63,6 +65,31 @@ async function checkSecurityHeaders(domain: string): Promise<DASTFinding[]> {
     referrerPolicy: !!res.headers.get("referrer-policy"),
     permissionsPolicy: !!res.headers.get("permissions-policy"),
   };
+
+  /*
+   * A CSP that EXISTS is not a CSP that protects. The presence bit above let
+   * `script-src * 'unsafe-inline' 'unsafe-eval'` pass as configured — see
+   * csp-analysis.ts, including the three nuances (nonce disables unsafe-inline,
+   * strict-dynamic disables host allowlists, report-only enforces nothing) that
+   * make naive CSP checks fire on correctly configured policies.
+   */
+  const cspHeader = res.headers.get("content-security-policy");
+  const cspReportOnly = res.headers.get("content-security-policy-report-only");
+  if (cspHeader || cspReportOnly) {
+    const analysis = analyzeCsp(cspHeader, cspReportOnly);
+    const cspFinding = buildCspFinding(domain, url, cspHeader ?? cspReportOnly ?? "", analysis);
+    if (cspFinding) {
+      findings.push({
+        title: cspFinding.title,
+        description: cspFinding.description,
+        severity: cspFinding.severity,
+        category: cspFinding.category,
+        affectedAsset: cspFinding.affectedAsset,
+        remediation: cspFinding.remediation,
+        evidence: [cspFinding.evidence],
+      });
+    }
+  }
 
   if (!headers.contentSecurityPolicy) {
     findings.push({
@@ -180,7 +207,32 @@ async function checkCORSMisconfiguration(domain: string): Promise<DASTFinding[]>
   return findings;
 }
 
-async function checkXSSReflection(domain: string): Promise<DASTFinding[]> {
+/** A crawled endpoint and the parameters it accepts. */
+export interface InjectionTarget {
+  /** Path only — the domain is added by the check. */
+  path: string;
+  params: string[];
+}
+
+/**
+ * Where to inject, most likely to matter first.
+ *
+ * The old list was five hardcoded guesses (`/?q=`, `/search?query=`, …). An
+ * application whose search parameter is `keyword` was never tested at all,
+ * while five requests were spent on paths it does not serve. Crawled parameters
+ * go first; the guesses remain as the fallback for a site the crawler could not
+ * reach, so behaviour never gets worse than it was.
+ */
+export function buildInjectionTargets(targets: InjectionTarget[], payload: string): string[] {
+  const encoded = encodeURIComponent(payload);
+  const fromCrawl = targets.flatMap((t) => t.params.map((p) => `${t.path}?${p}=${encoded}`));
+  const fallback = ["/?q=", "/search?query=", "/?search=", "/?s=", "/?name="].map((p) => `${p}${encoded}`);
+  // Cap the budget: an application with 200 parameters would otherwise turn one
+  // check into 200 requests against a live target.
+  return Array.from(new Set([...fromCrawl, ...fallback])).slice(0, 15);
+}
+
+async function checkXSSReflection(domain: string, targets: InjectionTarget[]): Promise<DASTFinding[]> {
   const findings: DASTFinding[] = [];
   // Inject an HTML-breaking payload and require it to reflect RAW (unencoded)
   // on a 2xx page. Merely finding the canary text somewhere (e.g. HTML-encoded,
@@ -189,9 +241,10 @@ async function checkXSSReflection(domain: string): Promise<DASTFinding[]> {
   const marker = `xqz${Date.now().toString(36)}`;
   const rawPayload = `"><b>${marker}</b>`;
   const rawNeedle = `<b>${marker}</b>`;
-  const testPaths = ["/?q=", "/search?query=", "/?search=", "/?s=", "/?name="].map(
-    (p) => `${p}${encodeURIComponent(rawPayload)}`,
-  );
+  // Real parameters found by crawling come first; the guess list is only the
+  // fallback for a site the crawler could not reach. Probing `/?q=` on an
+  // application whose search parameter is `keyword` tests nothing.
+  const testPaths = buildInjectionTargets(targets, rawPayload);
 
   for (const path of testPaths) {
     const url = `https://${domain}${path}`;
@@ -223,15 +276,22 @@ async function checkXSSReflection(domain: string): Promise<DASTFinding[]> {
   return findings;
 }
 
-async function checkOpenRedirect(domain: string): Promise<DASTFinding[]> {
+async function checkOpenRedirect(domain: string, targets: InjectionTarget[]): Promise<DASTFinding[]> {
   const findings: DASTFinding[] = [];
   const evilTarget = "https://evil.attacker.com";
-  const testPaths = [
+  // Crawled parameters whose NAME suggests a redirect target, plus the standard
+  // guesses. A redirect parameter the application actually has beats four it
+  // does not.
+  const crawled = targets
+    .flatMap((t) => t.params.filter((p) => /^(?:url|next|to|return|return_?url|redirect|redirect_?uri|dest|destination|continue|callback|goto|target)$/i.test(p))
+      .map((p) => `${t.path}?${p}=${encodeURIComponent(evilTarget)}`));
+  const testPaths = Array.from(new Set([
+    ...crawled,
     `/redirect?url=${encodeURIComponent(evilTarget)}`,
     `/login?next=${encodeURIComponent(evilTarget)}`,
     `/goto?to=${encodeURIComponent(evilTarget)}`,
     `/?return_url=${encodeURIComponent(evilTarget)}`,
-  ];
+  ])).slice(0, 12);
 
   for (const path of testPaths) {
     const url = `https://${domain}${path}`;
@@ -279,8 +339,11 @@ async function checkHTTPMethods(domain: string): Promise<DASTFinding[]> {
       confirmed = true;
       signal = `status ${res.status} (${method} processed)`;
     } else if (new RegExp(`\\b${method}\\b`, "i").test(allow)) {
+      // Advertised, not exercised. The scanner will not issue a real PUT or
+      // DELETE against a target to prove the point, so the claim has to stay
+      // "the server says it accepts this", not "the server processed it".
       confirmed = true;
-      signal = `Allow: ${allow}`;
+      signal = `advertised in Allow: ${allow}`;
     } else if (method === "TRACE") {
       let body = "";
       try { body = await res.text(); } catch { /* ignore */ }
@@ -292,7 +355,7 @@ async function checkHTTPMethods(domain: string): Promise<DASTFinding[]> {
     if (confirmed) {
       findings.push({
         title: `Dangerous HTTP Method Enabled: ${method}`,
-        description: `The server honors ${method} requests (${signal}), indicating the method is genuinely enabled.`,
+        description: `The server reports that ${method} is enabled (${signal}).`,
         severity: method === "TRACE" ? "medium" : "low",
         category: "http_methods",
         affectedAsset: domain,
@@ -380,6 +443,17 @@ export async function checkCookieSecurity(domain: string): Promise<DASTFinding[]
   ];
 }
 
+/**
+ * Directories whose listing actually matters.
+ *
+ * `/css/`, `/js/`, `/static/`, `/images/` and `/assets/` hold files the site
+ * already serves to every visitor by name — an index of them discloses nothing
+ * an attacker could not enumerate from the page source. `/backup/`, `/uploads/`
+ * and `/temp/` are where files land that nobody meant to publish, so the same
+ * misconfiguration is a genuinely different risk there.
+ */
+const SENSITIVE_LISTING_DIRS = new Set(["/uploads/", "/backup/", "/temp/"]);
+
 async function checkDirectoryListing(domain: string): Promise<DASTFinding[]> {
   const findings: DASTFinding[] = [];
   const testPaths = ["/images/", "/assets/", "/uploads/", "/static/", "/css/", "/js/", "/backup/", "/temp/"];
@@ -390,17 +464,22 @@ async function checkDirectoryListing(domain: string): Promise<DASTFinding[]> {
     if (!res || res.status !== 200) continue;
     try {
       const body = await res.text();
-      if (body.includes("Index of") || body.includes("Directory listing") || body.includes("<pre>") && body.includes("Parent Directory")) {
-        findings.push({
-          title: `Directory Listing Enabled: ${path}`,
-          description: `Directory listing is enabled at ${path}, exposing file structure and potentially sensitive files.`,
-          severity: "medium",
-          category: "information_disclosure",
-          affectedAsset: domain,
-          evidence: [{ path, url, indicator: "Directory listing detected" }],
-          remediation: "Disable directory listing in the web server configuration.",
-        });
-      }
+      // Shared signature: requires the index furniture (a parent link, sortable
+      // column headers, the server's own index markup) — not just the phrase
+      // "Index of", which appears in plenty of ordinary page copy.
+      if (!looksLikeDirectoryListing(body)) continue;
+      const sensitive = SENSITIVE_LISTING_DIRS.has(path);
+      findings.push({
+        title: `Directory Listing Enabled: ${path}`,
+        description: sensitive
+          ? `Directory listing is enabled at ${path}. This directory holds uploaded, temporary, or backup files that were not necessarily meant to be published, and anyone can now enumerate them.`
+          : `Directory listing is enabled at ${path}. This directory holds static assets the site already serves publicly, so the disclosure is limited to the file inventory itself.`,
+        severity: sensitive ? "medium" : "low",
+        category: "information_disclosure",
+        affectedAsset: domain,
+        evidence: [{ path, url, indicator: "Server-generated directory index confirmed", snippet: body.slice(0, 400) }],
+        remediation: "Disable directory listing in the web server configuration (Apache: `Options -Indexes`; nginx: `autoindex off`).",
+      });
     } catch {
       // body read failure
     }
@@ -415,9 +494,10 @@ async function checkDirectoryListing(domain: string): Promise<DASTFinding[]> {
 export async function runDASTScan(
   domain: string,
   signal?: AbortSignal,
+  injectionTargets: InjectionTarget[] = [],
 ): Promise<DASTResults> {
   const startTime = Date.now();
-  log.info({ domain }, "Starting DAST-Lite scan");
+  log.info({ domain, crawledTargets: injectionTargets.length }, "Starting DAST-Lite scan");
 
   const allFindings: DASTFinding[] = [];
   let testsRun = 0;
@@ -426,8 +506,8 @@ export async function runDASTScan(
   const checks = [
     { name: "Security Headers", fn: () => checkSecurityHeaders(domain) },
     { name: "CORS Misconfiguration", fn: () => checkCORSMisconfiguration(domain) },
-    { name: "XSS Reflection", fn: () => checkXSSReflection(domain) },
-    { name: "Open Redirect", fn: () => checkOpenRedirect(domain) },
+    { name: "XSS Reflection", fn: () => checkXSSReflection(domain, injectionTargets) },
+    { name: "Open Redirect", fn: () => checkOpenRedirect(domain, injectionTargets) },
     { name: "HTTP Methods", fn: () => checkHTTPMethods(domain) },
     { name: "Cookie Security", fn: () => checkCookieSecurity(domain) },
     { name: "Directory Listing", fn: () => checkDirectoryListing(domain) },

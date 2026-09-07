@@ -38,6 +38,7 @@ import {
   Clock,
 } from "lucide-react";
 import type { Scan, Finding } from "@shared/schema";
+import { usePagedList, ListPager } from "@/components/list-pager";
 import { ScanStatusBadge, SeverityBadge } from "@/components/severity-badge";
 import { DeleteScanButton } from "@/components/delete-scan-button";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -226,6 +227,7 @@ export default function OSINT() {
 
   const osintScans = scans.filter((s) => s.type === "osint" || s.type === "full");
   const osintFindings = findings.filter((f) => f.category === "osint_exposure" || f.category === "data_leak" || f.category === "leaked_credential" || f.category === "infrastructure_disclosure");
+  const pagedOsint = usePagedList(osintFindings, null);
 
   if (loadingScans || loadingFindings) {
     return (
@@ -276,7 +278,7 @@ export default function OSINT() {
                       <>
                         <p className="text-lg font-semibold mt-2">{count}</p>
                         {count === 0 && osintScans.length > 0 && (
-                          <p className="text-[10px] text-muted-foreground/60 leading-tight mt-0.5">No exposures found — target appears well-configured</p>
+                          <p className="text-[10px] text-muted-foreground leading-tight mt-0.5">No exposures found — target appears well-configured</p>
                         )}
                       </>
                     );
@@ -332,7 +334,7 @@ export default function OSINT() {
                         </div>
                         {isRunning && (s.progressMessage || (s.progressPercent ?? 0) > 0) && (
                           <div className="mt-2 space-y-1">
-                            <Progress value={s.progressPercent ?? 0} className="h-1.5" />
+                            <Progress value={s.progressPercent ?? 0} className="h-1.5" aria-label={`Scan progress for ${scan.target}: ${s.progressPercent ?? 0} percent`} />
                             <p className="text-xs text-muted-foreground truncate">{s.progressMessage}</p>
                             {s.estimatedSecondsRemaining != null && s.estimatedSecondsRemaining > 0 && (
                               <p className="text-xs text-muted-foreground flex items-center gap-1">
@@ -396,7 +398,7 @@ export default function OSINT() {
             </Card>
           ) : (
             <div className="space-y-3">
-              {osintFindings.map((finding) => (
+              {pagedOsint.items.map((finding) => (
                 <Card key={finding.id} data-testid={`card-osint-finding-${finding.id}`}>
                   <CardContent className="p-4">
                     <div className="flex items-start justify-between gap-4">
@@ -417,6 +419,7 @@ export default function OSINT() {
                   </CardContent>
                 </Card>
               ))}
+              <ListPager paged={pagedOsint} label="findings" />
             </div>
           )}
         </TabsContent>

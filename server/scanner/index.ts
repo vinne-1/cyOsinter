@@ -7,7 +7,7 @@ export { classifyPathResponse, validatePathResponse, detectTechStack, scanOpenPo
 export { resolveDNS, getDNSTxtRecords, getMXRecords, getNSRecords, getFullDNSRecords, extractCloudProvidersFromSPF, extractEmailsFromDNS } from "./dns.js";
 
 // HTTP helpers
-export { fetchJSON, fetchText, httpHead, httpGet, httpGetNoRedirect, getRedirectChain, httpGetMainPage, parseSetCookie, parseSecurityTxt, parseSitemapUrls, fetchSitemapUrls } from "./http.js";
+export { fetchJSON, fetchText, httpHead, httpGet, httpRequest, httpGetNoRedirect, getRedirectChain, httpGetMainPage, parseSetCookie, parseSecurityTxt, parseSitemapUrls, fetchSitemapUrls } from "./http.js";
 
 // TLS helpers
 export { getCertificateInfo } from "./tls.js";
@@ -51,7 +51,20 @@ export { scanSecrets } from "./secret-scanner.js";
 export type { SecretMatch, SecretScanResults } from "./secret-scanner.js";
 
 // Phase 4: DAST-Lite
-export { runDASTScan } from "./dast-lite.js";
+export { runDASTScan, buildInjectionTargets } from "./dast-lite.js";
+export type { InjectionTarget } from "./dast-lite.js";
+
+// Enriched host fingerprinting (httpx when installed, native otherwise).
+export { probeHosts, extractTitle, findHttpx } from "./http-probe.js";
+export type { HostProbe, ProbeOptions } from "./http-probe.js";
+
+// Site crawler — the endpoint inventory the active tests are aimed at.
+export { crawlSite, isInScope, endpointShape, testableParams, extractLinks, extractForms, findKatana } from "./crawler.js";
+export type { CrawlResult, CrawledUrl, CrawledForm, CrawlOptions } from "./crawler.js";
+
+// ASN / BGP routed footprint.
+export { runAsnExpansion, attributeAsn, looksLikeSharedInfrastructure, addressesInPrefix } from "./asn-expansion.js";
+export type { AsnExpansionResult, AsnRecord, AsnPrefix } from "./asn-expansion.js";
 export type { DASTFinding, DASTResults } from "./dast-lite.js";
 
 // Phase 3: Advanced scanners
@@ -63,6 +76,11 @@ export { runContainerDetection } from "./container-detection.js";
 export type { ContainerDetectionResults } from "./container-detection.js";
 export { runWAFBypassTest } from "./waf-bypass.js";
 export type { WAFBypassResults } from "./waf-bypass.js";
+
+// Tor-aware HTTP client and dark web monitoring
+export { torFetch, torFetchJson, torFetchText, isTorAvailable, getTorAgent, __resetTorAgent, TOR_PROXY_URL } from "./tor-fetch.js";
+export { monitorDarkWeb, __resetDarkWebCache } from "./dark-web-monitor.js";
+export type { DarkWebMonitorResult, DarkWebMention, DarkWebLeakDump, DarkWebForumMention } from "./dark-web-monitor.js";
 
 // Main scan orchestrators
 export { runEASMScan } from "./easm-scan.js";

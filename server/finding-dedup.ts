@@ -1,5 +1,6 @@
 import { eq } from "drizzle-orm";
 import { db } from "./db";
+import { isSecurityFinding } from "./scanner/finding-taxonomy.js";
 import { findings, findingGroups } from "@shared/schema";
 import type { FindingGroup } from "@shared/schema";
 import { createLogger } from "./logger";
@@ -75,12 +76,33 @@ export function computeSimilarity(
 
 const SIMILARITY_THRESHOLD = 0.7;
 
+/** Statuses that take a finding out of scope — it is not outstanding work. */
+const CLOSED_STATUSES = new Set(["resolved", "false_positive", "accepted_risk"]);
+
 export async function groupFindings(workspaceId: string): Promise<number> {
   try {
-    const allFindings = await db
+    const everything = await db
       .select()
       .from(findings)
       .where(eq(findings.workspaceId, workspaceId));
+
+    /*
+     * Group OPEN SECURITY findings only.
+     *
+     * Groups are rendered as triage work — a severity badge and an "N
+     * instances" count — so anything clustered here is presented to a reader as
+     * outstanding exposure. Without this filter the sweep grouped every row,
+     * and two live groups mixed kinds: "Strapi API - Detect" claimed 5
+     * instances built from `recon` technology facts AND security findings
+     * together, taking its title and severity from whichever member happened to
+     * come first. The count overstated the work and the title misdescribed it.
+     *
+     * Closed rows are excluded for the same reason: a resolved finding inside
+     * an open group inflates what is left to do.
+     */
+    const allFindings = everything.filter(
+      (f) => isSecurityFinding(f) && !CLOSED_STATUSES.has(f.status ?? "open"),
+    );
 
     if (allFindings.length === 0) {
       return 0;

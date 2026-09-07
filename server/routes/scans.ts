@@ -1,8 +1,9 @@
 import { Router } from "express";
+import { parsePagination, sendError, sendNotFound } from "./response";
 import { z } from "zod";
 import { storage } from "../storage";
 import { createLogger } from "../logger";
-import { triggerScan } from "../scan-trigger";
+import { triggerScan, requestScanCancellation } from "../scan-trigger";
 import { requireWorkspaceRole } from "./auth-middleware";
 import { createScanSchema } from "./schemas";
 
@@ -14,8 +15,7 @@ const wsAuth = requireWorkspaceRole("owner", "admin", "analyst", "viewer");
 
 scansRouter.get("/workspaces/:workspaceId/scans", wsAuth, async (req, res) => {
   try {
-    const limit = Math.min(parseInt(String(req.query.limit ?? "500"), 10) || 500, 5000);
-    const offset = Math.max(parseInt(String(req.query.offset ?? "0"), 10) || 0, 0);
+    const { limit, offset } = parsePagination(req.query, { defaultLimit: 500, maxLimit: 5000 });
     const result = await storage.getScans(req.params.workspaceId as string, { limit, offset });
     res.json(result);
   } catch (err) {
@@ -68,6 +68,30 @@ scansRouter.post("/scans", async (req, res) => {
         scanType = profile.scanType as typeof scanType;
         scanMode = profile.mode as typeof scanMode;
       }
+    } else if (!parsed.mode && parsed.workspaceId) {
+      /*
+       * No profile named and no mode chosen: fall back to the workspace's
+       * DEFAULT profile.
+       *
+       * `scan_profiles.isDefault` was validated on write, stored, and rendered
+       * as a star on the profile card — and read by nothing. Starting a scan
+       * never consulted it, so an operator who marked a "safe / low-and-slow"
+       * profile as their default got `standard` anyway, and the star was a
+       * promise the product did not keep. Same defect as `api_keys.scope`:
+       * configured, badged, enforced nowhere.
+       *
+       * Precedence is deliberate. An explicit `profileId` wins, then an
+       * explicit `mode` from a UI that offers the choice, and only then the
+       * configured default — otherwise the default would silently override a
+       * user who just picked something else in the dialog.
+       */
+      const profiles = await storage.getScanProfiles(parsed.workspaceId);
+      const fallback = profiles.find((p) => p.isDefault);
+      // Only the MODE is inherited. `type` is required by the schema, so the
+      // caller has always chosen one — a `if (!parsed.type)` guard here could
+      // never fire, and shipping a branch that cannot run is how dead code
+      // starts looking like behaviour.
+      if (fallback) scanMode = fallback.mode as typeof scanMode;
     }
 
     if (!workspaceId) {
@@ -104,7 +128,9 @@ scansRouter.post("/scans", async (req, res) => {
       });
     }
 
-    const scanId = await triggerScan(parsed.target, scanType, workspaceId, scanMode);
+    const scanId = await triggerScan(parsed.target, scanType, workspaceId, scanMode, {
+      autoGenerateReport: parsed.autoGenerateReport ?? false,
+    });
     const scan = await storage.getScan(scanId);
 
     res.status(201).json({ ...scan, workspaceId });
@@ -113,5 +139,62 @@ scansRouter.post("/scans", async (req, res) => {
       return res.status(400).json({ message: error.errors[0]?.message || "Validation error" });
     }
     res.status(400).json({ message: "Bad request" });
+  }
+});
+
+/**
+ * POST /api/scans/:id/cancel — stop a running scan.
+ *
+ * The scanner was already threaded for this end to end (`checkAborted` between
+ * phases, `signal` into every `runWithConcurrency`), but the signal was
+ * hardcoded `undefined` and nothing ever asked to cancel — so a Gold scan aimed
+ * at the wrong domain ran its full thirty-plus minutes with no way to stop the
+ * outbound traffic.
+ *
+ * A bare-ID route: the path has no `:workspaceId`, so membership is proven here.
+ */
+scansRouter.post("/scans/:id/cancel", async (req, res) => {
+  try {
+    const scan = await storage.getScan(req.params.id as string);
+    // 404 rather than 403 for a non-member, so the reply does not confirm the
+    // scan id belongs to somebody.
+    if (!scan) return sendNotFound(res, "Scan");
+    if (req.user!.role !== "superadmin") {
+      const membership = await storage.getWorkspaceMember(scan.workspaceId, req.user!.id);
+      // Viewers may watch a scan but not stop one.
+      if (!membership) return sendNotFound(res, "Scan");
+      if (!["owner", "admin", "analyst"].includes(membership.role)) {
+        return sendError(res, 403, "Insufficient workspace permissions");
+      }
+    }
+
+    if (scan.status !== "running" && scan.status !== "pending") {
+      return sendError(res, 409, `Scan is already ${scan.status}`);
+    }
+
+    const stopped = requestScanCancellation(scan.id);
+    if (!stopped) {
+      // Queued but not yet executing, or running on another instance. Marking
+      // the row is still correct: the queue skips a cancelled scan, and an
+      // operator gets the outcome they asked for rather than silence.
+      await storage.updateScan(scan.id, {
+        status: "cancelled",
+        completedAt: new Date(),
+        errorMessage: "Scan was cancelled.",
+        progressMessage: null,
+        progressPercent: null,
+        currentStep: null,
+        estimatedSecondsRemaining: null,
+      });
+      routeLog.info({ scanId: scan.id }, "scan cancelled before it began executing here");
+      return res.json({ cancelled: true, wasRunning: false });
+    }
+
+    // The scan's own error path writes the final row once the abort unwinds, so
+    // the status is not set twice from two places.
+    res.json({ cancelled: true, wasRunning: true });
+  } catch (err) {
+    routeLog.error({ err }, "Scan cancellation failed");
+    sendError(res, 500, "Internal server error");
   }
 });

@@ -1,5 +1,13 @@
 import { storage } from "./storage";
+import { selectReportFindings } from "./report-scope.js";
 import type { ReportDocxInput, ReportFinding } from "./report-docx";
+import {
+  computeFactorScores,
+  analyseScoreCeiling,
+  assessedCategoriesFromModules,
+  type FactorInput,
+} from "@shared/risk-factors";
+import { computeSecurityScore } from "@shared/scoring";
 import type { DnssecStatus } from "./scanner/dnssec.js";
 
 /**
@@ -30,12 +38,43 @@ function firstEvidenceUrl(evidence: unknown, domain: string): string | undefined
   return undefined;
 }
 
+function isVerificationItem(e: unknown): boolean {
+  return !!e && typeof e === "object" && (e as Record<string, unknown>).type === "verification";
+}
+
+/**
+ * Evidence text, EXCLUDING the verification stamp.
+ *
+ * The stamp is pulled out and rendered under its own heading instead. Left in
+ * the general blob it read as one more anonymous snippet, so the strongest
+ * claim the report makes — that a live probe reproduced this finding, and when —
+ * was the least visible thing on the page.
+ */
 function evidenceToText(evidence: unknown): string | undefined {
   if (!Array.isArray(evidence)) return undefined;
   const lines = evidence
+    .filter((e) => !isVerificationItem(e))
     .map((e) => (e && typeof e === "object" ? (e as Record<string, unknown>).snippet ?? (e as Record<string, unknown>).description : undefined))
     .filter((x): x is string => typeof x === "string" && x.length > 0);
   return lines.length ? lines.join("\n") : undefined;
+}
+
+/**
+ * The finding's live re-verification record, if the gate left one.
+ *
+ * This is what makes a finding defensible to the reader's own engineer: it says
+ * the evidence was reproduced, by what, and at what time — so a disputed finding
+ * can be re-run rather than argued about.
+ */
+function verificationOf(evidence: unknown): ReportFinding["verification"] {
+  if (!Array.isArray(evidence)) return undefined;
+  const item = evidence.find(isVerificationItem) as Record<string, unknown> | undefined;
+  if (!item) return undefined;
+  const status = typeof item.verificationStatus === "string" ? item.verificationStatus : undefined;
+  const detail = typeof item.snippet === "string" ? item.snippet : undefined;
+  const checkedAt = typeof item.verifiedAt === "string" ? item.verifiedAt : undefined;
+  if (!status && !detail) return undefined;
+  return { status: status ?? "unknown", detail, checkedAt };
 }
 
 export async function buildDocxInput(
@@ -62,8 +101,20 @@ export async function buildDocxInput(
   const { data: modules } = await storage.getReconModules(workspaceId, { limit: 200, offset: 0 });
   const mods = modules as unknown as ReconModuleLike[];
 
-  const includeAll = (opts.findingIds?.length ?? 0) === 0;
-  const selected = allFindings.filter((f) => includeAll || opts.findingIds!.includes(f.id));
+  /*
+   * The register is SECURITY findings — the same rule `buildReportContent`
+   * applies, and it has to be repeated here because the DOCX is built from its
+   * own input assembler rather than sharing that path.
+   *
+   * Without it the client's Findings Register opened with "DNSSEC Detection"
+   * and "security.txt File" — controls that are WORKING — followed by
+   * "Apache Detection" and "robots.txt file", which are technology facts. One
+   * workspace's register listed 14 rows where the security work was 4, and the
+   * first thing the reader saw was a control being reported as a problem.
+   *
+   * An explicit `findingIds` selection is still honoured exactly as given.
+   */
+  const selected = selectReportFindings(allFindings, opts.findingIds);
 
   // ── Recon mapping ──
   const attack = moduleData(mods, "attack_surface");
@@ -171,11 +222,36 @@ export async function buildDocxInput(
     cvssScore: f.cvssScore ?? undefined,
     remediation: f.remediation ?? undefined,
     evidenceText: evidenceToText(f.evidence),
+    verification: verificationOf(f.evidence),
     evidenceImageKey: images[f.id] ? f.id : undefined,
   }));
 
+  // ── Security rating ──
+  //
+  // Derived from the SAME findings the report presents, so a reader can
+  // reconcile the grade against the register rather than taking it on trust.
+  // `assessedCategories` comes from the recon modules that actually ran: it is
+  // what separates a factor found clean from one nothing ever looked at, and
+  // without it every unexamined area would be awarded a perfect score.
+  const rating = (() => {
+    const inputs = selected.map((f) => ({
+      id: f.id,
+      severity: f.severity,
+      status: f.status,
+      kind: (f as { kind?: string | null }).kind,
+      category: f.category,
+    })) as unknown as FactorInput[];
+
+    return {
+      overall: computeSecurityScore(inputs),
+      factors: computeFactorScores(inputs, assessedCategoriesFromModules(mods.map((m) => m.moduleType))),
+      ceiling: analyseScoreCeiling(inputs),
+    };
+  })();
+
   return {
     target,
+    rating,
     org: ws?.name ?? target,
     ipAddress: ips[0],
     generatedAt: new Date().toISOString(),

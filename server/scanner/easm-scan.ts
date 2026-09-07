@@ -19,9 +19,16 @@ import { resolveProfile } from "./stealth.js";
 import { runPortScan } from "./port-scan.js";
 import { runCloudDiscovery } from "./cloud-discovery.js";
 import { runContainerDetection } from "./container-detection.js";
+import { buildPerAssetFindings } from "./per-asset-findings.js";
+import { findVulnerableLibraries, buildLibraryFindings } from "./js-library-cves.js";
+import { generatePermutations } from "./permutation.js";
+import { inScopeSans } from "./tls.js";
+import { fetchFaviconHash, clusterByFavicon } from "./favicon.js";
 import { runWAFBypassTest } from "./waf-bypass.js";
-import { fetchSubdomainsFromFreeSources, fetchWaybackUrls, reverseDnsLookup, reverseIpLookup } from "./passive-sources.js";
+import { fetchSubdomainsFromFreeSources, fetchWaybackUrls, reverseDnsLookup, reverseIpLookup, confidenceFromSources, type PassiveDiscovery } from "./passive-sources.js";
 import { assessServiceExposure } from "./service-exposure.js";
+import { probeHosts } from "./http-probe.js";
+import { runAsnExpansion } from "./asn-expansion.js";
 
 /** CVSS score by severity band for findings produced by advanced sub-modules. */
 const SEVERITY_CVSS: Record<string, string> = { critical: "9.1", high: "7.5", medium: "5.3", low: "3.1", info: "0.0" };
@@ -36,16 +43,30 @@ function toVerifiedFinding(
 
 const log = createLogger("scanner");
 
+/** Shape-compatible empty result for the passive-discovery catch path. */
+function emptyPassiveDiscovery(): PassiveDiscovery {
+  return { subdomains: [], bySource: {}, provenance: {}, sourcesFailed: [] };
+}
+
+/**
+ * Detects a wildcard record by asking for a name that cannot exist.
+ *
+ * Covers AAAA as well as A. Once discovery started accepting IPv6-only hosts, an
+ * IPv4-only wildcard check became a hole in the other direction: a zone whose
+ * wildcard answers AAAA would have every generated permutation "resolve" on
+ * IPv6 and pass the filter, which is precisely the flood the filter exists to
+ * prevent.
+ */
 async function checkDNSWildcard(domain: string): Promise<{ isWildcard: boolean; wildcardIPs: Set<string> }> {
   const random = Math.random().toString(36).slice(2, 12);
   const testHost = `nxdomain-${random}.${domain}`;
-  try {
-    const ips = await dns.resolve4(testHost);
-    if (ips.length > 0) {
-      return { isWildcard: true, wildcardIPs: new Set(ips) };
-    }
-  } catch {
-    // NXDOMAIN or DNS error = no wildcard
+  const [v4, v6] = await Promise.allSettled([dns.resolve4(testHost), dns.resolve6(testHost)]);
+  const addrs = [
+    ...(v4.status === "fulfilled" ? v4.value : []),
+    ...(v6.status === "fulfilled" ? v6.value : []),
+  ];
+  if (addrs.length > 0) {
+    return { isWildcard: true, wildcardIPs: new Set(addrs) };
   }
   return { isWildcard: false, wildcardIPs: new Set() };
 }
@@ -57,7 +78,7 @@ async function enumerateSubdomainsBruteforce(
   signal?: AbortSignal,
   excludeIPs?: Set<string>,
   onProgress?: (completed: number, total: number) => void,
-): Promise<{ resolved: string[]; tried: number; wildcardDetected: boolean }> {
+): Promise<{ resolved: string[]; tried: number; wildcardDetected: boolean; wildcardIPs: Set<string> }> {
   const { isWildcard, wildcardIPs } = excludeIPs
     ? { isWildcard: excludeIPs.size > 0, wildcardIPs: excludeIPs }
     : await checkDNSWildcard(domain);
@@ -77,8 +98,12 @@ async function enumerateSubdomainsBruteforce(
     concurrency,
     async (hostname) => {
       const d = await resolveDNS(hostname);
-      if (d.ips.length === 0 && d.cnames.length === 0) return null;
-      if (isWildcard && d.ips.length > 0 && d.ips.every((ip) => wildcardIPs.has(ip))) return null;
+      if (!d.resolved) return null;
+      // Every address it has is one the wildcard hands out ⇒ it is the wildcard
+      // answering, not a host. Checked across both families, since a host with a
+      // unique AAAA is a real host even if its A is the wildcard's.
+      const addrs = [...d.ips, ...d.ipv6];
+      if (isWildcard && addrs.length > 0 && d.cnames.length === 0 && addrs.every((ip) => wildcardIPs.has(ip))) return null;
       return hostname;
     },
     signal,
@@ -87,7 +112,7 @@ async function enumerateSubdomainsBruteforce(
   for (const r of results) {
     if (r) resolved.push(r);
   }
-  return { resolved: Array.from(new Set(resolved)).sort(), tried: toTry.length, wildcardDetected: isWildcard };
+  return { resolved: Array.from(new Set(resolved)).sort(), tried: toTry.length, wildcardDetected: isWildcard, wildcardIPs };
 }
 
 async function enumerateSubdomainsCrtSh(domain: string): Promise<string[]> {
@@ -130,6 +155,11 @@ export async function runEASMScan(domain: string, onProgress?: ScanProgressCallb
     if (onProgress) void Promise.resolve(onProgress(msg, pct, step, eta)).catch(() => {});
   };
 
+  // Baseline for change detection. Absent means "no baseline", not "empty".
+  const knownHostSet = options?.knownHosts
+    ? new Set(options.knownHosts.map((h) => h.toLowerCase()))
+    : null;
+
   const subdomainCap = gold ? GOLD_SUBDOMAIN_WORDLIST_CAP : STANDARD_SUBDOMAIN_WORDLIST_CAP;
   const probeBatchSize = gold ? GOLD_PROBE_BATCH : STANDARD_PROBE_BATCH;
   const certCheckLimit = gold ? GOLD_SUBDOMAIN_CERT_CHECK : STANDARD_SUBDOMAIN_CERT_CHECK;
@@ -150,7 +180,7 @@ export async function runEASMScan(domain: string, onProgress?: ScanProgressCallb
     getNSRecords(domain),
     enumerateSubdomainsBruteforce(domain, subdomainCap === 0 ? 99999 : subdomainCap, profile.dnsConcurrency, signal, undefined, bruteProgress),
     // Free, keyless passive sources (CT mirrors, passive DNS, archives). Best-effort.
-    fetchSubdomainsFromFreeSources(domain).catch(() => ({ subdomains: [] as string[], bySource: {} as Record<string, number> })),
+    fetchSubdomainsFromFreeSources(domain).catch(() => emptyPassiveDiscovery()),
   ]);
 
   checkAborted(signal);
@@ -158,9 +188,135 @@ export async function runEASMScan(domain: string, onProgress?: ScanProgressCallb
   const combinedSubdomains = Array.from(
     new Set([...crtShSubdomains, ...bruteforceResult.resolved, ...passiveSources.subdomains]),
   ).sort();
+
+  /*
+   * Certificate SANs as a discovery source.
+   *
+   * `getCertificateInfo` has always returned `altNames`, and they were stored
+   * for display and nothing else. A SAN list is the organisation's own statement
+   * about which hostnames it serves — better evidence than a wordlist guess, and
+   * more current than a CT index, because it comes from the live handshake
+   * rather than a log of what was once issued. The certificate was already
+   * fetched, so this is analysis rather than traffic.
+   *
+   * Names are still RESOLVED before being accepted: a certificate routinely
+   * outlives the host it was issued for, and an unresolvable SAN is a
+   * decommissioned name, not an asset.
+   */
+  // Set membership, not `Array.includes`. With the keyed passive sources this
+  // array reaches tens of thousands of entries, and `includes` inside a loop is
+  // O(n²) — 48k hosts against 15k permutation candidates is ~10^8 comparisons.
+  const knownSet = new Set(combinedSubdomains);
+  const sanCandidates = inScopeSans(certInfo?.altNames ?? [], domain)
+    .filter((h) => h !== domain && !knownSet.has(h));
+  let sanFound: string[] = [];
+  if (sanCandidates.length > 0) {
+    const sanResults = await runWithConcurrency(
+      sanCandidates,
+      profile.dnsConcurrency,
+      async (hostname) => {
+        const d = await resolveDNS(hostname);
+        return d.resolved ? hostname : null;
+      },
+      signal,
+    );
+    sanFound = Array.from(new Set(sanResults.filter((h): h is string => Boolean(h)))).sort();
+    if (sanFound.length > 0) {
+      for (const h of sanFound) {
+        if (!knownSet.has(h)) { knownSet.add(h); combinedSubdomains.push(h); }
+      }
+      combinedSubdomains.sort();
+      log.info({ domain, candidates: sanCandidates.length, found: sanFound.length }, "Certificate SAN discovery complete");
+    }
+  }
+
+  /*
+   * Permutation — the only discovery method that learns THIS target's naming
+   * convention rather than guessing from a fixed list.
+   *
+   * crt.sh, the wordlist and the passive indexes can only return a name that
+   * already exists somewhere: in a certificate, in a wordlist, in somebody's
+   * index. A host that was never certificated, never crawled, and is not named
+   * after a common word is invisible to all three. Generating candidates from
+   * the hosts already found closes exactly that blind spot — see permutation.ts.
+   *
+   * Wildcard filtering is not optional here. On a wildcard domain every
+   * generated name resolves, so without the same filter the bruteforce uses this
+   * stage would invent thousands of hosts. It reuses the wildcard IPs that
+   * bruteforce already measured rather than probing for them again.
+   */
+  const permutationCap = gold ? 15000 : 1500;
+  let permutationFound: string[] = [];
+  if (combinedSubdomains.length > 0 && permutationCap > 0) {
+    const candidates = generatePermutations(domain, combinedSubdomains, { maxCandidates: permutationCap });
+    if (candidates.length > 0) {
+      await report(`Permuting ${combinedSubdomains.length} known hosts (${candidates.length} candidates)...`, 14, "enumerate_subdomains", 150);
+      const wildcardIPs = bruteforceResult.wildcardIPs;
+      const permResults = await runWithConcurrency(
+        candidates,
+        profile.dnsConcurrency,
+        async (hostname) => {
+          const d = await resolveDNS(hostname);
+          if (!d.resolved) return null;
+          // Same rule as the wordlist sweep, across both address families.
+          const addrs = [...d.ips, ...d.ipv6];
+          if (wildcardIPs.size > 0 && addrs.length > 0 && d.cnames.length === 0 && addrs.every((ip) => wildcardIPs.has(ip))) return null;
+          return hostname;
+        },
+        signal,
+      );
+      permutationFound = Array.from(new Set(permResults.filter((h): h is string => Boolean(h)))).sort();
+      if (permutationFound.length > 0) {
+        for (const h of permutationFound) {
+          if (!knownSet.has(h)) { knownSet.add(h); combinedSubdomains.push(h); }
+        }
+        combinedSubdomains.sort();
+      }
+      log.info(
+        { domain, candidates: candidates.length, found: permutationFound.length },
+        "Permutation discovery complete",
+      );
+      results.reconData.permutationDiscovery = {
+        candidatesTried: candidates.length,
+        hostsFound: permutationFound.length,
+        // Named so a reader can see which hosts ONLY this method found.
+        hosts: permutationFound,
+      };
+    }
+  }
   results.subdomains = combinedSubdomains;
+
+  // Provenance: which independent sources named each host. Merging the sets and
+  // keeping only a count threw away the strongest free quality signal there is
+  // — whether unrelated indexes agree. A name four sources report is very
+  // likely real; one a single HTML scrape produced may be a parsing artefact.
+  // The two local methods are folded in as sources of their own, and DNS
+  // resolution (added later, once hosts are probed) outranks all of them: an
+  // index can be stale, a live A record cannot.
+  const discoverySources: Record<string, string[]> = {};
+  for (const [host, sources] of Object.entries(passiveSources.provenance)) {
+    discoverySources[host] = [...sources];
+  }
+  for (const host of crtShSubdomains) (discoverySources[host] ??= []).push("crtsh-direct");
+  for (const host of bruteforceResult.resolved) (discoverySources[host] ??= []).push("dns-bruteforce");
+  for (const host of permutationFound) (discoverySources[host] ??= []).push("dns-permutation");
+  for (const host of sanFound) (discoverySources[host] ??= []).push("tls-san");
+  for (const host of Object.keys(discoverySources)) {
+    discoverySources[host] = Array.from(new Set(discoverySources[host])).sort();
+  }
+  results.reconData.discoverySources = discoverySources;
+  results.reconData.discoveryConfidence = Object.fromEntries(
+    Object.entries(discoverySources).map(([host, sources]) => [host, confidenceFromSources(sources)]),
+  );
+
   if (Object.keys(passiveSources.bySource).length > 0) {
     results.reconData.passiveSources = passiveSources.bySource;
+  }
+  if (passiveSources.sourcesFailed.length > 0) {
+    // A source that errored is not a source that found nothing. Recording the
+    // difference keeps "we could not look here" out of "there was nothing here".
+    results.reconData.passiveSourcesFailed = passiveSources.sourcesFailed;
+    log.info({ domain, failed: passiveSources.sourcesFailed }, "some passive discovery sources were unavailable");
   }
   if (bruteforceResult.wildcardDetected) {
     log.info({ domain }, "Wildcard DNS filtering applied — bruteforce results de-duplicated against wildcard IPs");
@@ -177,6 +333,19 @@ export async function runEASMScan(domain: string, onProgress?: ScanProgressCallb
   const subdomainProbes: Array<{ subdomain: string; dns: { ips: string[]; cnames: string[] }; httpResult: any; httpsResult: any }> = [];
 
   const probeBatch = probeBatchSize <= 0 ? combinedSubdomains : combinedSubdomains.slice(0, probeBatchSize);
+  // Truncation is recorded, never silent: a reader has to be able to tell "this
+  // estate has 300 hosts" from "we looked at 5,000 of 48,000".
+  if (probeBatch.length < combinedSubdomains.length) {
+    results.reconData.probeCoverage = {
+      discovered: combinedSubdomains.length,
+      probed: probeBatch.length,
+      truncated: true,
+    };
+    log.warn(
+      { discovered: combinedSubdomains.length, probed: probeBatch.length },
+      "Probe batch truncated — more hosts were discovered than the profile probes",
+    );
+  }
   log.info({ count: probeBatch.length, tried: bruteforceResult.tried, resolved: bruteforceResult.resolved.length }, "Probing subdomains");
 
   const probeResults = await runWithConcurrency(
@@ -186,7 +355,7 @@ export async function runEASMScan(domain: string, onProgress?: ScanProgressCallb
       const subDns = await resolveDNS(sub);
       let httpResult = null;
       let httpsResult = null;
-      if (subDns.ips.length > 0 || subDns.cnames.length > 0) {
+      if (subDns.resolved) {
         [httpsResult, httpResult] = await Promise.all([
           httpHead(`https://${sub}`).catch(() => null),
           httpHead(`http://${sub}`).catch(() => null),
@@ -203,7 +372,7 @@ export async function runEASMScan(domain: string, onProgress?: ScanProgressCallb
     if (r) {
       const probe = r;
       subdomainProbes.push(probe);
-      if (probe.dns.ips.length > 0 || probe.dns.cnames.length > 0) {
+      if (probe.dns.resolved) {
         results.assets.push({
           type: "subdomain",
           value: probe.subdomain,
@@ -241,19 +410,143 @@ export async function runEASMScan(domain: string, onProgress?: ScanProgressCallb
     results.assets.push({ type: "service", value: `${proto}://${live.subdomain}:${port}`, tags: ["auto-discovered"] });
   }
 
+  // Enriched probe: one GET per live host yields what an analyst actually
+  // triages on — title, technologies, status, redirect target — for the same
+  // round trip the old HEAD spent to learn only "something answered".
+  await report(`Fingerprinting ${liveSubdomains.length} live hosts...`, 56, "http_probe", 60);
+  const hostProbes = new Map<string, Awaited<ReturnType<typeof probeHosts>>[number]>();
+  try {
+    const probes = await probeHosts(liveSubdomains.map((p) => p.subdomain), {
+      concurrency: stealth ? profile.dnsConcurrency : 20,
+      signal,
+      checkCleartext: gold,
+      onProgress: (doneCount, total) =>
+        emitProgress(`Fingerprinting live hosts — ${doneCount}/${total}...`, 56 + Math.round((doneCount / Math.max(1, total)) * 4), "http_probe"),
+    });
+    for (const pr of probes) hostProbes.set(pr.host, pr);
+  } catch (err) {
+    log.warn({ err, domain }, "host fingerprinting failed (non-fatal) — liveness data retained");
+  }
+
   results.reconData.discoveredDomains = liveSubdomains.map((p) => {
     const respHeaders = (p.httpsResult?.headers || p.httpResult?.headers || {}) as Record<string, string>;
     const wafInfo = detectWAF(respHeaders);
     const cdnName = detectCDN(respHeaders);
+    const probe = hostProbes.get(p.subdomain);
     return {
       domain: p.subdomain,
       ip: p.dns.ips[0] || p.dns.cnames[0] || "-",
-      cdn: cdnName,
-      waf: wafInfo.detected,
-      wafProvider: wafInfo.provider,
-      newSinceLastRun: false,
+      cdn: probe?.cdn ?? cdnName,
+      waf: probe?.waf ? true : wafInfo.detected,
+      wafProvider: probe?.waf ?? wafInfo.provider,
+      // Tri-state: true/false only when a baseline exists. This was hardcoded
+      // `false`, while the UI rendered a "New Since Last Run" counter and a
+      // New/Known badge per host — a change-detection feature that always said
+      // "Known" no matter what had appeared.
+      newSinceLastRun: knownHostSet ? !knownHostSet.has(p.subdomain.toLowerCase()) : undefined,
+      status: probe?.status ?? p.httpsResult?.status ?? p.httpResult?.status,
+      title: probe?.title,
+      server: probe?.server,
+      technologies: probe?.technologies,
+      contentLength: probe?.contentLength,
+      redirectsTo: probe?.redirectsTo,
     };
   });
+
+  // Cleartext without an HTTPS upgrade, attributed to the host it was seen on.
+  for (const probe of Array.from(hostProbes.values())) {
+    if (!probe.cleartextWithoutUpgrade) continue;
+    results.findings.push({
+      title: `Cleartext HTTP Served Without Upgrade on ${probe.host}`,
+      description: `${probe.host} answers plain HTTP with content and does not redirect to HTTPS, even though HTTPS is available. Anything a visitor sends before they reach the encrypted site — credentials, session cookies, form data — crosses the network in the clear and can be modified in transit.`,
+      severity: "medium",
+      category: "transport_security",
+      affectedAsset: probe.host,
+      cvssScore: "5.9",
+      remediation: "Redirect all HTTP traffic to HTTPS with a 301, then add Strict-Transport-Security so browsers stop trying HTTP at all.",
+      evidence: [{
+        type: "http_response",
+        description: "Plain HTTP returned content without redirecting to HTTPS",
+        url: `http://${probe.host}`,
+        snippet: `HTTPS is available on this host.
+http://${probe.host} returned content and did not upgrade the connection.`,
+        source: "http-probe",
+        verifiedAt: now,
+      }],
+    });
+  }
+
+  /*
+   * Favicon hashing.
+   *
+   * Not for the Shodan pivot — that needs a key — but for two things it does
+   * keyless: grouping the estate (hosts sharing an icon are the same app behind
+   * different names, so the odd one out is the one to open first), and handing
+   * the operator a `http.favicon.hash:` value they can pivot on themselves.
+   *
+   * No product is ever named from a hash. Public hash-to-product tables exist,
+   * but asserting "this is a Jenkins" from an unverified table is the claim the
+   * body-signature gates exist to prevent.
+   */
+  const faviconHosts = Array.from(hostProbes.values()).slice(0, 100).map((p) => p.host);
+  if (faviconHosts.length > 1) {
+    checkAborted(options?.signal);
+    const favicons = await runWithConcurrency(
+      faviconHosts,
+      8,
+      (host) => fetchFaviconHash(host),
+      options?.signal,
+    );
+    const found = favicons.filter((f): f is NonNullable<typeof f> => Boolean(f));
+    if (found.length > 0) {
+      results.reconData.faviconClusters = clusterByFavicon(found);
+      log.info({ hosts: found.length, clusters: results.reconData.faviconClusters.length }, "Favicon clustering complete");
+    }
+  }
+
+  /*
+   * Known vulnerabilities in the client-side libraries each host actually serves.
+   *
+   * The versions were already being captured by `tech-fingerprints.ts` and were
+   * used only to say "you disclosed your version". Now they are checked against
+   * OSV.dev (free, keyless) so an outdated jQuery is reported as the exposure it
+   * is rather than as a banner-hygiene note.
+   *
+   * Attributed per host, because that is what makes a finding joinable to the
+   * asset inventory — see per-asset-findings.ts for why a roll-up would not be.
+   */
+  const hostsWithLibraries = Array.from(hostProbes.values()).filter(
+    (probe) => probe.libraryVersions && probe.libraryVersions.length > 0,
+  );
+  if (hostsWithLibraries.length > 0) {
+    checkAborted(options?.signal);
+    await runWithConcurrency(
+      hostsWithLibraries,
+      4,
+      async (probe) => {
+        const libResult = await findVulnerableLibraries(probe.libraryVersions);
+        for (const f of buildLibraryFindings(probe.host, libResult)) {
+          results.findings.push({
+            title: f.title,
+            description: f.description,
+            severity: f.severity,
+            category: f.category,
+            affectedAsset: f.affectedAsset,
+            cvssScore: f.cvssScore,
+            remediation: f.remediation,
+            evidence: [{
+              type: "vulnerability_database",
+              description: "Advisories published for this library version",
+              source: "OSV.dev",
+              snippet: JSON.stringify(f.evidence, null, 2).slice(0, 4000),
+              verifiedAt: now,
+            }],
+          });
+        }
+      },
+      options?.signal,
+    );
+  }
 
   const TAKEOVER_PRONE_PATTERNS = /\.(s3\.amazonaws\.com|cloudfront\.net|herokuapp\.com|herokussl\.com|github\.io|azurewebsites\.net|elasticbeanstalk\.com|trafficmanager\.net|zendesk\.com|fastly\.net|ghost\.io|helpscoutdocs\.com|cargo\.site|surge\.sh|bitbucket\.io|pantheon\.site|wpengine\.com|readme\.io|intercom\.io|statuspage\.io|uservoice\.com|feedpress\.me|freshdesk\.com|helpjuice\.com|helpscout\.com|pingdom\.com|tictail\.com|shopify\.com|teamwork\.com|unbounce\.com|tumblr\.com|wordpress\.com|desk\.com|service-now\.com|acquia\.cloud|myshopify\.com)\.?$/i;
   const danglingCnames = subdomainProbes.filter(p => {
@@ -552,6 +845,28 @@ export async function runEASMScan(domain: string, onProgress?: ScanProgressCallb
     results.reconData.perAssetHeaders = perAssetHeaders;
     results.reconData.perAssetLeaks = perAssetLeaks;
     results.reconData.wafByHost = wafByHost;
+
+    // Turn the per-asset analysis into findings ATTRIBUTED TO EACH HOST.
+    //
+    // This block used to end at the four assignments above: every live
+    // subdomain was fetched, its certificate read and its headers graded, and
+    // the result went into recon and no further. The only header/TLS/disclosure
+    // findings a scan produced were for the apex — so on a real workspace, 90
+    // analysed subdomains yielded 31 findings all attributed to the apex, and
+    // asset-risk scoring (which matches findings to assets by hostname) scored
+    // 262 of 263 assets at zero because nothing was attributable to them.
+    const perAssetFindings = buildPerAssetFindings({
+      perAssetHeaders,
+      perAssetTls,
+      perAssetLeaks,
+      apex: domain,
+      now,
+    });
+    results.findings.push(...perAssetFindings);
+    log.info(
+      { domain, hosts: perAssetBatch.length, findings: perAssetFindings.length },
+      "per-asset findings attributed to their own hosts",
+    );
   }
 
   if (mainDns.ips.length > 0) {
@@ -656,6 +971,34 @@ export async function runEASMScan(domain: string, onProgress?: ScanProgressCallb
       if (Object.keys(coHosted).length > 0) results.reconData.coHostedDomains = coHosted;
     } catch (err) {
       log.warn({ err, domain }, "Reverse IP lookup failed (non-fatal)");
+    }
+
+    // Routed footprint. Every other discovery method here starts from a NAME —
+    // a wordlist entry, a certificate, an archived URL — so all of them are
+    // blind to an asset with no DNS record pointing at it. BGP data finds those
+    // from the other end: if the organisation runs its own AS, the global
+    // routing table already publishes every prefix it is responsible for.
+    //
+    // Expansion is refused unless the AS is positively attributable to this
+    // organisation; see asn-expansion.ts for why that gate is the whole module.
+    try {
+      const orgTokens = [domain.split(".")[0], domain, results.reconData.domainInfo?.registrant ?? ""].filter(Boolean);
+      const asn = await runAsnExpansion(mainDns.ips.slice(0, 3), orgTokens);
+      results.reconData.asnFootprint = {
+        asns: asn.asns,
+        ownedPrefixes: asn.ownedPrefixes.map((p) => p.prefix),
+        ownedAddressCount: asn.ownedAddressCount,
+        unavailable: asn.unavailable,
+        notes: asn.notes,
+      };
+      for (const p of asn.ownedPrefixes) {
+        results.assets.push({ type: "ip_range", value: p.prefix, tags: ["bgp-announced", "org-owned"] });
+      }
+      if (asn.ownedPrefixes.length > 0) {
+        log.info({ domain, prefixes: asn.ownedPrefixes.length, addresses: asn.ownedAddressCount }, "routed footprint attributed to the organisation");
+      }
+    } catch (err) {
+      log.warn({ err, domain }, "ASN expansion failed (non-fatal)");
     }
   }
 

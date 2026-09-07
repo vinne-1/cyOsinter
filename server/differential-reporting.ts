@@ -1,5 +1,6 @@
 import { createLogger } from "./logger";
 import { storage } from "./storage";
+import { isSecurityFinding } from "./scanner/finding-taxonomy";
 import type { Finding } from "@shared/schema";
 
 const log = createLogger("differential-reporting");
@@ -54,8 +55,19 @@ export async function compareScanFindings(
       storage.getFindings(scan2.workspaceId, { limit: 10000 }),
     ]);
 
-    const findings1 = result1.data.filter((f) => f.scanId === scanId1);
-    const findings2 = result2.data.filter((f) => f.scanId === scanId2);
+    /*
+     * Security rows only. The diff is rendered as New / Fixed / Persisting
+     * findings with severity badges and feeds `riskDelta`, so a recon row
+     * ("Apache Detection") appearing in a new scan would be reported as a new
+     * FINDING and a control that started being detected would look like a
+     * regression.
+     *
+     * Status is deliberately NOT filtered here, unlike everywhere else this
+     * rule appears: which rows are closed is the diff's own subject matter, and
+     * removing them would delete the "fixed" half of the answer.
+     */
+    const findings1 = result1.data.filter((f) => f.scanId === scanId1 && isSecurityFinding(f));
+    const findings2 = result2.data.filter((f) => f.scanId === scanId2 && isSecurityFinding(f));
 
     const oldKeys = new Map<string, Finding>();
     for (const f of findings1) {

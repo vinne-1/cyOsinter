@@ -1,4 +1,5 @@
 import ExcelJS from "exceljs";
+import { formatReportDate, formatReportDateOnly } from "./utils/format";
 
 export interface ReportExportInput {
   title: string;
@@ -53,7 +54,7 @@ export function generateReportCsv(input: ReportExportInput): string {
   lines.push(escapeCsvCell(input.summary || "No summary available."));
   lines.push("");
   lines.push("Generated");
-  lines.push(escapeCsvCell(input.generatedAt ? new Date(input.generatedAt).toLocaleString() : "N/A"));
+  lines.push(escapeCsvCell(formatReportDate(input.generatedAt)));
 
   const content = input.content || {};
   if (content.totalFindings !== undefined) {
@@ -101,7 +102,7 @@ export async function generateReportExcel(input: ReportExportInput): Promise<Buf
   // Summary sheet
   const wsSummary = wb.addWorksheet("Summary");
   wsSummary.addRow(["Report", input.title]);
-  wsSummary.addRow(["Generated", input.generatedAt ? new Date(input.generatedAt).toLocaleString() : "N/A"]);
+  wsSummary.addRow(["Generated", formatReportDate(input.generatedAt)]);
   wsSummary.addRow(["Summary", input.summary || "No summary available."]);
 
   const content = input.content || {};
@@ -137,7 +138,7 @@ export async function generateReportExcel(input: ReportExportInput): Promise<Buf
     wsTrend.addRow(["Date", "Surface Risk Score", "Security Score", "Findings Count"]);
     for (const p of postureTrend) {
       wsTrend.addRow([
-        new Date(p.snapshotAt).toLocaleDateString(),
+        formatReportDateOnly(p.snapshotAt),
         p.surfaceRiskScore ?? "",
         p.securityScore ?? "",
         p.findingsCount ?? "",

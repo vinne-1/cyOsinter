@@ -1,4 +1,6 @@
 import { Router } from "express";
+import { isSecurityFinding } from "../scanner/finding-taxonomy";
+import { parsePagination } from "./response";
 import { storage } from "../storage";
 import { createLogger } from "../logger";
 import { generateComplianceReport, generateAllComplianceReports } from "../compliance-mapper";
@@ -10,12 +12,39 @@ const wsAuth = requireWorkspaceRole("owner", "admin", "analyst", "viewer");
 
 export const analyticsRouter = Router();
 
+/**
+ * Findings as every analytics view should see them: the whole set, security only.
+ *
+ * Two defects this replaces, both measured against live data:
+ *
+ *  1. **No `kind` filter.** `control` findings record a protection that IS in
+ *     place and `recon` findings are neutral facts; neither is a weakness. The
+ *     trend endpoints counted them, so `/trends` reported **14 open findings on
+ *     a workspace whose inbox showed 4**, and 26 where the inbox showed 21. The
+ *     Trends page and the Findings inbox disagreed about how many findings
+ *     exist. The compliance mapper is safe today only because the control
+ *     categories (`DNSSEC`, `security.txt`, `technology`) happen to sit outside
+ *     `SECURITY_CATEGORIES` — an accident of the current taxonomy, not a
+ *     guarantee, and a `control` finding carrying a security category would
+ *     mark that control FAILED for evidence the control is working.
+ *
+ *  2. **No limit**, so `getFindings` applied its 500-row default and every
+ *     analytic silently described the first 500 rows. The findings route
+ *     already fetches to an explicit ceiling for exactly this reason.
+ */
+const ANALYTICS_FINDING_CEILING = 10_000;
+
+async function securityFindings(workspaceId: string) {
+  const { data } = await storage.getFindings(workspaceId, { limit: ANALYTICS_FINDING_CEILING });
+  return data.filter(isSecurityFinding);
+}
+
 // ── Compliance Mapping ──
 
 // GET /api/workspaces/:workspaceId/compliance
 analyticsRouter.get("/workspaces/:workspaceId/compliance", wsAuth, async (req, res) => {
   try {
-    const { data: findings } = await storage.getFindings(req.params.workspaceId as string);
+    const findings = await securityFindings(req.params.workspaceId as string);
     const reports = generateAllComplianceReports(findings);
     res.json(reports);
   } catch (err) {
@@ -27,11 +56,11 @@ analyticsRouter.get("/workspaces/:workspaceId/compliance", wsAuth, async (req, r
 // GET /api/workspaces/:workspaceId/compliance/:framework
 analyticsRouter.get("/workspaces/:workspaceId/compliance/:framework", wsAuth, async (req, res) => {
   try {
-    const framework = req.params.framework as "owasp" | "cis" | "nist";
-    if (!["owasp", "cis", "nist"].includes(framework)) {
-      return res.status(400).json({ message: "Invalid framework. Use: owasp, cis, nist" });
+    const framework = req.params.framework as "owasp" | "cis" | "nist" | "certin" | "dpdp";
+    if (!["owasp", "cis", "nist", "certin", "dpdp"].includes(framework)) {
+      return res.status(400).json({ message: "Invalid framework. Use: owasp, cis, nist, certin, dpdp" });
     }
-    const { data: findings } = await storage.getFindings(req.params.workspaceId as string);
+    const findings = await securityFindings(req.params.workspaceId as string);
     const report = generateComplianceReport(findings, framework);
     res.json(report);
   } catch (err) {
@@ -45,7 +74,7 @@ analyticsRouter.get("/workspaces/:workspaceId/compliance/:framework", wsAuth, as
 // GET /api/workspaces/:workspaceId/trends/severity
 analyticsRouter.get("/workspaces/:workspaceId/trends/severity", wsAuth, async (req, res) => {
   try {
-    const limit = Math.min(parseInt(String(req.query.limit) || "30", 10) || 30, 100);
+    const { limit } = parsePagination(req.query, { defaultLimit: 30, maxLimit: 100 });
     const snapshots = await storage.getPostureHistory(req.params.workspaceId as string, limit);
 
     // Return chronological order (oldest first for charts)
@@ -71,7 +100,7 @@ analyticsRouter.get("/workspaces/:workspaceId/trends/severity", wsAuth, async (r
 // GET /api/workspaces/:workspaceId/trends/findings
 analyticsRouter.get("/workspaces/:workspaceId/trends/findings", wsAuth, async (req, res) => {
   try {
-    const { data: findings } = await storage.getFindings(req.params.workspaceId as string);
+    const findings = await securityFindings(req.params.workspaceId as string);
 
     // Group findings by discovery date (day resolution)
     const byDay = new Map<string, { total: number; critical: number; high: number; medium: number; low: number; info: number }>();
@@ -102,7 +131,7 @@ analyticsRouter.get("/workspaces/:workspaceId/trends/findings", wsAuth, async (r
 // GET /api/workspaces/:workspaceId/trends/categories
 analyticsRouter.get("/workspaces/:workspaceId/trends/categories", wsAuth, async (req, res) => {
   try {
-    const { data: findings } = await storage.getFindings(req.params.workspaceId as string);
+    const findings = await securityFindings(req.params.workspaceId as string);
 
     const byCategory = new Map<string, { total: number; open: number; resolved: number; critical: number; high: number }>();
     for (const f of findings) {
@@ -130,7 +159,7 @@ analyticsRouter.get("/workspaces/:workspaceId/trends/categories", wsAuth, async 
 // GET /api/workspaces/:workspaceId/trends/mttr  (Mean Time to Resolve)
 analyticsRouter.get("/workspaces/:workspaceId/trends/mttr", wsAuth, async (req, res) => {
   try {
-    const { data: findings } = await storage.getFindings(req.params.workspaceId as string);
+    const findings = await securityFindings(req.params.workspaceId as string);
     const resolved = findings.filter((f) => f.status === "resolved" && f.resolvedAt && f.discoveredAt);
 
     const bySeverity: Record<string, { count: number; totalHours: number }> = {};

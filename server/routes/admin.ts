@@ -1,8 +1,9 @@
 import { Router } from "express";
+import { parsePagination } from "./response";
 import { z } from "zod";
 import type { Server } from "http";
 import { eq } from "drizzle-orm";
-import { storage } from "../storage";
+import { storage, FULL_SET_LIMIT } from "../storage";
 import { createLogger } from "../logger";
 import { computeSecurityScore } from "@shared/scoring";
 import { startMonitoring, stopMonitoring, getMonitoringStatus } from "../continuous-monitoring";
@@ -177,8 +178,7 @@ export function createAdminRouter(httpServer: Server): Router {
 
   adminRouter.get("/workspaces/:workspaceId/recon-modules", wsAuth, async (req, res) => {
     try {
-      const limit = Math.min(parseInt(String(req.query.limit ?? "500"), 10) || 500, 5000);
-      const offset = Math.max(parseInt(String(req.query.offset ?? "0"), 10) || 0, 0);
+      const { limit, offset } = parsePagination(req.query, { defaultLimit: 500, maxLimit: 5000 });
       const result = await storage.getReconModules(req.params.workspaceId as string, { limit, offset });
       res.json(result);
     } catch (err) {
@@ -200,7 +200,7 @@ export function createAdminRouter(httpServer: Server): Router {
 
   adminRouter.get("/workspaces/:workspaceId/posture-history", wsAuth, async (req, res) => {
     try {
-      const limit = Math.min(parseInt(req.query.limit as string, 10) || 30, 100);
+      const { limit } = parsePagination(req.query, { defaultLimit: 30, maxLimit: 100 });
       const snapshots = await storage.getPostureHistory(req.params.workspaceId as string, limit);
       res.json(snapshots);
     } catch (err) { res.status(500).json({ message: "Internal server error" }); }
@@ -258,15 +258,17 @@ export function createAdminRouter(httpServer: Server): Router {
   adminRouter.get("/workspaces/:workspaceId/ip-enrichment", wsAuth, async (req, res) => {
     try {
       const workspaceId = req.params.workspaceId as string;
-      const { data: ipAssets } = await storage.getAssets(workspaceId);
+      const { data: ipAssets } = await storage.getAssets(workspaceId, { limit: FULL_SET_LIMIT });
       const ipsFromAssets = ipAssets.filter((a) => a.type === "ip").map((a) => a.value);
       const { data: modules } = await storage.getReconModules(workspaceId);
       const attackSurface = modules.find((m) => m.moduleType === "attack_surface")?.data as Record<string, unknown> | undefined;
       const publicIPs = attackSurface?.publicIPs as Array<{ ip: string }> | undefined;
       const ipsFromSurface = (publicIPs ?? []).map((p) => (typeof p === "string" ? p : p?.ip)).filter(Boolean);
       const allIPs = Array.from(new Set([...ipsFromAssets, ...ipsFromSurface]));
-      const ipEnrichment = allIPs.length > 0 ? await enrichIPs(allIPs) : {};
-      res.json(ipEnrichment);
+      const result = allIPs.length > 0
+        ? await enrichIPs(allIPs)
+        : { enrichment: {}, requested: 0, enriched: 0, truncated: false };
+      res.json(result);
     } catch (err) {
       routeLog.error({ err }, "IP enrichment error");
       res.status(500).json({ message: "IP enrichment failed" });
@@ -280,7 +282,7 @@ export function createAdminRouter(httpServer: Server): Router {
       if (!scan1 || !scan2 || typeof scan1 !== "string" || typeof scan2 !== "string") {
         return res.status(400).json({ message: "scan1 and scan2 query params required" });
       }
-      const { data: diffFindings } = await storage.getFindings(req.params.workspaceId as string);
+      const { data: diffFindings } = await storage.getFindings(req.params.workspaceId as string, { limit: FULL_SET_LIMIT });
       const s1Findings = diffFindings.filter((f) => f.scanId === scan1);
       const s2Findings = diffFindings.filter((f) => f.scanId === scan2);
       const s1Keys = new Set(s1Findings.map((f) => `${f.title}|${f.affectedAsset}|${f.category}`));

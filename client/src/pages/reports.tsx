@@ -54,6 +54,7 @@ import {
   ChevronDown,
 } from "lucide-react";
 import type { Report, Finding, ReconModule } from "@shared/schema";
+import { usePagedList, ListPager } from "@/components/list-pager";
 import { SeverityBadge } from "@/components/severity-badge";
 import { downloadReportPdf } from "@/lib/reportPdf";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -120,6 +121,7 @@ function ReportDetailDialog({
   const reportFindings = findings.filter((f) =>
     (report.findingIds || []).includes(f.id)
   );
+  const pagedReportFindings = usePagedList(reportFindings, report.id);
 
   const content = report.content as Record<string, unknown> | null;
 
@@ -262,7 +264,7 @@ function ReportDetailDialog({
               <h4 className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-2">
                 Executive Summary
                 {content?.aiNarrative != null && (
-                  <span className="ml-2 text-[10px] font-normal normal-case text-muted-foreground/80">(AI-generated)</span>
+                  <span className="ml-2 text-[10px] font-normal normal-case text-muted-foreground">(AI-generated)</span>
                 )}
               </h4>
               <p className="text-sm leading-relaxed">{report.summary}</p>
@@ -537,7 +539,7 @@ function ReportDetailDialog({
                 Included Findings ({reportFindings.length})
               </h4>
               <div className="space-y-2">
-                {reportFindings.map((f) => (
+                {pagedReportFindings.items.map((f) => (
                   <div key={f.id} className="flex items-center justify-between gap-3 p-3 rounded-md bg-muted/40">
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium truncate">{f.title}</p>
@@ -547,6 +549,7 @@ function ReportDetailDialog({
                   </div>
                 ))}
               </div>
+              <ListPager paged={pagedReportFindings} label="findings" />
             </div>
           )}
 
@@ -610,7 +613,21 @@ function NewReportDialog() {
         title: data.title,
         type: data.type,
         status: "draft",
-        findingIds: selectedFindings.length > 0 ? selectedFindings : findings.map((f) => f.id),
+        /*
+         * Send NOTHING when the user selected nothing.
+         *
+         * This used to send every finding id, which made "no selection" look
+         * to the server like a deliberate, explicit choice of all rows — so
+         * `selectReportFindings` honoured it verbatim and the security-only
+         * default it exists to apply never ran. The result reached clients:
+         * a CSV listing "DNSSEC Detection" and "robots.txt file" as findings,
+         * under a summary reading "This report covers 14 security findings"
+         * when four of them were.
+         *
+         * An empty/absent list means "the workspace's outstanding exposure",
+         * and the server is the one place that decides what that means.
+         */
+        findingIds: selectedFindings.length > 0 ? selectedFindings : undefined,
       });
       return res.json();
     },

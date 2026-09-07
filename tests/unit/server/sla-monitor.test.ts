@@ -37,18 +37,37 @@ vi.mock("../../../server/db", () => ({
   },
 }));
 
-const logAudit = vi.fn().mockResolvedValue(undefined);
+/**
+ * Hoisted because `vi.mock` is itself hoisted above every top-level `const`.
+ * The audit factory returns this function in an object literal, which is
+ * evaluated at mock time — so with a static import of the module under test it
+ * ran before a plain `const logAudit = vi.fn()` was initialised and threw
+ * "Cannot access 'logAudit' before initialization".
+ */
+const { logAudit } = vi.hoisted(() => ({ logAudit: vi.fn() }));
 vi.mock("../../../server/audit", () => ({ logAudit }));
 
-let sla: typeof import("../../../server/sla-monitor");
+/**
+ * Imported once, statically.
+ *
+ * This was `vi.resetModules()` plus a dynamic import in `beforeEach`, which
+ * rebuilt the entire module graph — drizzle, pg, the full schema — for every
+ * one of these tests. Under the full suite that regularly exceeded the 10s hook
+ * timeout and failed the first test in the file, while passing when the file
+ * ran alone. The tests only exercise `runSlaSweep`, which holds no module
+ * state, so one import is both sufficient and an order of magnitude faster.
+ *
+ * `vi.mock` is hoisted above this import, and the mock factories read the
+ * mutable fixtures below at call time, so per-test setup still works.
+ */
+import * as sla from "../../../server/sla-monitor";
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeEach(() => {
   vi.clearAllMocks();
+  logAudit.mockResolvedValue(undefined);
   selectResults = [];
   selectCall = 0;
   updateReturning.mockResolvedValue([]);
-  sla = await import("../../../server/sla-monitor");
 });
 
 describe("runSlaSweep", () => {

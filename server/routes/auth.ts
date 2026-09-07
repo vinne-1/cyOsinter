@@ -8,6 +8,7 @@ import {
   verifyPassword,
   createSession,
   deleteSession,
+  deleteUserSessions,
   refreshSession,
   isLockedOut,
   lockoutSecondsRemaining,
@@ -19,6 +20,7 @@ import { sendError, sendValidationError } from "./response";
 import { createLogger } from "../logger";
 import { logAuditAsync, clientIp } from "../audit";
 import { verifyTotp } from "../totp";
+import { checkPassword, PASSWORD_MIN_LENGTH, PASSWORD_MAX_LENGTH } from "../password-policy";
 
 const log = createLogger("auth-routes");
 
@@ -26,8 +28,20 @@ export const authRouter = Router();
 
 const registerSchema = z.object({
   email: z.string().email("Invalid email address"),
-  password: z.string().min(12, "Password must be at least 12 characters"),
+  // Length is checked here so Zod can report it with the other field errors;
+  // the full policy (common-password screening, ASVS V6.2.4) runs in the handler
+  // where the email and name are available to compare against.
+  password: z.string().min(PASSWORD_MIN_LENGTH, `Password must be at least ${PASSWORD_MIN_LENGTH} characters`)
+    .max(PASSWORD_MAX_LENGTH, `Password must be at most ${PASSWORD_MAX_LENGTH} characters`),
   name: z.string().min(1, "Name is required").optional(),
+});
+
+const changePasswordSchema = z.object({
+  // ASVS V6.2.3: the current password is required, so possession of a live
+  // session is not on its own enough to take the account over.
+  currentPassword: z.string().min(1, "Current password is required"),
+  newPassword: z.string().min(PASSWORD_MIN_LENGTH, `Password must be at least ${PASSWORD_MIN_LENGTH} characters`)
+    .max(PASSWORD_MAX_LENGTH, `Password must be at most ${PASSWORD_MAX_LENGTH} characters`),
 });
 
 const loginSchema = z.object({
@@ -48,6 +62,11 @@ authRouter.post("/auth/register", async (req, res) => {
       return sendValidationError(res, parsed.error.errors[0]?.message ?? "Validation error");
     }
     const { email, password, name } = parsed.data;
+
+    const policy = checkPassword(password, [email, name]);
+    if (!policy.ok) {
+      return sendValidationError(res, policy.reason ?? "Password is not acceptable");
+    }
 
     const [existing] = await db
       .select()
@@ -275,5 +294,99 @@ authRouter.get("/auth/me", requireAuth, async (req, res) => {
   } catch (err) {
     log.error({ err }, "Failed to get user info");
     sendError(res, 500, "Failed to get user info");
+  }
+});
+
+/**
+ * POST /auth/change-password
+ *
+ * There was no way to change a password at all. That is ASVS 5.0 V6.2.2 ("verify
+ * that users can change their password"), but the practical point is worse than
+ * the checklist one: a user who learns their password is compromised had no way
+ * to rotate it, and an administrator had no way to tell them to.
+ *
+ * Three properties are deliberate:
+ *
+ *  - **The current password is required** (V6.2.3), so a stolen session token is
+ *    not sufficient to seize the account permanently. Without it, anyone with a
+ *    borrowed laptop or an XSS-lifted token could lock the real owner out.
+ *  - **The new password goes through the full policy**, including the
+ *    common-password screen — a change flow that skips the checks the
+ *    registration flow applies is just a slower way to set a weak password.
+ *  - **Every other session is terminated** and a fresh token is issued. Changing
+ *    a password is the action people take when they believe someone else has
+ *    access; leaving that someone else logged in makes it ceremonial. The caller
+ *    gets a new token so their own session survives the revocation.
+ */
+authRouter.post("/auth/change-password", requireAuth, async (req, res) => {
+  try {
+    const parsed = changePasswordSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return sendValidationError(res, parsed.error.errors[0]?.message ?? "Validation error");
+    }
+    const { currentPassword, newPassword } = parsed.data;
+
+    // `requireAuth` guarantees this, but re-reading the row means the hash is
+    // current rather than whatever was loaded when the session was minted.
+    const userId = req.user?.id;
+    if (!userId) return sendError(res, 401, "Authentication required");
+
+    const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+    if (!user) return sendError(res, 401, "Authentication required");
+
+    const valid = await verifyPassword(currentPassword, user.passwordHash);
+    if (!valid) {
+      logAuditAsync({
+        userId: user.id,
+        action: "password_change_failed",
+        resourceType: "user",
+        resourceId: user.id,
+        ipAddress: clientIp(req),
+      });
+      // Deliberately not 401: the session is fine, the supplied password is not,
+      // and a 401 would make the client discard a valid token and log the user out.
+      return sendError(res, 400, "Current password is incorrect");
+    }
+
+    const policy = checkPassword(newPassword, [user.email, user.name]);
+    if (!policy.ok) {
+      return sendValidationError(res, policy.reason ?? "Password is not acceptable");
+    }
+
+    // Compared by hash, not by string: the old plaintext is never stored, and
+    // this also catches a "change" that only altered surrounding whitespace.
+    if (await verifyPassword(newPassword, user.passwordHash)) {
+      return sendValidationError(res, "New password must be different from the current password");
+    }
+
+    const passwordHash = await hashPassword(newPassword);
+    await db.update(users)
+      .set({ passwordHash, updatedAt: new Date(), failedLoginAttempts: 0, lockedUntil: null })
+      .where(eq(users.id, user.id));
+
+    // Terminate everything, including this caller's own session, then re-issue.
+    // Revoking first means there is no window in which the old tokens and the
+    // new password are both valid.
+    await deleteUserSessions(user.id);
+    const session = await createSession(user.id, req.ip ?? undefined, req.headers["user-agent"]);
+
+    logAuditAsync({
+      userId: user.id,
+      action: "password_changed",
+      resourceType: "user",
+      resourceId: user.id,
+      ipAddress: clientIp(req),
+    });
+    log.info({ userId: user.id }, "Password changed; all sessions revoked");
+
+    res.json({
+      success: true,
+      token: session.token,
+      refreshToken: session.refreshToken,
+      expiresAt: session.expiresAt,
+    });
+  } catch (err) {
+    log.error({ err }, "Change password error");
+    sendError(res, 500, "Failed to change password");
   }
 });

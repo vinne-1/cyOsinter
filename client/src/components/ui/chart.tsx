@@ -67,6 +67,35 @@ const ChartContainer = React.forwardRef<
 })
 ChartContainer.displayName = "Chart"
 
+/**
+ * Whether a configured colour is safe to interpolate into a stylesheet.
+ *
+ * `ChartStyle` writes its config into a real `<style>` element via
+ * `dangerouslySetInnerHTML`, which makes the colour value a CSS injection sink:
+ * a value containing `}` can close the rule and open another, and CSS can
+ * exfiltrate page content through attribute selectors and `url()` fetches.
+ *
+ * Today every chart config in this app is written by hand in a component, so
+ * nothing untrusted reaches here. That is exactly why it is worth pinning now —
+ * a dashboard product driving chart colours from an API response (per-severity
+ * colours from server config, say) is an ordinary next step, and it would turn
+ * this into a live sink with no visible change at the call site.
+ *
+ * The allowlist covers the forms a chart colour actually takes: hex, the CSS
+ * colour functions, `var(--token)`, and bare keywords.
+ */
+const SAFE_CSS_COLOR =
+  /^(#[0-9a-f]{3,8}|(rgb|rgba|hsl|hsla|oklch|lab|lch|color)\([^;{}()]*\)|var\(--[a-z0-9-]+\)|[a-z]+)$/i
+
+function safeColor(value: string | undefined): string | null {
+  if (!value) return null
+  const trimmed = value.trim()
+  return SAFE_CSS_COLOR.test(trimmed) ? trimmed : null
+}
+
+/** Config keys become part of a selector and an identifier, so bound them too. */
+const SAFE_CSS_KEY = /^[a-z0-9_-]+$/i
+
 const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
   const colorConfig = Object.entries(config).filter(
     ([, config]) => config.theme || config.color
@@ -77,6 +106,7 @@ const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
   }
 
   const indicatorRules = colorConfig
+    .filter(([key]) => SAFE_CSS_KEY.test(key))
     .map(([key]) => `[data-chart="${id}"] [data-color-key="${key}"]{background-color:var(--color-${key});border-color:var(--color-${key})}`)
     .join("")
 
@@ -90,10 +120,13 @@ const ChartStyle = ({ id, config }: { id: string; config: ChartConfig }) => {
 ${prefix} [data-chart=${id}] {
 ${colorConfig
   .map(([key, itemConfig]) => {
-    const color =
+    const color = safeColor(
       itemConfig.theme?.[theme as keyof typeof itemConfig.theme] ||
       itemConfig.color
-    return color ? `  --color-${key}: ${color};` : null
+    )
+    // A rejected colour drops that one variable rather than the whole rule, so
+    // a bad value degrades the chart's appearance instead of breaking the page.
+    return color && SAFE_CSS_KEY.test(key) ? `  --color-${key}: ${color};` : null
   })
   .join("\n")}
 }

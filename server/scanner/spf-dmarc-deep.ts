@@ -152,6 +152,81 @@ async function recurse(
   await countSpfLookups(target, nested, lookupTxt, seen, state);
 }
 
+export type SpfTerminator = "+all" | "?all" | "~all" | "-all";
+
+/**
+ * The `all` mechanism a record ends with, or null when it has none.
+ *
+ * Anchored on term boundaries because `all` is a whole SPF term, not a
+ * substring: without that, `redirect=_spf.mailhostbox.com` and `include:install`
+ * both look like they contain "all".
+ */
+export function terminatorOf(record: string): SpfTerminator | null {
+  const m = /(?:^|\s)([+\-~?]?)all(?=\s|$)/i.exec(record);
+  if (!m) return null;
+  // A bare `all` means `+all` — RFC 7208 §4.6.2, the qualifier defaults to pass.
+  return `${m[1] || "+"}all` as SpfTerminator;
+}
+
+export interface EffectiveTerminator {
+  terminator: SpfTerminator | null;
+  /** Domain the terminator was inherited from, when a redirect was followed. */
+  via?: string;
+  /** The redirect chain could not be resolved, so the policy is UNKNOWN. */
+  unresolved?: boolean;
+}
+
+/**
+ * The `all` policy that actually applies, following `redirect=` when it governs.
+ *
+ * A record that ends in `redirect=` and has no `all` of its own is **correct,
+ * ordinary configuration** — RFC 7208 §6.1 makes the redirect target's policy
+ * this domain's policy, and further says that if `all` IS present the redirect
+ * modifier must be ignored entirely. The check used to test the local record
+ * only, so `v=spf1 redirect=_spf.example.com` was reported as "SPF has no 'all'
+ * terminator" even when the target published `-all`.
+ *
+ * That is a false positive against a properly configured domain, and it was
+ * measured on real scan output rather than imagined: alkemlabs.com publishes
+ * `v=spf1 redirect=_spf.mailhostbox.com`, that target publishes `~all`, and the
+ * scan reported a terminator problem anyway.
+ *
+ * The chain is bounded and loop-guarded, and an unresolvable target yields
+ * `unresolved` rather than "no terminator" — "we could not determine the policy"
+ * is a different statement from "there is no policy", and reporting the second
+ * when we mean the first is how a scanner earns distrust.
+ */
+export async function effectiveTerminator(
+  record: string,
+  lookupTxt: TxtLookup,
+  seen: Set<string> = new Set(),
+  depth = 0,
+): Promise<EffectiveTerminator> {
+  const local = terminatorOf(record);
+  // A present `all` wins outright (RFC 7208 §6.1).
+  if (local) return { terminator: local };
+
+  const redirect = /(?:^|\s)redirect=(\S+)/i.exec(record);
+  if (!redirect) return { terminator: null };
+
+  const target = redirect[1].toLowerCase().replace(/\.$/, "");
+  if (depth >= 3 || seen.has(target)) return { terminator: null, unresolved: true, via: target };
+  seen.add(target);
+
+  let txt: string[][];
+  try {
+    txt = await lookupTxt(target);
+  } catch {
+    return { terminator: null, unresolved: true, via: target };
+  }
+
+  const targetRecord = findSpfRecord(joinTxt(txt));
+  if (!targetRecord) return { terminator: null, unresolved: true, via: target };
+
+  const inherited = await effectiveTerminator(targetRecord, lookupTxt, seen, depth + 1);
+  return { ...inherited, via: inherited.via ?? target };
+}
+
 export interface SpfAnalysis {
   found: boolean;
   record: string;
@@ -179,13 +254,23 @@ export async function analyzeSpfDeep(
     );
   }
 
-  if (/[\s^]\+?all\b/i.test(record) && /\+all\b/i.test(record)) {
-    issues.push("SPF ends in +all, which authorises every sender on the internet to use this domain");
-  } else if (/\?all\b/i.test(record)) {
-    issues.push("SPF ends in ?all (neutral), which asks receivers to treat unauthorised senders no differently");
-  } else if (/~all\b/i.test(record)) {
-    issues.push("SPF ends in ~all (softfail); mail from unauthorised senders is usually still delivered, to spam");
-  } else if (!/-all\b/i.test(record)) {
+  // Evaluated through `redirect=`, because that is how a receiver evaluates it.
+  const effective = await effectiveTerminator(record, lookupTxt);
+  const via = effective.via ? ` (policy inherited from redirect=${effective.via})` : "";
+
+  if (effective.terminator === "+all") {
+    issues.push(`SPF ends in +all, which authorises every sender on the internet to use this domain${via}`);
+  } else if (effective.terminator === "?all") {
+    issues.push(`SPF ends in ?all (neutral), which asks receivers to treat unauthorised senders no differently${via}`);
+  } else if (effective.terminator === "~all") {
+    issues.push(`SPF ends in ~all (softfail); mail from unauthorised senders is usually still delivered, to spam${via}`);
+  } else if (effective.terminator === "-all") {
+    // Correctly terminated, whether locally or through the redirect. No issue.
+  } else if (effective.unresolved) {
+    issues.push(
+      `SPF redirects to ${effective.via ?? "another domain"} but that record could not be resolved, so the effective policy could not be determined`,
+    );
+  } else {
     issues.push("SPF has no 'all' terminator, so senders not listed are neither authorised nor rejected");
   }
 

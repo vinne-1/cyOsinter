@@ -7,9 +7,21 @@ import { stealthFetch } from "./stealth.js";
  * context is active, a passthrough default applies.
  */
 
-export async function fetchJSON(url: string, timeoutMs = 10000): Promise<any> {
+/**
+ * JSON GET. Returns null when the source did not answer.
+ *
+ * `headers` exists for sources that require an API key. Note the contract every
+ * caller depends on: **null means "did not answer", not "answered with
+ * nothing"** — collapsing the two is how a rate-limited source came to be
+ * reported as "0 subdomains found".
+ */
+export async function fetchJSON(
+  url: string,
+  timeoutMs = 10000,
+  headers?: Record<string, string>,
+): Promise<any> {
   try {
-    const res = await stealthFetch(url, {}, timeoutMs);
+    const res = await stealthFetch(url, headers ? { headers } : {}, timeoutMs);
     if (!res.ok) return null;
     return await res.json();
   } catch {
@@ -43,6 +55,61 @@ export async function httpGet(url: string, timeoutMs = 8000): Promise<{ status: 
     const res = await stealthFetch(url, { redirect: "follow" }, timeoutMs);
     const headers: Record<string, string> = {};
     res.headers.forEach((v, k) => { headers[k] = v; });
+    const body = await res.text();
+    return { status: res.status, headers, body: body.substring(0, 5000), finalUrl: res.url };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A GET that returns raw BYTES rather than text.
+ *
+ * `httpGet` decodes to a string and truncates at 5,000 characters, both of which
+ * destroy a binary body: an icon round-tripped through UTF-8 decoding is no
+ * longer the bytes the server sent, so any hash of it is meaningless. Needed by
+ * favicon hashing, where the exact bytes are the whole point.
+ */
+export async function httpGetBuffer(
+  url: string,
+  timeoutMs = 8000,
+  maxBytes = 1024 * 1024,
+): Promise<{ status: number; headers: Record<string, string>; body: Buffer; finalUrl: string } | null> {
+  try {
+    const res = await stealthFetch(url, { redirect: "follow" }, timeoutMs);
+    const headers: Record<string, string> = {};
+    res.headers.forEach((v, k) => { headers[k] = v; });
+    const buf = Buffer.from(await res.arrayBuffer());
+    return {
+      status: res.status,
+      headers,
+      body: buf.length > maxBytes ? buf.subarray(0, maxBytes) : buf,
+      finalUrl: res.url,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A request with an explicit method and/or extra headers.
+ *
+ * Needed by checks whose whole point is what the server does with a specific
+ * method or request header: an OPTIONS probe for allowed methods, a TRACE probe
+ * for cross-site tracing, and a CORS probe that must actually send an `Origin`
+ * (without one, a reflected-origin misconfiguration is invisible).
+ */
+export async function httpRequest(
+  url: string,
+  method: string,
+  extraHeaders: Record<string, string> = {},
+  timeoutMs = 8000,
+  requestBody?: string,
+): Promise<{ status: number; headers: Record<string, string>; body: string; finalUrl: string } | null> {
+  try {
+    const res = await stealthFetch(url, { method, headers: extraHeaders, body: requestBody, redirect: "manual" }, timeoutMs);
+    const headers: Record<string, string> = {};
+    res.headers.forEach((v, k) => { headers[k.toLowerCase()] = v; });
     const body = await res.text();
     return { status: res.status, headers, body: body.substring(0, 5000), finalUrl: res.url };
   } catch {

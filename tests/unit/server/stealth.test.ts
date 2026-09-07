@@ -117,3 +117,69 @@ describe("runWithStealth context", () => {
     expect(inner).toBe("safe");
   });
 });
+
+/**
+ * The deployment-wide outbound ceiling.
+ *
+ * `httpConcurrency` is a PER-SCAN budget and `runWithStealth` builds a fresh
+ * controller per scan, so the limit multiplied by however many scans ran at
+ * once — 64 x 3 = 192 concurrent sockets on default settings. For safe mode it
+ * was worse than a resource problem: an operator choosing "low-and-slow" is
+ * stating an intent about the rate the TARGET sees, and three concurrent safe
+ * scans quietly emitted three times it.
+ */
+describe("global outbound ceiling", () => {
+  it("reports its configuration and starts idle", async () => {
+    const { outboundStats } = await import("../../../server/scanner/stealth");
+    const stats = outboundStats();
+    expect(stats.max).toBeGreaterThan(0);
+    expect(stats.inFlight).toBe(0);
+  });
+
+  /**
+   * The property that matters: two independent scan contexts must not each get
+   * a full budget's worth of sockets.
+   */
+  it("bounds concurrency ACROSS independent scan contexts, not just within one", async () => {
+    const { runWithStealth, getController, outboundStats } = await import("../../../server/scanner/stealth");
+    const max = outboundStats().max;
+
+    let peak = 0;
+    let live = 0;
+    const release: Array<() => void> = [];
+
+    const task = () => getController().run(async () => {
+      live++;
+      peak = Math.max(peak, live);
+      await new Promise<void>((r) => release.push(() => { live--; r(); }));
+    });
+
+    // Two separate stealth contexts, each firing more work than the global cap.
+    const runners = [
+      runWithStealth("standard", async () => { await Promise.all(Array.from({ length: max }, task)); }),
+      runWithStealth("standard", async () => { await Promise.all(Array.from({ length: max }, task)); }),
+    ];
+
+    // Let everything that can start, start.
+    for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+    expect(peak).toBeLessThanOrEqual(max);
+
+    // Drain: each release admits a queued waiter, so this must terminate.
+    while (release.length > 0) {
+      release.shift()!();
+      await new Promise((r) => setImmediate(r));
+    }
+    await Promise.all(runners);
+    expect(outboundStats().inFlight).toBe(0);
+  });
+
+  it("returns every slot even when the task throws", async () => {
+    const { runWithStealth, getController, outboundStats } = await import("../../../server/scanner/stealth");
+    await runWithStealth("standard", async () => {
+      await expect(
+        getController().run(async () => { throw new Error("boom"); }),
+      ).rejects.toThrow("boom");
+    });
+    expect(outboundStats().inFlight).toBe(0);
+  });
+});

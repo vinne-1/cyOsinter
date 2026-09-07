@@ -10,7 +10,7 @@ import { createLogger } from "../logger";
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "fs";
 import { join } from "path";
 import { encryptObject, decryptObject } from "../crypto";
-import { isPrivateHost } from "../utils/ssrf.js";
+import { isPrivateHost, isSafeOutboundUrl } from "../utils/ssrf.js";
 
 const log = createLogger("integrations-tickets");
 
@@ -313,13 +313,25 @@ async function createJiraTicket(
   };
 
   const baseUrl = config.baseUrl.replace(/\/+$/, "");
-  // Re-validate SSRF at request time (URL may have been saved before check existed)
-  const jiraHost = new URL(baseUrl).hostname;
-  if (await isPrivateHost(jiraHost)) {
+  /*
+   * Re-validated at REQUEST time, not only when the integration was saved: the
+   * guard answers where the hostname points *now*, and this config is used
+   * months later. `isSafeOutboundUrl` rather than a bare `isPrivateHost` on the
+   * hostname, so the protocol is checked too — only http/https may carry these
+   * credentials.
+   */
+  if (!(await isSafeOutboundUrl(`${baseUrl}/rest/api/3/issue`))) {
     throw new Error("Jira URL targets a private network — update your Jira configuration");
   }
   const res = await fetch(`${baseUrl}/rest/api/3/issue`, {
     method: "POST",
+    /*
+     * `manual`. This request carries `Authorization: Basic <email:apiToken>`,
+     * so following a redirect would hand the Jira credentials to whatever
+     * address the 302 names — an address the check above never saw. Same
+     * defect as the webhook dispatcher and the report evidence fetch.
+     */
+    redirect: "manual",
     headers: {
       "Authorization": `Basic ${Buffer.from(`${config.email}:${config.apiToken}`).toString("base64")}`,
       "Content-Type": "application/json",

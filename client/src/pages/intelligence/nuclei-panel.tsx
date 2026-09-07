@@ -2,6 +2,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Zap, ExternalLink } from "lucide-react";
 import type { ReconModule } from "@shared/schema";
+import { usePagedList, ListPager } from "@/components/list-pager";
 import {
   Table,
   TableBody,
@@ -31,6 +32,7 @@ export function NucleiPanel({ mod }: { mod: ReconModule }) {
     verifiedAt?: string;
   };
   const hits = d?.hits ?? [];
+  const pagedHits = usePagedList<any>(hits, null);
   const allTemplatesLoaded = d?.allTemplatesLoaded ?? false;
   const skipped = d?.skipped ?? false;
 
@@ -75,7 +77,7 @@ export function NucleiPanel({ mod }: { mod: ReconModule }) {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {hits.map((h, i) => (
+                {pagedHits.items.map((h: any, i: number) => (
                   <TableRow key={i}>
                     <TableCell>
                       <div className="space-y-0.5">
@@ -117,6 +119,7 @@ export function NucleiPanel({ mod }: { mod: ReconModule }) {
                 ))}
               </TableBody>
             </Table>
+            <ListPager paged={pagedHits} label="template hits" />
           </CardContent>
         </Card>
       )}

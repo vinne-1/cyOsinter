@@ -8,7 +8,7 @@ import { requireAuth, requireWorkspaceRole } from "./auth-middleware";
 import { sendError, sendValidationError, sendNotFound } from "./response";
 import { encrypt, decrypt } from "../crypto";
 import { createLogger } from "../logger";
-import { isPrivateHost } from "../utils/ssrf.js";
+import { isPrivateHost, isSafeOutboundUrl } from "../utils/ssrf.js";
 
 /** Omit the secret from a webhook row for API responses */
 function sanitizeWebhook(row: typeof webhookEndpoints.$inferSelect) {
@@ -134,7 +134,16 @@ webhooksRouter.patch(
         .from(workspaceMembers)
         .where(and(eq(workspaceMembers.workspaceId, existing.workspaceId), eq(workspaceMembers.userId, req.user!.id)))
         .limit(1);
-      if (!member || !["owner", "admin"].includes(member.role)) {
+      // 404 for a non-member, 403 only for a member with the wrong role — the
+      // same split `requireWorkspaceRole` and the workspace routes make.
+      // Collapsing both into 403 turns this into a membership oracle: a
+      // stranger iterating webhook ids learns which exist from the status code
+      // alone. A member with an insufficient role already knows it exists, so
+      // 403 is the honest answer there.
+      if (!member) {
+        return sendNotFound(res, "Webhook");
+      }
+      if (!["owner", "admin"].includes(member.role)) {
         return sendError(res, 403, "Forbidden");
       }
 
@@ -188,7 +197,16 @@ webhooksRouter.delete(
         .from(workspaceMembers)
         .where(and(eq(workspaceMembers.workspaceId, existing.workspaceId), eq(workspaceMembers.userId, req.user!.id)))
         .limit(1);
-      if (!member || !["owner", "admin"].includes(member.role)) {
+      // 404 for a non-member, 403 only for a member with the wrong role — the
+      // same split `requireWorkspaceRole` and the workspace routes make.
+      // Collapsing both into 403 turns this into a membership oracle: a
+      // stranger iterating webhook ids learns which exist from the status code
+      // alone. A member with an insufficient role already knows it exists, so
+      // 403 is the honest answer there.
+      if (!member) {
+        return sendNotFound(res, "Webhook");
+      }
+      if (!["owner", "admin"].includes(member.role)) {
         return sendError(res, 403, "Forbidden");
       }
 
@@ -224,7 +242,16 @@ webhooksRouter.post(
         .from(workspaceMembers)
         .where(and(eq(workspaceMembers.workspaceId, webhook.workspaceId), eq(workspaceMembers.userId, req.user!.id)))
         .limit(1);
-      if (!member || !["owner", "admin"].includes(member.role)) {
+      // 404 for a non-member, 403 only for a member with the wrong role — the
+      // same split `requireWorkspaceRole` and the workspace routes make.
+      // Collapsing both into 403 turns this into a membership oracle: a
+      // stranger iterating webhook ids learns which exist from the status code
+      // alone. A member with an insufficient role already knows it exists, so
+      // 403 is the honest answer there.
+      if (!member) {
+        return sendNotFound(res, "Webhook");
+      }
+      if (!["owner", "admin"].includes(member.role)) {
         return sendError(res, 403, "Forbidden");
       }
 
@@ -366,6 +393,21 @@ async function deliverWebhook(
       break;
   }
 
+  /*
+   * Re-check the destination HERE, not only when the endpoint was saved.
+   *
+   * The create, update and test routes all guard the URL, and that is not
+   * enough: the guard answers "what does this hostname resolve to *now*", and
+   * a webhook fires days or months later. A host that resolved to a public
+   * address at save time can resolve to 127.0.0.1 or 169.254.169.254 by the
+   * time a critical finding triggers delivery, and nothing would have looked
+   * again. Resolution is the only question that matters — what address will
+   * the socket actually connect to.
+   */
+  if (!(await isSafeOutboundUrl(webhook.url))) {
+    return { ok: false, error: "Delivery refused: endpoint resolves to a private or internal address" };
+  }
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), WEBHOOK_TIMEOUT_MS);
 
@@ -375,6 +417,15 @@ async function deliverWebhook(
       headers,
       body,
       signal: controller.signal,
+      /*
+       * `manual`, because following a redirect re-opens the hole the check
+       * above just closed: the first URL is verified, then a 302 sends the
+       * POST — signature header, decrypted secret and all — to an address
+       * nothing vetted. This is the same defect the report evidence path was
+       * fixed for. A redirect from a webhook receiver is a misconfiguration,
+       * so treating it as the final answer loses nothing.
+       */
+      redirect: "manual",
     });
     clearTimeout(timeout);
 

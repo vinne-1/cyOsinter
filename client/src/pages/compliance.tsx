@@ -1,12 +1,15 @@
 import { useQuery } from "@tanstack/react-query";
+import { useState, useId, useMemo } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Progress } from "@/components/ui/progress";
-import { CheckCircle2, XCircle, AlertTriangle, HelpCircle, ShieldCheck, Download } from "lucide-react";
+import { CheckCircle2, XCircle, AlertTriangle, HelpCircle, ShieldCheck, Download, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useDomain } from "@/lib/domain-context";
+import { FindingDrilldown, type DrilldownFinding } from "@/components/finding-drilldown";
+import type { Finding } from "@shared/schema";
 
 function exportComplianceCSV(reports: Record<string, ComplianceReport>) {
   const esc = (v: string) => `"${String(v ?? "").replace(/"/g, '""')}"`;
@@ -81,7 +84,95 @@ function ScoreRing({ score, label }: { score: number; label: string }) {
   );
 }
 
-function FrameworkCard({ report }: { report: ComplianceReport }) {
+/**
+ * One compliance control, openable to the findings that decided its status.
+ *
+ * The mapping has always carried `findingIds` and the page has always rendered
+ * only their COUNT — so "Security Misconfiguration · Fail · 14 findings" told a
+ * reader that fourteen things were wrong and gave them no way to learn which
+ * fourteen without going to the inbox and guessing at categories. The ids were
+ * right there.
+ */
+function ControlRow({
+  mapping,
+  findingById,
+}: {
+  mapping: ComplianceMapping;
+  findingById: Map<string, DrilldownFinding>;
+}) {
+  const [open, setOpen] = useState(false);
+  const panelId = useId();
+  const config = statusConfig[mapping.status];
+  const Icon = config.icon;
+
+  // Resolve ids to findings. An id with no match is dropped rather than shown as
+  // a placeholder: it means the finding was deleted or filtered since the report
+  // was generated, and inventing a row for it would assert something we cannot
+  // show.
+  const resolved = mapping.findingIds
+    .map((id) => findingById.get(id))
+    .filter((f): f is DrilldownFinding => !!f);
+
+  const expandable = resolved.length > 0;
+
+  return (
+    <Card data-testid={`card-control-${mapping.control.id}`}>
+      <CardContent className="p-3">
+        <div className="flex items-start gap-3">
+          <div className={`flex items-center justify-center w-8 h-8 rounded-md flex-shrink-0 ${config.bg}`}>
+            <Icon className={`w-4 h-4 ${config.color}`} />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs font-mono text-muted-foreground">{mapping.control.id}</span>
+              <p className="text-sm font-medium">{mapping.control.title}</p>
+              <Badge variant="outline" className={`text-[10px] ${config.color}`}>
+                {config.label}
+              </Badge>
+              {expandable && (
+                <button
+                  type="button"
+                  onClick={() => setOpen((v) => !v)}
+                  aria-expanded={open}
+                  aria-controls={panelId}
+                  className="flex items-center gap-0.5 text-[10px] text-muted-foreground underline-offset-2 hover:underline"
+                  data-testid={`control-toggle-${mapping.control.id}`}
+                >
+                  <ChevronRight
+                    className={`h-3 w-3 transition-transform ${open ? "rotate-90" : ""}`}
+                    aria-hidden="true"
+                  />
+                  {resolved.length} finding{resolved.length > 1 ? "s" : ""}
+                </button>
+              )}
+              {/* Ids that resolved to nothing are still counted, so the number
+                  never silently shrinks below what the report recorded. */}
+              {!expandable && mapping.findingIds.length > 0 && (
+                <span className="text-[10px] text-muted-foreground">
+                  {mapping.findingIds.length} finding{mapping.findingIds.length > 1 ? "s" : ""}
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground mt-0.5">{mapping.control.description}</p>
+            {expandable && open && (
+              <div id={panelId} className="mt-2 border-l-2 border-border pl-3">
+                <FindingDrilldown findings={resolved} />
+              </div>
+            )}
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function FrameworkCard({
+  report,
+  findingById,
+}: {
+  report: ComplianceReport;
+  findingById: Map<string, DrilldownFinding>;
+}) {
   const scoreColor = report.score >= 80 ? "text-green-500" : report.score >= 60 ? "text-yellow-500" : report.score >= 40 ? "text-orange-500" : "text-red-500";
 
   return (
@@ -139,30 +230,11 @@ function FrameworkCard({ report }: { report: ComplianceReport }) {
           const config = statusConfig[mapping.status];
           const Icon = config.icon;
           return (
-            <Card key={mapping.control.id} data-testid={`card-control-${mapping.control.id}`}>
-              <CardContent className="p-3">
-                <div className="flex items-start gap-3">
-                  <div className={`flex items-center justify-center w-8 h-8 rounded-md flex-shrink-0 ${config.bg}`}>
-                    <Icon className={`w-4 h-4 ${config.color}`} />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-xs font-mono text-muted-foreground">{mapping.control.id}</span>
-                      <p className="text-sm font-medium">{mapping.control.title}</p>
-                      <Badge variant="outline" className={`text-[10px] ${config.color}`}>
-                        {config.label}
-                      </Badge>
-                      {mapping.findingIds.length > 0 && (
-                        <span className="text-[10px] text-muted-foreground">
-                          {mapping.findingIds.length} finding{mapping.findingIds.length > 1 ? "s" : ""}
-                        </span>
-                      )}
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-0.5">{mapping.control.description}</p>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+            <ControlRow
+              key={mapping.control.id}
+              mapping={mapping}
+              findingById={findingById}
+            />
           );
         })}
       </div>
@@ -177,6 +249,30 @@ export default function Compliance() {
     queryKey: [`/api/workspaces/${selectedWorkspaceId}/compliance`],
     enabled: !!selectedWorkspaceId,
   });
+
+  // The mappings carry finding IDs; the titles live on the findings themselves.
+  // Fetched here rather than joined server-side so the compliance endpoint stays
+  // a mapping and does not duplicate the finding payload per control — a
+  // finding cited by four controls would otherwise be sent four times.
+  const { data: findings = [] } = useQuery<Finding[]>({
+    queryKey: [`/api/workspaces/${selectedWorkspaceId}/findings`],
+    enabled: !!selectedWorkspaceId,
+  });
+
+  const findingById = useMemo(() => {
+    const m = new Map<string, DrilldownFinding>();
+    for (const f of findings) {
+      m.set(f.id, {
+        id: f.id,
+        title: f.title,
+        severity: f.severity,
+        status: f.status,
+        affectedAsset: f.affectedAsset,
+        category: f.category,
+      });
+    }
+    return m;
+  }, [findings]);
 
   if (isLoading) {
     return (
@@ -193,6 +289,11 @@ export default function Compliance() {
   const owasp = reports?.owasp;
   const cis = reports?.cis;
   const nist = reports?.nist;
+  // India-specific frameworks. CERT-In is the six-hour reporting obligation
+  // every Indian body corporate carries; DPDP covers the technical safeguards
+  // an external scan can actually evidence.
+  const certin = reports?.certin;
+  const dpdp = reports?.dpdp;
 
   return (
     <div className="space-y-6 p-6">
@@ -257,6 +358,26 @@ export default function Compliance() {
                 </CardContent>
               </Card>
             )}
+            {certin && (
+              <Card>
+                <CardContent className="p-4 text-center">
+                  <ScoreRing score={certin.score} label="CERT-In" />
+                  <p className="text-[10px] text-muted-foreground mt-2">
+                    {certin.failCount}/{certin.totalControls} incident types implicated
+                  </p>
+                </CardContent>
+              </Card>
+            )}
+            {dpdp && (
+              <Card>
+                <CardContent className="p-4 text-center">
+                  <ScoreRing score={dpdp.score} label="DPDP Act" />
+                  <p className="text-[10px] text-muted-foreground mt-2">
+                    {dpdp.passCount}/{dpdp.totalControls} controls passing
+                  </p>
+                </CardContent>
+              </Card>
+            )}
           </div>
 
           <Tabs defaultValue="owasp">
@@ -264,10 +385,33 @@ export default function Compliance() {
               <TabsTrigger value="owasp">OWASP Top 10</TabsTrigger>
               <TabsTrigger value="cis">CIS Controls</TabsTrigger>
               <TabsTrigger value="nist">NIST CSF</TabsTrigger>
+              <TabsTrigger value="certin">CERT-In</TabsTrigger>
+              <TabsTrigger value="dpdp">DPDP Act</TabsTrigger>
             </TabsList>
-            {owasp && <TabsContent value="owasp"><FrameworkCard report={owasp} /></TabsContent>}
-            {cis && <TabsContent value="cis"><FrameworkCard report={cis} /></TabsContent>}
-            {nist && <TabsContent value="nist"><FrameworkCard report={nist} /></TabsContent>}
+            {owasp && <TabsContent value="owasp"><FrameworkCard report={owasp} findingById={findingById} /></TabsContent>}
+            {cis && <TabsContent value="cis"><FrameworkCard report={cis} findingById={findingById} /></TabsContent>}
+            {nist && <TabsContent value="nist"><FrameworkCard report={nist} findingById={findingById} /></TabsContent>}
+            {certin && (
+              <TabsContent value="certin">
+                <p className="mb-3 text-xs text-muted-foreground">
+                  The CERT-In Directions 2022 require an Indian body corporate to report a listed incident within
+                  <strong> six hours</strong> of noticing it. These are the incident types your current external
+                  exposure relates to — early warning, not a statement that an incident has occurred.
+                </p>
+                <FrameworkCard report={certin} findingById={findingById} />
+              </TabsContent>
+            )}
+            {dpdp && (
+              <TabsContent value="dpdp">
+                <p className="mb-3 text-xs text-muted-foreground">
+                  Only the technical safeguards under s.8(4) and breach-detection readiness under s.8(5) are visible
+                  from outside. Consent, grievance handling, retention and Significant Data Fiduciary duties are
+                  process obligations marked <strong>not externally assessable</strong> — an external scan cannot
+                  certify them, and showing them blank would read as a pass.
+                </p>
+                <FrameworkCard report={dpdp} findingById={findingById} />
+              </TabsContent>
+            )}
           </Tabs>
         </>
       )}

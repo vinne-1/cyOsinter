@@ -1,14 +1,45 @@
 import { Router } from "express";
+import { parsePageParams } from "./response";
 import { z } from "zod";
-import { storage } from "../storage";
+import { storage, FULL_SET_LIMIT } from "../storage";
 import { createLogger } from "../logger";
 import { enrichFinding, generateWorkspaceInsights, buildFallbackInsights, analyzeFindingDetails, fetchCVEContextForInsights } from "../ai-service";
 import { searchThreatIntel } from "../tavily-service";
 import { getCVEForFinding } from "../cve-service";
 import { requireWorkspaceRole } from "./auth-middleware";
 import { updateFindingSchema } from "./schemas";
+import { isSecurityFinding } from "../scanner/finding-taxonomy";
 
 const routeLog = createLogger("routes");
+
+/** Statuses that mean the work is over. */
+const CLOSED_STATUSES = new Set(["resolved", "false_positive", "accepted_risk", "closed"]);
+
+/**
+ * What the AI insights panel is allowed to describe.
+ *
+ * `buildFallbackInsights` writes the sentence
+ * *"Workspace X has N security findings"* — the words "security findings",
+ * verbatim, to the operator. It was handed every row in the workspace, so a
+ * live workspace read **"has 14 security findings"** while its inbox showed 4:
+ * eight "… - Detect" recon rows and two controls that are WORKING, counted as
+ * outstanding work. Closed rows counted too, so remediating never moved it.
+ *
+ * The same set becomes the LLM prompt context (the top 10 by severity), and on
+ * a workspace whose findings are all info-severity that is mostly recon — so
+ * the model was being asked to write a security summary of a technology list.
+ */
+function insightFindings<T extends { kind?: string | null; status?: string | null }>(rows: T[]): T[] {
+  return rows.filter((f) => isSecurityFinding(f) && !CLOSED_STATUSES.has(f.status ?? "open"));
+}
+
+/**
+ * How many findings the in-memory filter path will consider.
+ *
+ * Generous rather than unbounded: the alternative is pushing every filter into
+ * SQL, which is the right long-term answer but a larger change than this fix.
+ */
+const FILTERABLE_FINDING_CEILING = 10_000;
 
 export const findingsRouter = Router();
 
@@ -16,8 +47,13 @@ const wsAuth = requireWorkspaceRole("owner", "admin", "analyst", "viewer");
 
 findingsRouter.get("/workspaces/:workspaceId/findings", wsAuth, async (req, res) => {
   try {
-    const result = await storage.getFindings(req.params.workspaceId as string);
-    const { severity, status, search, page, pageSize, kind } = req.query;
+    // Filtering and paging happen in memory below, so this fetch has to cover
+    // everything the filters could match. Left at the storage default of 500, a
+    // workspace with more findings silently lost the rest AND reported a
+    // `total` computed from that truncated page — the same "count reflects the
+    // page size, not the data" bug the list endpoints were fixed for.
+    const result = await storage.getFindings(req.params.workspaceId as string, { limit: FILTERABLE_FINDING_CEILING });
+    const { severity, status, search, kind } = req.query;
 
     let filtered = result.data as Array<Record<string, unknown>>;
 
@@ -47,10 +83,11 @@ findingsRouter.get("/workspaces/:workspaceId/findings", wsAuth, async (req, res)
     }
 
     const total = filtered.length;
-    const pg = Math.max(1, parseInt(String(page ?? "1"), 10));
-    const ps = Math.min(200, Math.max(1, parseInt(String(pageSize ?? "0"), 10)));
+    // `Math.max(1, parseInt("abc"))` is NaN, so a malformed `page` used to slice
+    // NaN..NaN and return an empty inbox with a 200 and a correct-looking total.
+    const { page: pg, pageSize: ps, paged } = parsePageParams(req.query);
 
-    if (!pageSize || ps === 0) {
+    if (!paged) {
       return res.json(filtered);
     }
 
@@ -134,10 +171,10 @@ findingsRouter.get("/workspaces/:workspaceId/ai-insights", wsAuth, async (req, r
     const ws = await storage.getWorkspace(workspaceId);
     if (!ws) return res.status(404).json({ message: "Workspace not found" });
     const [findingsResult, modulesResult] = await Promise.all([
-      storage.getFindings(workspaceId),
+      storage.getFindings(workspaceId, { limit: FULL_SET_LIMIT }),
       storage.getReconModules(workspaceId),
     ]);
-    res.json({ findings: findingsResult.data, modules: modulesResult.data, workspaceName: ws.name });
+    res.json({ findings: insightFindings(findingsResult.data), modules: modulesResult.data, workspaceName: ws.name });
   } catch (err) {
     routeLog.error({ err }, "AI insights error");
     res.status(500).json({ message: "Failed to load" });
@@ -151,10 +188,10 @@ findingsRouter.post("/workspaces/:workspaceId/ai-insights/summary", wsAuth, asyn
     const ws = await storage.getWorkspace(workspaceId);
     if (!ws) return res.status(404).json({ message: "Workspace not found" });
     const [findingsResult, modulesResult] = await Promise.all([
-      storage.getFindings(workspaceId),
+      storage.getFindings(workspaceId, { limit: FULL_SET_LIMIT }),
       storage.getReconModules(workspaceId),
     ]);
-    const findings = findingsResult.data;
+    const findings = insightFindings(findingsResult.data);
     const modules = modulesResult.data;
     const wsTarget = ws.domain || ws.name;
     const [cveContext, webSearchContext] = await Promise.all([
@@ -174,10 +211,10 @@ findingsRouter.post("/workspaces/:workspaceId/ai-insights/summary", wsAuth, asyn
       const ws = await storage.getWorkspace(workspaceId);
       if (ws) {
         const [fRes, mRes] = await Promise.all([
-          storage.getFindings(workspaceId),
+          storage.getFindings(workspaceId, { limit: FULL_SET_LIMIT }),
           storage.getReconModules(workspaceId),
         ]);
-        const fallback = buildFallbackInsights(fRes.data, mRes.data, ws.domain || ws.name);
+        const fallback = buildFallbackInsights(insightFindings(fRes.data), mRes.data, ws.domain || ws.name);
         const reason =
           errMsg === "Ollama AI is disabled"
             ? "ollama_disabled"
@@ -295,7 +332,7 @@ findingsRouter.post("/workspaces/:workspaceId/findings/enrich-all", wsAuth, asyn
   res.setTimeout(3600000); // 60 min for batch (many findings x 30 min each)
   try {
     const workspaceId = req.params.workspaceId as string;
-    const { data: findingsList } = await storage.getFindings(workspaceId);
+    const { data: findingsList } = await storage.getFindings(workspaceId, { limit: FULL_SET_LIMIT });
     const { data: modules } = await storage.getReconModules(workspaceId);
     let enriched = 0;
     for (const f of findingsList) {
