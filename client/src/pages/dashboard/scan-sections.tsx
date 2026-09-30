@@ -235,6 +235,7 @@ export function ScanLauncher() {
   const [selectedTypes, setSelectedTypes] = useState<string[]>(["full"]);
   const [launchedScans, setLaunchedScans] = useState<Record<string, "pending" | "launched">>({});
   const [autoGenerateReport, setAutoGenerateReport] = useState(false);
+  const [aiEnrich, setAiEnrich] = useState(false);
 
   // Prefer the workspace's explicit target domain; fall back to its name
   // (backward compatible with workspaces created as a bare domain).
@@ -252,13 +253,14 @@ export function ScanLauncher() {
     : null;
 
   const mutation = useMutation({
-    mutationFn: async ({ scanType, autoGen }: { scanType: string; autoGen?: boolean }) => {
+    mutationFn: async ({ scanType, autoGen, aiEnrich: aiEnrichFlag }: { scanType: string; autoGen?: boolean; aiEnrich?: boolean }) => {
       const res = await apiRequest("POST", "/api/scans", {
         target: effectiveTarget,
         type: scanType,
         status: "pending",
         workspaceId: selectedWorkspaceId || undefined,
         autoGenerateReport: autoGen ?? false,
+        aiEnrich: aiEnrichFlag ?? false,
         /*
          * No mode. This panel has no mode selector, so it has nothing to say.
          *
@@ -316,18 +318,19 @@ export function ScanLauncher() {
     }
     setLaunchedScans(pending);
     if (selectedTypes.includes("full")) {
-      mutation.mutate({ scanType: "full", autoGen: autoGenerateReport });
-      toast({ title: "Full scan started", description: `EASM + OSINT scan initiated against ${effectiveTarget}${autoGenerateReport ? " (report will be auto-generated)" : ""}` });
+      mutation.mutate({ scanType: "full", autoGen: autoGenerateReport, aiEnrich });
+      toast({ title: "Full scan started", description: `EASM + OSINT scan initiated against ${effectiveTarget}${autoGenerateReport ? " (report will be auto-generated)" : ""}${aiEnrich ? " (AI-enriched)" : ""}` });
     } else {
-      // Auto-generate is requested ONCE for the batch, not per scan. Each
-      // report describes the whole workspace, so asking every scan for one
-      // produced N near-identical reports from a toast that promises "a
-      // report" — and the flag only started meaning anything once it was
-      // actually wired, so the duplication had never shown up before.
+      // Auto-generate and AI-enrich are requested ONCE for the batch, not per
+      // scan. Each report/synthesis describes the whole workspace, so asking
+      // every scan for one produced N near-identical reports from a toast
+      // that promises "a report" — and the flag only started meaning
+      // anything once it was actually wired, so the duplication had never
+      // shown up before.
       selectedTypes.forEach((scanType, i) => {
-        mutation.mutate({ scanType, autoGen: i === 0 ? autoGenerateReport : false });
+        mutation.mutate({ scanType, autoGen: i === 0 ? autoGenerateReport : false, aiEnrich: i === 0 ? aiEnrich : false });
       });
-      toast({ title: "Scans launched", description: `${selectedTypes.length} scan(s) initiated against ${effectiveTarget}${autoGenerateReport ? " (report will be auto-generated)" : ""}` });
+      toast({ title: "Scans launched", description: `${selectedTypes.length} scan(s) initiated against ${effectiveTarget}${autoGenerateReport ? " (report will be auto-generated)" : ""}${aiEnrich ? " (AI-enriched)" : ""}` });
     }
   };
 
@@ -436,6 +439,25 @@ export function ScanLauncher() {
           <label htmlFor="auto-generate-report" className="text-sm cursor-pointer select-none">
             Auto-generate report when scan completes
           </label>
+        </div>
+        <div className="flex items-start gap-2 pt-1">
+          <Checkbox
+            id="ai-enrich-scan"
+            checked={aiEnrich}
+            onCheckedChange={(checked) => setAiEnrich(checked === true)}
+            disabled={!!Object.keys(launchedScans).length}
+            className="mt-0.5"
+            aria-describedby="ai-enrich-scan-desc"
+            data-testid="checkbox-ai-enrich-scan"
+          />
+          <div>
+            <label htmlFor="ai-enrich-scan" className="text-sm cursor-pointer select-none">
+              AI-enrich when scan completes
+            </label>
+            <p id="ai-enrich-scan-desc" className="text-xs text-muted-foreground mt-0.5">
+              GLM re-verifies key findings live and writes a correlated synthesis — same as the AI Insights "Generate" button, run automatically.
+            </p>
+          </div>
         </div>
       </CardContent>
     </Card>

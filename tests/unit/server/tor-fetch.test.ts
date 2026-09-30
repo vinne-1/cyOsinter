@@ -49,6 +49,7 @@ import {
   torFetchText,
   getTorAgent,
   __resetTorAgent,
+  normaliseTorProxyUrl,
   TOR_PROXY_URL,
 } from "../../../server/scanner/tor-fetch";
 
@@ -103,8 +104,21 @@ afterEach(() => {
 });
 
 describe("TOR_PROXY_URL", () => {
-  it("defaults to the local Tor SOCKS port", () => {
-    expect(TOR_PROXY_URL).toBe("socks5://127.0.0.1:9050");
+  it("defaults to the local Tor SOCKS port, with remote DNS", () => {
+    expect(TOR_PROXY_URL).toBe("socks5h://127.0.0.1:9050");
+  });
+});
+
+describe("normaliseTorProxyUrl", () => {
+  it("rewrites socks5:// so a .onion name is resolved by Tor", () => {
+    expect(normaliseTorProxyUrl("socks5://127.0.0.1:9050")).toBe("socks5h://127.0.0.1:9050");
+    expect(normaliseTorProxyUrl("socks5://tor:9050")).toBe("socks5h://tor:9050");
+    expect(normaliseTorProxyUrl("socks://tor:9050")).toBe("socks5h://tor:9050");
+  });
+
+  it("leaves an address that already uses remote DNS unchanged", () => {
+    expect(normaliseTorProxyUrl("socks5h://127.0.0.1:9050")).toBe("socks5h://127.0.0.1:9050");
+    expect(normaliseTorProxyUrl("socks4a://127.0.0.1:9050")).toBe("socks4a://127.0.0.1:9050");
   });
 });
 
@@ -116,6 +130,17 @@ describe("getTorAgent", () => {
   it("returns a Node http.Agent, which is what http.request requires", async () => {
     const { Agent } = await import("node:http");
     expect(getTorAgent()).toBeInstanceOf(Agent);
+  });
+
+  /**
+   * socks5 resolves locally. Measured: a live .onion failed in 21ms with
+   * ENOTFOUND, and the same URL over socks5h returned 301. shouldLookup
+   * is the flag that chooses which of those two happens.
+   */
+  it("does not resolve the destination locally", () => {
+    const agent = getTorAgent() as { shouldLookup?: boolean; proxyUrl?: string };
+    expect(agent.shouldLookup).toBe(false);
+    expect(agent.proxyUrl).toMatch(/^socks5h:\/\//);
   });
 
   it("reuses the agent within its TTL", () => {

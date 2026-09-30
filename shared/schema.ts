@@ -173,6 +173,24 @@ export const postureSnapshots = pgTable("posture_snapshots", {
   foreignKey({ columns: [t.scanId], foreignColumns: [scans.id], name: "posture_snapshots_scan_fk" }).onDelete("set null"),
 ]);
 
+/**
+ * The last AI Insights synthesis for a workspace — one row, upserted.
+ *
+ * Generating this was previously ephemeral: it lived only in client `useState`
+ * and vanished on every navigation or refresh, so the page showed an empty
+ * "Click Generate" state even for a workspace that had already been
+ * synthesized once. `content` holds the full `WorkspaceInsightsResult`
+ * (summary, keyRisks, threatLandscape, verification checks, isAIGenerated).
+ */
+export const aiInsightsSnapshots = pgTable("ai_insights_snapshots", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  workspaceId: varchar("workspace_id").notNull().unique(),
+  content: jsonb("content").$type<Record<string, unknown>>().notNull(),
+  generatedAt: timestamp("generated_at").notNull().defaultNow(),
+}, (t) => [
+  foreignKey({ columns: [t.workspaceId], foreignColumns: [workspaces.id], name: "ai_insights_snapshots_workspace_fk" }).onDelete("cascade"),
+]);
+
 export const reconModules = pgTable("recon_modules", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
   workspaceId: varchar("workspace_id").notNull(),
@@ -195,6 +213,7 @@ export const insertFindingSchema = createInsertSchema(findings).omit({ id: true,
 export const insertReportSchema = createInsertSchema(reports).omit({ id: true, generatedAt: true, content: true });
 export const insertPostureSnapshotSchema = createInsertSchema(postureSnapshots).omit({ id: true });
 export const insertReconModuleSchema = createInsertSchema(reconModules).omit({ id: true, generatedAt: true });
+export const insertAiInsightsSnapshotSchema = createInsertSchema(aiInsightsSnapshots).omit({ id: true, generatedAt: true });
 export const insertContinuousMonitoringSchema = createInsertSchema(continuousMonitoring).omit({ id: true, createdAt: true });
 export const insertUploadedScanSchema = createInsertSchema(uploadedScans).omit({ id: true, createdAt: true });
 
@@ -465,6 +484,8 @@ export type PostureSnapshot = typeof postureSnapshots.$inferSelect;
 export type InsertPostureSnapshot = z.infer<typeof insertPostureSnapshotSchema>;
 export type ReconModule = typeof reconModules.$inferSelect;
 export type InsertReconModule = z.infer<typeof insertReconModuleSchema>;
+export type AiInsightsSnapshot = typeof aiInsightsSnapshots.$inferSelect;
+export type InsertAiInsightsSnapshot = z.infer<typeof insertAiInsightsSnapshotSchema>;
 export type ContinuousMonitoring = typeof continuousMonitoring.$inferSelect;
 export type InsertContinuousMonitoring = z.infer<typeof insertContinuousMonitoringSchema>;
 export type UploadedScan = typeof uploadedScans.$inferSelect;

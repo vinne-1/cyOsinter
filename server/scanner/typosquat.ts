@@ -427,3 +427,112 @@ export async function scanForLookalikes(
     },
   };
 }
+
+export interface TyposquatFinding {
+  title: string;
+  description: string;
+  severity: "high" | "medium" | "low" | "info";
+  category: string;
+  affectedAsset: string;
+  cvssScore: string;
+  remediation: string;
+  evidence: Record<string, unknown>;
+}
+
+const BAND_SCORE: Record<TyposquatFinding["severity"], string> = {
+  high: "7.5",
+  medium: "5.3",
+  low: "3.7",
+  info: "0.0",
+};
+
+/**
+ * Renders a lookalike sweep as findings.
+ *
+ * One finding per RISK TIER, not one per registered domain: a sweep can turn
+ * up dozens of registered permutations, and a row each would bury the actual
+ * question ("are any of these phishing-ready right now?") under a list. High
+ * risk (live and mail-capable — ready to receive phishing replies or host a
+ * credential-harvesting clone) gets its own finding because it is the one
+ * tier that warrants acting on immediately; medium (live, no mail) and low
+ * (registered but dormant — pre-positioned for later) are reported but at
+ * lower urgency, matching `LookalikeResult.risk`'s own definition.
+ */
+export function buildTyposquatFindings(domain: string, result: TyposquatScanResult): TyposquatFinding[] {
+  const findings: TyposquatFinding[] = [];
+  const high = result.registered.filter((r) => r.risk === "high");
+  const medium = result.registered.filter((r) => r.risk === "medium");
+  const low = result.registered.filter((r) => r.risk === "low");
+
+  if (high.length > 0) {
+    findings.push({
+      title: `${high.length} lookalike domain${high.length === 1 ? "" : "s"} registered and mail-capable — highest phishing risk`,
+      description:
+        `${high.length} domain${high.length === 1 ? "" : "s"} resembling ${domain} ${high.length === 1 ? "resolves" : "resolve"} to a live host ` +
+        `AND publish${high.length === 1 ? "es" : ""} a mail exchanger, out of ${result.generated} candidate permutations checked: ` +
+        `${high.slice(0, 10).map((r) => r.domain).join(", ")}${high.length > 10 ? `, and ${high.length - 10} more` : ""}. ` +
+        `A domain in this state can both host a credential-harvesting clone of your site AND receive replies to phishing email sent from it — ` +
+        `this is infrastructure an attacker could weaponise today, not merely a registered name. Registration alone does not prove malicious intent, ` +
+        `but the combination of live hosting and mail capability on a name this close to yours warrants investigation.`,
+      severity: "high",
+      category: "brand_threat",
+      affectedAsset: domain,
+      cvssScore: BAND_SCORE.high,
+      remediation:
+        "Investigate each domain's hosted content and WHOIS registrant. For confirmed phishing/clone use, file a UDRP complaint or use the registrar's " +
+        "abuse process to request takedown, and consider defensively registering close variants before they are taken.",
+      evidence: { target: domain, generated: result.generated, checked: result.checked, domains: high },
+    });
+  }
+
+  if (medium.length > 0) {
+    findings.push({
+      title: `${medium.length} lookalike domain${medium.length === 1 ? "" : "s"} registered and live`,
+      description:
+        `${medium.length} domain${medium.length === 1 ? "" : "s"} resembling ${domain} ${medium.length === 1 ? "resolves" : "resolve"} to a live host ` +
+        `with no mail exchanger configured: ${medium.slice(0, 10).map((r) => r.domain).join(", ")}${medium.length > 10 ? `, and ${medium.length - 10} more` : ""}. ` +
+        `This is typically a parking page or a clone under construction. It does not yet receive mail, but a live host can serve content at any time.`,
+      severity: "medium",
+      category: "brand_threat",
+      affectedAsset: domain,
+      cvssScore: BAND_SCORE.medium,
+      remediation: "Periodically re-check what these domains serve. Escalate to the takedown process above if any starts hosting a clone or phishing content.",
+      evidence: { target: domain, generated: result.generated, checked: result.checked, domains: medium },
+    });
+  }
+
+  if (low.length > 0) {
+    findings.push({
+      title: `${low.length} lookalike domain${low.length === 1 ? "" : "s"} registered but dormant`,
+      description:
+        `${low.length} domain${low.length === 1 ? "" : "s"} resembling ${domain} ${low.length === 1 ? "is" : "are"} registered (nameservers respond) ` +
+        `but ${low.length === 1 ? "does" : "do"} not yet resolve to a host or accept mail: ${low.slice(0, 10).map((r) => r.domain).join(", ")}` +
+        `${low.length > 10 ? `, and ${low.length - 10} more` : ""}. Held but unused names are still pre-positioned — an attacker who has already ` +
+        `registered a name can activate it without warning, unlike one who has not.`,
+      severity: "low",
+      category: "brand_threat",
+      affectedAsset: domain,
+      cvssScore: BAND_SCORE.low,
+      remediation: "No immediate action required. Worth a periodic re-check, since activation would move these to medium or high risk with no new registration to notice.",
+      evidence: { target: domain, generated: result.generated, checked: result.checked, domains: low },
+    });
+  }
+
+  if (result.registered.length === 0) {
+    findings.push({
+      title: `No registered lookalike domains found for ${domain}`,
+      description:
+        `${result.generated} candidate permutation${result.generated === 1 ? "" : "s"} of ${domain} (typo, homoglyph, hyphenation, TLD-swap and ` +
+        `combosquat variants) were checked against DNS and none are registered. This is a real, checked result, not an assumption — re-run periodically, ` +
+        `since a lookalike can be registered at any time.`,
+      severity: "info",
+      category: "brand_threat",
+      affectedAsset: domain,
+      cvssScore: BAND_SCORE.info,
+      remediation: "No action needed now. Re-run this sweep periodically to catch a new registration early.",
+      evidence: { target: domain, generated: result.generated, checked: result.checked },
+    });
+  }
+
+  return findings;
+}

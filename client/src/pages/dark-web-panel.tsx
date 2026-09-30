@@ -212,8 +212,10 @@ export function DarkWebPanel({ workspaceId }: { workspaceId: string | null }) {
                       {failed > 0 && (
                         <> {failed} source{failed === 1 ? "" : "s"} failed to respond ({data.sourcesFailed.join(", ")}).</>
                       )}
-                      {" "}This is <strong>not</strong> a clean result — most of the corpus was not
-                      searched. Start the Tor proxy and re-run to complete the check.
+                      {" "}This is <strong>not</strong> a clean result.
+                      {skipped
+                        ? " Start the Tor proxy and re-run so .onion sources are checked."
+                        : " Re-run once the source that failed is reachable."}
                     </>
                   ) : (
                     <>

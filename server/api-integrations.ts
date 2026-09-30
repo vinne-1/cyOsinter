@@ -596,13 +596,16 @@ export function getIntegrationsStatus(): {
   tavily: { configured: boolean };
   shodan: { configured: boolean };
   ollama: { configured: boolean; model: string; enabled: boolean };
+  glm: { configured: boolean; model: string };
 } {
   const ollama = getOllamaConfig();
+  const glmModel = process.env.GLM_MODEL?.trim() || "glm-4.5-flash";
   return {
     abuseipdb: { configured: !!getApiKey("abuseipdb") },
     virustotal: { configured: !!getApiKey("virustotal") },
     tavily: { configured: !!getApiKey("tavily") },
     shodan: { configured: !!getApiKey("shodan") },
     ollama: { configured: true, model: ollama.model, enabled: ollama.enabled },
+    glm: { configured: !!process.env.GLM_API_KEY?.trim(), model: glmModel },
   };
 }

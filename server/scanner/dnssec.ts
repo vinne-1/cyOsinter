@@ -33,6 +33,9 @@
  */
 
 import type { VerifiedFinding } from "./constants.js";
+import { createLogger } from "../logger.js";
+
+const log = createLogger("dnssec");
 
 /** JSON shape returned by both Cloudflare and Google DoH endpoints. */
 interface DohResponse {
@@ -69,27 +72,63 @@ export interface DnssecStatus {
 const DNSKEY = 48;
 const DS = 43;
 
-/** Default fetcher. Cloudflare first, Google as the fallback. */
+/**
+ * Distinguishes a TLS-interception failure from an ordinary network error, so
+ * a warning log can say WHY a resolver was unreachable instead of just THAT
+ * it was. `SELF_SIGNED_CERT_IN_CHAIN` / `UNABLE_TO_VERIFY_LEAF_SIGNATURE` are
+ * what Node reports when something between this process and the resolver
+ * re-signs the TLS connection with its own certificate — the signature of a
+ * network appliance or corporate proxy actively intercepting the connection,
+ * which is a common policy specifically for DNS-over-HTTPS (it lets a client
+ * bypass DNS-based filtering and logging otherwise).
+ */
+export function classifyFetchFailure(err: unknown): string {
+  const cause = (err as { cause?: { code?: string } } | undefined)?.cause;
+  if (cause?.code === "SELF_SIGNED_CERT_IN_CHAIN" || cause?.code === "UNABLE_TO_VERIFY_LEAF_SIGNATURE" || cause?.code === "CERT_HAS_EXPIRED") {
+    return "TLS certificate validation failed — a network device between this server and the resolver may be intercepting the connection";
+  }
+  if (err instanceof Error && (err.name === "AbortError" || /timeout|timed out/i.test(err.message))) {
+    return "timed out";
+  }
+  if (cause?.code) return `network error (${cause.code})`;
+  return err instanceof Error ? err.message : "unknown error";
+}
+
+/** Default fetcher. Cloudflare first, Google second, NextDNS third. */
 export const defaultDohFetcher: DohFetcher = async (url, headers) => {
   try {
     const res = await fetch(url, { headers, signal: AbortSignal.timeout(6000) });
-    if (!res.ok) return null;
+    if (!res.ok) {
+      log.warn({ url, status: res.status }, "DoH provider answered with a non-OK status");
+      return null;
+    }
     return (await res.json()) as DohResponse;
-  } catch {
+  } catch (err) {
+    log.warn({ url, reason: classifyFetchFailure(err) }, "DoH provider unreachable");
     return null;
   }
 };
 
-/** Queries one record type, trying Cloudflare then Google. */
+/**
+ * Queries one record type, trying Cloudflare, then Google, then NextDNS.
+ *
+ * A third provider exists because "both resolvers unreachable" is not always
+ * a real network outage — some networks specifically block or TLS-intercept
+ * DNS-over-HTTPS to the two best-known public resolvers (it is a common
+ * corporate/security-appliance policy, precisely because DoH lets a client
+ * bypass DNS-based filtering and logging), while leaving other DoH providers
+ * untouched. NextDNS's JSON API returns the identical shape Cloudflare and
+ * Google do, so it slots into the exact same parsing path.
+ */
 async function query(domain: string, type: "DNSKEY" | "DS", fetcher: DohFetcher): Promise<DohResponse | null> {
   const encoded = encodeURIComponent(domain);
   const cloudflare = await fetcher(`https://cloudflare-dns.com/dns-query?name=${encoded}&type=${type}&do=1`, {
     accept: "application/dns-json",
   });
   if (cloudflare) return cloudflare;
-  // Google's endpoint takes the same parameters and returns the same shape, so
-  // one provider being unreachable does not turn into "this zone is unsigned".
-  return fetcher(`https://dns.google/resolve?name=${encoded}&type=${type}&do=1`, { accept: "application/json" });
+  const google = await fetcher(`https://dns.google/resolve?name=${encoded}&type=${type}&do=1`, { accept: "application/json" });
+  if (google) return google;
+  return fetcher(`https://dns.nextdns.io/dns-query?name=${encoded}&type=${type}&do=1`, { accept: "application/dns-json" });
 }
 
 /** Pulls the algorithm number from a DNSKEY rdata string: "flags protocol alg key". */
@@ -122,7 +161,12 @@ export async function checkDnssec(domain: string, fetchDoh: DohFetcher = default
       authenticatedData: false,
       algorithms: [],
       state: "unverifiable",
-      detail: "DNS-over-HTTPS lookups did not complete; DNSSEC state could not be determined",
+      detail:
+        "DNS-over-HTTPS lookups to Cloudflare, Google, and NextDNS all failed to complete; DNSSEC state could not be " +
+        "determined. If this persists, check the server's outbound network logs for this domain — a TLS certificate " +
+        "error (rather than a timeout) to all three usually means a network device between this server and the public " +
+        "internet is intercepting DNS-over-HTTPS, which is a common policy since DoH otherwise bypasses DNS-based " +
+        "filtering and logging.",
     };
   }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { checkDnssec, describeDnssec, buildDnssecFindings, type DohFetcher } from "../../../server/scanner/dnssec";
+import { checkDnssec, describeDnssec, buildDnssecFindings, classifyFetchFailure, type DohFetcher } from "../../../server/scanner/dnssec";
 
 const DNSKEY = 48;
 const DS = 43;
@@ -96,6 +96,52 @@ describe("checkDnssec", () => {
     const spy = vi.fn(async () => null);
     await checkDnssec("sub.example.com", spy);
     expect((spy.mock.calls[0][0] as string)).toContain("name=sub.example.com");
+  });
+
+  // Regression: a network that TLS-intercepts DNS-over-HTTPS to Cloudflare
+  // and Google specifically (a real, observed policy — DoH otherwise bypasses
+  // DNS-based filtering) made every DNSSEC check report "unverifiable" even
+  // though the domain's true state was resolvable via a third provider.
+  it("falls back to a third provider (NextDNS) when both Cloudflare and Google are unreachable", async () => {
+    const seen: string[] = [];
+    const fetcher: DohFetcher = async (url) => {
+      seen.push(url);
+      if (url.includes("cloudflare") || url.includes("dns.google")) return null;
+      return /type=DNSKEY/.test(url) ? ({ Answer: [key(13)] } as any) : ({ Answer: [ds()] } as any);
+    };
+    const r = await checkDnssec("example.com", fetcher);
+    expect(r.signed).toBe(true);
+    expect(seen.some((u) => u.includes("nextdns"))).toBe(true);
+  });
+
+  it('reports "unverifiable" only after all three providers fail', async () => {
+    const seen: string[] = [];
+    const r = await checkDnssec("example.com", async (url) => {
+      seen.push(url);
+      return null;
+    });
+    expect(r.state).toBe("unverifiable");
+    expect(seen.filter((u) => u.includes("cloudflare")).length).toBeGreaterThan(0);
+    expect(seen.filter((u) => u.includes("dns.google")).length).toBeGreaterThan(0);
+    expect(seen.filter((u) => u.includes("nextdns")).length).toBeGreaterThan(0);
+  });
+});
+
+describe("classifyFetchFailure", () => {
+  it("identifies a TLS-interception signature distinctly from a plain network error", () => {
+    const err = new Error("fetch failed");
+    (err as Error & { cause: { code: string } }).cause = { code: "SELF_SIGNED_CERT_IN_CHAIN" };
+    expect(classifyFetchFailure(err)).toMatch(/intercepting/i);
+  });
+
+  it("identifies a timeout distinctly", () => {
+    const err = new Error("The operation was aborted");
+    err.name = "AbortError";
+    expect(classifyFetchFailure(err)).toBe("timed out");
+  });
+
+  it("falls back to the error message for anything else", () => {
+    expect(classifyFetchFailure(new Error("ECONNREFUSED"))).toBe("ECONNREFUSED");
   });
 });
 

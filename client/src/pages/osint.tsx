@@ -38,6 +38,7 @@ import {
   Clock,
 } from "lucide-react";
 import type { Scan, Finding } from "@shared/schema";
+import { FindingDetailDialog } from "@/components/finding-detail-dialog";
 import { usePagedList, ListPager } from "@/components/list-pager";
 import { ScanStatusBadge, SeverityBadge } from "@/components/severity-badge";
 import { DeleteScanButton } from "@/components/delete-scan-button";
@@ -228,6 +229,7 @@ export default function OSINT() {
   const osintScans = scans.filter((s) => s.type === "osint" || s.type === "full");
   const osintFindings = findings.filter((f) => f.category === "osint_exposure" || f.category === "data_leak" || f.category === "leaked_credential" || f.category === "infrastructure_disclosure");
   const pagedOsint = usePagedList(osintFindings, null);
+  const [selectedFinding, setSelectedFinding] = useState<Finding | null>(null);
 
   if (loadingScans || loadingFindings) {
     return (
@@ -366,9 +368,16 @@ export default function OSINT() {
                           <p className="text-xs font-medium text-muted-foreground">Findings</p>
                           <ul className="space-y-1.5">
                             {scanFindings.slice(0, 10).map((f) => (
-                              <li key={f.id} className="flex items-center gap-2 flex-wrap text-sm">
-                                <SeverityBadge severity={f.severity} />
-                                <span className="min-w-0 truncate" title={f.title}>{f.title}</span>
+                              <li key={f.id}>
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedFinding(f)}
+                                  data-testid={`button-osint-scan-finding-${f.id}`}
+                                  className="flex w-full items-center gap-2 flex-wrap text-sm rounded-md px-1 py-0.5 -mx-1 text-left hover-elevate active-elevate-2"
+                                >
+                                  <SeverityBadge severity={f.severity} />
+                                  <span className="min-w-0 truncate" title={f.title}>{f.title}</span>
+                                </button>
                               </li>
                             ))}
                             {scanFindings.length > 10 && (
@@ -399,7 +408,20 @@ export default function OSINT() {
           ) : (
             <div className="space-y-3">
               {pagedOsint.items.map((finding) => (
-                <Card key={finding.id} data-testid={`card-osint-finding-${finding.id}`}>
+                <Card
+                  key={finding.id}
+                  data-testid={`card-osint-finding-${finding.id}`}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setSelectedFinding(finding)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      setSelectedFinding(finding);
+                    }
+                  }}
+                  className="cursor-pointer hover-elevate active-elevate-2"
+                >
                   <CardContent className="p-4">
                     <div className="flex items-start justify-between gap-4">
                       <div className="space-y-1 min-w-0 flex-1">
@@ -424,6 +446,15 @@ export default function OSINT() {
           )}
         </TabsContent>
       </Tabs>
+
+      <FindingDetailDialog
+        finding={selectedFinding}
+        open={!!selectedFinding}
+        onOpenChange={(open) => {
+          if (!open) setSelectedFinding(null);
+        }}
+        onEnriched={setSelectedFinding}
+      />
     </div>
   );
 }

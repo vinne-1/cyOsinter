@@ -68,9 +68,18 @@ services:
       NODE_ENV: production
       OLLAMA_BASE_URL: http://ollama:11434
       OLLAMA_ENABLED: ${OLLAMA_ENABLED:-0}
+      # AI insights, enrichment and report narrative. Empty key disables them.
+      GLM_API_KEY: ${GLM_API_KEY:-}
+      GLM_BASE_URL: ${GLM_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}
+      GLM_MODEL: ${GLM_MODEL:-glm-4.5-flash}
       # Turnkey login seeded on first run (change these, or set via .env).
       SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-admin@cyshield.local}
       SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-ChangeMe123!}
+      # The tor service is on the compose network, not on this container's
+      # loopback. socks5h so .onion names are resolved by Tor. Harmless when
+      # the darkweb profile is off: the proxy is then unreachable and the
+      # panel reports the check as incomplete.
+      TOR_SOCKS_PROXY: socks5h://tor:9050
     depends_on:
       db:
         condition: service_healthy

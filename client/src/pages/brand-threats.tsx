@@ -12,7 +12,7 @@ import { MetricTile } from "@/components/metric-tile";
 import { ScrollStrip } from "@/components/scroll-strip";
 import { cn } from "@/lib/utils";
 import {
-  ShieldAlert, Radar, Loader2, Mail, Globe, ExternalLink, Search, Server,
+  ShieldAlert, Radar, Loader2, Mail, Globe, ExternalLink, Search, Server, Sparkles, AlertTriangle,
 } from "lucide-react";
 import type { ReconModule } from "@shared/schema";
 import { RansomwarePanel } from "./ransomware-panel";
@@ -98,6 +98,19 @@ export default function BrandThreatsPage() {
     },
   });
 
+  interface BrandThreatNarrative { summary: string; priorities: string[] }
+  const [narrative, setNarrative] = useState<BrandThreatNarrative | null>(null);
+  const explainMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/workspaces/${selectedWorkspaceId}/brand-threats/explain`, undefined, { timeoutMs: 120000 });
+      return res.json() as Promise<BrandThreatNarrative>;
+    },
+    onSuccess: (data) => setNarrative(data),
+    onError: (err: Error) => {
+      toast({ title: "AI explanation failed", description: err.message, variant: "destructive" });
+    },
+  });
+
   const rows = useMemo(() => {
     const all = data?.registered ?? [];
     const q = query.trim().toLowerCase();
@@ -130,16 +143,49 @@ export default function BrandThreatsPage() {
             homoglyphs, bitsquats and combosquats, confirmed by DNS.
           </p>
         </div>
-        <Button
-          onClick={() => scan.mutate()}
-          disabled={scan.isPending || !target}
-          data-testid="button-run-brand-sweep"
-        >
-          {scan.isPending
-            ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Sweeping…</>
-            : <><Radar className="mr-2 h-4 w-4" /> Run sweep</>}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            onClick={() => explainMutation.mutate()}
+            disabled={explainMutation.isPending}
+            data-testid="button-explain-brand-threats"
+          >
+            {explainMutation.isPending
+              ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Asking GLM...</>
+              : <><Sparkles className="mr-2 h-4 w-4" /> {narrative ? "Re-explain" : "Explain with AI"}</>}
+          </Button>
+          <Button
+            onClick={() => scan.mutate()}
+            disabled={scan.isPending || !target}
+            data-testid="button-run-brand-sweep"
+          >
+            {scan.isPending
+              ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Sweeping…</>
+              : <><Radar className="mr-2 h-4 w-4" /> Run sweep</>}
+          </Button>
+        </div>
       </div>
+
+      {narrative && (
+        <Card data-testid="card-brand-threat-narrative">
+          <CardContent className="p-4 space-y-2">
+            <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              AI Summary — correlates all five checks below; anything not yet run is named as unchecked, not clean
+            </p>
+            <p className="text-sm leading-relaxed">{narrative.summary}</p>
+            {narrative.priorities.length > 0 && (
+              <ul className="space-y-1">
+                {narrative.priorities.map((p, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs">
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-500 flex-shrink-0 mt-0.5" />
+                    {p}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <RansomwarePanel workspaceId={selectedWorkspaceId} />
 

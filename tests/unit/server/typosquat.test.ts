@@ -4,7 +4,10 @@ import {
   generatePermutations,
   resolveLookalikes,
   scanForLookalikes,
+  buildTyposquatFindings,
   type Permutation,
+  type LookalikeResult,
+  type TyposquatScanResult,
 } from "../../../server/scanner/typosquat";
 
 describe("splitDomain", () => {
@@ -257,5 +260,63 @@ describe("scanForLookalikes", () => {
     const result = await scanForLookalikes("example.com", { resolver: fakeResolver({}), limit: 50 });
     expect(result.registered).toEqual([]);
     expect(result.counts).toEqual({ high: 0, medium: 0, low: 0 });
+  });
+});
+
+function lookalike(domain: string, risk: LookalikeResult["risk"]): LookalikeResult {
+  return {
+    domain,
+    kind: "omission",
+    addresses: risk !== "low" ? ["1.2.3.4"] : [],
+    mx: risk === "high" ? ["mx.evil.example"] : [],
+    nameservers: ["ns1.example"],
+    resolves: risk !== "low",
+    risk,
+  };
+}
+
+function scanResult(registered: LookalikeResult[]): TyposquatScanResult {
+  return {
+    target: "example.com",
+    generated: 500,
+    checked: 500,
+    registered,
+    counts: {
+      high: registered.filter((r) => r.risk === "high").length,
+      medium: registered.filter((r) => r.risk === "medium").length,
+      low: registered.filter((r) => r.risk === "low").length,
+    },
+  };
+}
+
+describe("buildTyposquatFindings", () => {
+  it("raises a high-severity finding for mail-capable live lookalikes", () => {
+    const findings = buildTyposquatFindings("example.com", scanResult([lookalike("exmple.com", "high")]));
+    const high = findings.find((f) => f.severity === "high");
+    expect(high).toBeDefined();
+    expect(high!.category).toBe("brand_threat");
+    expect(high!.title).toContain("mail-capable");
+    expect(high!.description).toContain("exmple.com");
+  });
+
+  it("separates high, medium and low risk into distinct findings, never merged", () => {
+    const findings = buildTyposquatFindings(
+      "example.com",
+      scanResult([lookalike("high1.com", "high"), lookalike("med1.com", "medium"), lookalike("low1.com", "low")]),
+    );
+    expect(findings.map((f) => f.severity).sort()).toEqual(["high", "low", "medium"]);
+  });
+
+  it("reports a real, checked clean state when nothing is registered — not silence", () => {
+    const findings = buildTyposquatFindings("example.com", scanResult([]));
+    expect(findings).toHaveLength(1);
+    expect(findings[0].severity).toBe("info");
+    expect(findings[0].description).toContain("500");
+    expect(findings[0].category).toBe("brand_threat");
+  });
+
+  it("never claims registration alone proves malicious intent", () => {
+    const findings = buildTyposquatFindings("example.com", scanResult([lookalike("exmple.com", "high")]));
+    expect(findings[0].description).toMatch(/does not prove malicious intent|registration alone does not prove/i);
   });
 });

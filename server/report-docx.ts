@@ -22,9 +22,31 @@ export interface ReportFinding {
   cvssScore?: string;
   remediation?: string;
   evidenceText?: string;
+  /** Non-verification evidence item count, so truncation can say "+N more" honestly. */
+  evidenceCount?: number;
   evidenceImageKey?: string;
   /** Live re-verification record left by the fail-closed gate. */
   verification?: { status: string; detail?: string; checkedAt?: string };
+  /** Free-text labels applied to the finding (triage/grouping), if any. */
+  tags?: string[];
+  /** Case/SLA ownership, shown only when at least one field is set. */
+  ownership?: { assignee?: string; dueDate?: string; priority?: number; slaBreached?: boolean };
+  /**
+   * GLM enrichment already stored on the finding (`finding.aiEnrichment`) —
+   * carried in, never recomputed, for the same reason `aiFollowUp` is: this
+   * is a snapshot of an existing AI analysis, not something to re-run on
+   * every export. Previously dropped entirely, so the report disagreed with
+   * what the in-app finding dialog showed for the same finding.
+   */
+  aiInsights?: {
+    contextualRisks?: string;
+    additionalRemediation?: string;
+    detailedAnalysis?: string;
+    recommendations?: string[];
+    cves?: Array<{ cveId: string; cvssScore?: number; url?: string }>;
+    ticketUrl?: string;
+    ticketProvider?: string;
+  };
 }
 
 export interface ReportDocxInput {
@@ -91,6 +113,23 @@ export interface ReportDocxInput {
     factors: FactorScore[];
     ceiling: CeilingAnalysis;
   };
+  /**
+   * The AI Follow-up segment (`report.content.aiFollowUp`), carried in
+   * verbatim from the stored report rather than recomputed — this module
+   * otherwise rebuilds its input fresh from the workspace's CURRENT state,
+   * but a follow-up narrative is a GLM synthesis tied to the findings at
+   * generation time, not something to silently regenerate on every export.
+   * Renders the same content the PDF export and the web UI already show;
+   * omitting it here made the .docx the one place a client-facing
+   * AI-Follow-up report silently disagreed with itself.
+   */
+  aiFollowUp?: {
+    generatedBy?: string;
+    domain?: string | null;
+    themes?: Array<{ title: string; severity: string; narrative: string; action?: string }>;
+    checks?: Array<{ label: string; status: string; summary: string }>;
+    nextSteps?: string[];
+  };
 }
 
 import { gradeForScore as gradeLetter, type FactorScore, type CeilingAnalysis } from "@shared/risk-factors";
@@ -122,10 +161,23 @@ function h2(text: string): Paragraph {
 function bullet(text: string): Paragraph {
   return new Paragraph({ bullet: { level: 0 }, spacing: { after: 40 }, children: [t(text)] });
 }
+const EVIDENCE_LINE_CAP = 30;
+
 function evidenceLines(text: string): Paragraph[] {
-  return text.split("\n").filter(Boolean).slice(0, 12).map(
+  const all = text.split("\n").filter(Boolean);
+  const shown = all.slice(0, EVIDENCE_LINE_CAP).map(
     (line) => new Paragraph({ indent: { left: 240 }, spacing: { after: 20 }, children: [new TextRun({ text: line, font: "Consolas", size: 17 })] }),
   );
+  // A cap that truncates silently is indistinguishable from "that was all of
+  // it" — the same rule this codebase applies to every other truncation
+  // point (probeCoverage, the crawler's `truncated`, ListPager).
+  if (all.length > EVIDENCE_LINE_CAP) {
+    shown.push(new Paragraph({
+      indent: { left: 240 }, spacing: { after: 20 },
+      children: [new TextRun({ text: `… ${all.length - EVIDENCE_LINE_CAP} more line(s) not shown`, italics: true, color: GREY, size: 17, font: "Calibri" })],
+    }));
+  }
+  return shown;
 }
 
 function cell(children: Paragraph[], opts: { fill?: string; width?: number } = {}): TableCell {
@@ -191,7 +243,8 @@ function findingBlock(idx: number, f: ReportFinding, images?: Record<string, Buf
     out.push(p(f.description));
   }
   if (f.evidenceText) {
-    out.push(p("Evidence", { bold: true, spacingAfter: 40 }));
+    const heading = (f.evidenceCount ?? 0) > 1 ? `Evidence (${f.evidenceCount} instances)` : "Evidence";
+    out.push(p(heading, { bold: true, spacingAfter: 40 }));
     out.push(...evidenceLines(f.evidenceText));
   }
   if (f.evidenceImageKey && images && images[f.evidenceImageKey]) {
@@ -215,6 +268,39 @@ function findingBlock(idx: number, f: ReportFinding, images?: Record<string, Buf
   if (f.remediation) {
     out.push(p("Remediation", { bold: true, spacingAfter: 40 }));
     out.push(p(f.remediation));
+  }
+  if (f.aiInsights?.contextualRisks) {
+    out.push(p("Contextual Risk (AI)", { bold: true, spacingAfter: 40 }));
+    out.push(p(f.aiInsights.contextualRisks));
+  }
+  if (f.aiInsights?.cves && f.aiInsights.cves.length > 0) {
+    out.push(p("Related CVEs", { bold: true, spacingAfter: 40 }));
+    out.push(p(f.aiInsights.cves.map((c) => `${c.cveId}${c.cvssScore != null ? ` (CVSS ${c.cvssScore})` : ""}`).join(", ")));
+  }
+  if (f.aiInsights?.detailedAnalysis) {
+    out.push(p("Detailed Analysis (AI)", { bold: true, spacingAfter: 40 }));
+    out.push(p(f.aiInsights.detailedAnalysis));
+    for (const r of f.aiInsights.recommendations ?? []) out.push(bullet(r));
+  }
+  if (f.aiInsights?.additionalRemediation) {
+    out.push(p("Additional Remediation (AI)", { bold: true, spacingAfter: 40 }));
+    out.push(p(f.aiInsights.additionalRemediation));
+  }
+  if (f.aiInsights?.ticketUrl) {
+    out.push(p(`Tracked in ${f.aiInsights.ticketProvider === "jira" ? "Jira" : "GitHub"}: ${f.aiInsights.ticketUrl}`, { italics: true, color: GREY, size: 17 }));
+  }
+  if (f.tags && f.tags.length > 0) {
+    out.push(p(`Tags: ${f.tags.join(", ")}`, { italics: true, size: 17, color: GREY }));
+  }
+  if (f.ownership && (f.ownership.assignee || f.ownership.dueDate || f.ownership.priority != null)) {
+    const parts: string[] = [];
+    if (f.ownership.assignee) parts.push(`Assigned to ${f.ownership.assignee}`);
+    if (f.ownership.dueDate) {
+      const dueLabel = f.ownership.slaBreached ? "OVERDUE since" : "Due";
+      parts.push(`${dueLabel} ${f.ownership.dueDate.slice(0, 10)}`);
+    }
+    if (f.ownership.priority != null) parts.push(`Priority ${f.ownership.priority}`);
+    out.push(p(parts.join("  ·  "), { italics: true, size: 17, color: f.ownership.slaBreached ? SEV_COLOR.critical : GREY }));
   }
   out.push(new Paragraph({ spacing: { after: 120 }, children: [] }));
   return out as Paragraph[];
@@ -288,6 +374,42 @@ export async function generateReportDocx(input: ReportDocxInput): Promise<Buffer
       ...SEV_ORDER.map((s) => new TableRow({ children: [cell([new Paragraph({ children: [t(s.toUpperCase(), { bold: true })] })], { fill: SEV_COLOR[s] }), cell([new Paragraph({ children: [t(String(counts[s] ?? 0))] })])] })),
     ],
   }));
+
+  // ── AI Follow-up (only present for `ai_follow_up` reports) ──
+  //
+  // Same content and placement as the PDF export (report-pdf.ts) and the web
+  // UI (reports.tsx): themes, then the live checks that already ran, then
+  // next steps. This must stay in sync with those two — a report whose three
+  // export formats disagree about its own content is worse than one that
+  // simply lacks the section.
+  if (input.aiFollowUp && ((input.aiFollowUp.themes?.length ?? 0) > 0 || (input.aiFollowUp.checks?.length ?? 0) > 0)) {
+    const followUp = input.aiFollowUp;
+    children.push(sec("AI Follow-up"));
+    children.push(p(
+      followUp.generatedBy === "glm" ? "Written by GLM, verified against live checks below." : "Rule-based — GLM did not answer for this report.",
+      { italics: true, color: GREY },
+    ));
+    if (followUp.themes?.length) {
+      for (const theme of followUp.themes) {
+        children.push(p(`${theme.title} (${theme.severity})`, { bold: true }));
+        children.push(p(theme.narrative));
+        if (theme.action) children.push(p(`Next: ${theme.action}`, { italics: true, color: GREY }));
+      }
+    }
+    if (followUp.checks?.length) {
+      children.push(h2("Live verification"));
+      children.push(new Table({
+        width: { size: 100, type: WidthType.PERCENTAGE },
+        rows: [
+          new TableRow({ children: [cell([new Paragraph({ children: [t("Check", { bold: true })] })]), cell([new Paragraph({ children: [t("Result", { bold: true })] })])] }),
+          ...followUp.checks.map((c) => new TableRow({ children: [cell([new Paragraph({ children: [t(c.label)] })]), cell([new Paragraph({ children: [t(`[${c.status}] ${c.summary}`)] })])] })),
+        ],
+      }));
+    }
+    if (followUp.nextSteps?.length) {
+      children.push(p(`Next steps: ${followUp.nextSteps.join("; ")}`));
+    }
+  }
 
   // ── Security rating by risk factor ──
   //

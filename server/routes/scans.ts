@@ -130,6 +130,7 @@ scansRouter.post("/scans", async (req, res) => {
 
     const scanId = await triggerScan(parsed.target, scanType, workspaceId, scanMode, {
       autoGenerateReport: parsed.autoGenerateReport ?? false,
+      aiEnrich: parsed.aiEnrich ?? false,
     });
     const scan = await storage.getScan(scanId);
 

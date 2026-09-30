@@ -357,9 +357,9 @@ export function createAdminRouter(httpServer: Server): Router {
     // 4. Ollama
     try {
       const status = await getOllamaStatus();
-      checks.push({ name: "ollama", status: status.reachable ? "pass" : "skip", detail: status.reachable ? undefined : "Not reachable (optional)" });
+      checks.push({ name: "glm", status: status.reachable ? "pass" : "skip", detail: status.reachable ? status.model : "GLM API key missing or the model did not answer" });
     } catch {
-      checks.push({ name: "ollama", status: "skip", detail: "Not reachable (optional)" });
+      checks.push({ name: "glm", status: "skip", detail: "Not reachable (optional)" });
     }
 
     // 5. Integration config presence (pass/fail/skip — no secrets exposed)

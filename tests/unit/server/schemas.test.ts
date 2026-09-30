@@ -265,7 +265,7 @@ describe("createReportSchema", () => {
   });
 
   it("accepts valid report types", () => {
-    for (const type of ["executive_summary", "full_report", "evidence_pack"]) {
+    for (const type of ["executive_summary", "full_report", "evidence_pack", "ai_follow_up"]) {
       const result = createReportSchema.safeParse({
         title: "Report",
         type,

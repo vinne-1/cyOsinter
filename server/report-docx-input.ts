@@ -43,7 +43,11 @@ function isVerificationItem(e: unknown): boolean {
 }
 
 /**
- * Evidence text, EXCLUDING the verification stamp.
+ * Evidence text, EXCLUDING the verification stamp — the source and URL of
+ * each item travel WITH its text now, rather than being dropped. Silently
+ * keeping only `snippet`/`description` meant the report showed the same
+ * claim from ninety hosts with no way to tell which host said what, and no
+ * way to open the source the scanner actually observed it at.
  *
  * The stamp is pulled out and rendered under its own heading instead. Left in
  * the general blob it read as one more anonymous snippet, so the strongest
@@ -54,9 +58,49 @@ function evidenceToText(evidence: unknown): string | undefined {
   if (!Array.isArray(evidence)) return undefined;
   const lines = evidence
     .filter((e) => !isVerificationItem(e))
-    .map((e) => (e && typeof e === "object" ? (e as Record<string, unknown>).snippet ?? (e as Record<string, unknown>).description : undefined))
+    .map((e) => {
+      if (!e || typeof e !== "object") return undefined;
+      const rec = e as Record<string, unknown>;
+      const body = (rec.snippet as string | undefined) ?? (rec.description as string | undefined);
+      if (!body) return undefined;
+      const meta = [rec.source, rec.url].filter((v): v is string => typeof v === "string" && v.length > 0);
+      return meta.length ? `${body}\n  [${meta.join(" — ")}]` : body;
+    })
     .filter((x): x is string => typeof x === "string" && x.length > 0);
   return lines.length ? lines.join("\n") : undefined;
+}
+
+/** How many non-verification evidence items back this finding — see `ReportFinding.evidenceCount`. */
+function evidenceCount(evidence: unknown): number {
+  if (!Array.isArray(evidence)) return 0;
+  return evidence.filter((e) => !isVerificationItem(e)).length;
+}
+
+/**
+ * GLM enrichment already stored on the finding, carried into the report
+ * verbatim. `finding.aiEnrichment` was written by the "Enrich with AI"/"Look
+ * up CVE"/"Detailed Analysis" actions the in-app finding dialog already
+ * offers (see client/src/components/finding-detail-dialog.tsx) — this makes
+ * the exported report agree with what a reviewer already saw on screen
+ * instead of silently dropping it, which is what every report format did
+ * before this.
+ */
+function aiInsightsOf(aiEnrichment: unknown): ReportFinding["aiInsights"] {
+  if (!aiEnrichment || typeof aiEnrichment !== "object") return undefined;
+  const e = aiEnrichment as Record<string, unknown>;
+  const cveData = e.cveData as { records?: Array<{ cveId: string; cvssScore?: number; url?: string }> } | undefined;
+  const detailedAnalysis = e.detailedAnalysis as { analysis?: string; recommendations?: string[] } | undefined;
+  const result: NonNullable<ReportFinding["aiInsights"]> = {
+    contextualRisks: typeof e.contextualRisks === "string" ? e.contextualRisks : undefined,
+    additionalRemediation: typeof e.additionalRemediation === "string" ? e.additionalRemediation : undefined,
+    detailedAnalysis: detailedAnalysis?.analysis,
+    recommendations: detailedAnalysis?.recommendations,
+    cves: cveData?.records && cveData.records.length > 0 ? cveData.records : undefined,
+    ticketUrl: typeof e.ticketUrl === "string" ? e.ticketUrl : undefined,
+    ticketProvider: typeof e.ticketProvider === "string" ? e.ticketProvider : undefined,
+  };
+  const hasContent = Object.values(result).some((v) => v !== undefined && (!Array.isArray(v) || v.length > 0));
+  return hasContent ? result : undefined;
 }
 
 /**
@@ -79,7 +123,15 @@ function verificationOf(evidence: unknown): ReportFinding["verification"] {
 
 export async function buildDocxInput(
   workspaceId: string,
-  opts: { findingIds?: string[]; images?: Record<string, Buffer>; scanMode?: string; falsePositives?: ReportDocxInput["falsePositives"]; captureEvidence?: boolean } = {},
+  opts: {
+    findingIds?: string[];
+    images?: Record<string, Buffer>;
+    scanMode?: string;
+    falsePositives?: ReportDocxInput["falsePositives"];
+    captureEvidence?: boolean;
+    /** Carried in from the stored report — see the field's own doc comment in report-docx.ts. */
+    aiFollowUp?: ReportDocxInput["aiFollowUp"];
+  } = {},
 ): Promise<ReportDocxInput> {
   const ws = await storage.getWorkspace(workspaceId);
   // The most recent (completed) scan is authoritative for the report's target
@@ -222,8 +274,19 @@ export async function buildDocxInput(
     cvssScore: f.cvssScore ?? undefined,
     remediation: f.remediation ?? undefined,
     evidenceText: evidenceToText(f.evidence),
+    evidenceCount: evidenceCount(f.evidence),
     verification: verificationOf(f.evidence),
     evidenceImageKey: images[f.id] ? f.id : undefined,
+    tags: f.tags && f.tags.length > 0 ? f.tags : undefined,
+    ownership: (f.assignee || f.dueDate || f.priority != null)
+      ? {
+          assignee: f.assignee ?? undefined,
+          dueDate: f.dueDate ? new Date(f.dueDate).toISOString() : undefined,
+          priority: f.priority ?? undefined,
+          slaBreached: f.slaBreached ?? undefined,
+        }
+      : undefined,
+    aiInsights: aiInsightsOf(f.aiEnrichment),
   }));
 
   // ── Security rating ──
@@ -284,5 +347,6 @@ export async function buildDocxInput(
     falsePositives: opts.falsePositives,
     images: Object.keys(images).length ? images : undefined,
     withheldCount,
+    aiFollowUp: opts.aiFollowUp,
   };
 }

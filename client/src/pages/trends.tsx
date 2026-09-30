@@ -1,9 +1,13 @@
-import { useQuery } from "@tanstack/react-query";
+import { useState } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { TrendingUp, TrendingDown, Clock, BarChart3, Target } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { TrendingUp, TrendingDown, Clock, BarChart3, Target, Sparkles, Loader2, AlertTriangle } from "lucide-react";
 import { useDomain } from "@/lib/domain-context";
+import { apiRequest } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 import {
   ResponsiveContainer,
   LineChart,
@@ -77,8 +81,26 @@ function formatHours(hours: number): string {
   return `${Math.round(hours / 24)}d`;
 }
 
+interface TrendNarrative {
+  summary: string;
+  drivers: string[];
+}
+
 export default function Trends() {
   const { selectedWorkspaceId } = useDomain();
+  const { toast } = useToast();
+
+  const [narrative, setNarrative] = useState<TrendNarrative | null>(null);
+  const explainMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/workspaces/${selectedWorkspaceId}/trends/explain`, undefined, { timeoutMs: 120000 });
+      return res.json() as Promise<TrendNarrative>;
+    },
+    onSuccess: (data) => setNarrative(data),
+    onError: (err: Error) => {
+      toast({ title: "AI explanation failed", description: err.message, variant: "destructive" });
+    },
+  });
 
   const { data: severityTrend = [], isLoading: loadingSeverity } = useQuery<SeverityTrend[]>({
     queryKey: [`/api/workspaces/${selectedWorkspaceId}/trends/severity`],
@@ -132,14 +154,45 @@ export default function Trends() {
 
   return (
     <div className="space-y-6 p-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight" data-testid="text-trends-title">
-          Vulnerability Trends
-        </h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          Track security posture over time and identify patterns
-        </p>
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight" data-testid="text-trends-title">
+            Vulnerability Trends
+          </h1>
+          <p className="text-sm text-muted-foreground mt-1">
+            Track security posture over time and identify patterns
+          </p>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => explainMutation.mutate()}
+          disabled={explainMutation.isPending}
+          data-testid="button-explain-trends"
+        >
+          {explainMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
+          {explainMutation.isPending ? "Asking GLM..." : narrative ? "Re-explain" : "Explain with AI"}
+        </Button>
       </div>
+
+      {narrative && (
+        <Card data-testid="card-trend-narrative">
+          <CardContent className="p-4 space-y-2">
+            <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">AI Summary</p>
+            <p className="text-sm leading-relaxed">{narrative.summary}</p>
+            {narrative.drivers.length > 0 && (
+              <ul className="space-y-1">
+                {narrative.drivers.map((d, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs">
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-500 flex-shrink-0 mt-0.5" />
+                    {d}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Summary stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">

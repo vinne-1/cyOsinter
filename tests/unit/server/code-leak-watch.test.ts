@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { watchForCodeLeaks, findSecretsInText, maskSecret } from "../../../server/scanner/code-leak-watch";
+import { watchForCodeLeaks, findSecretsInText, maskSecret, buildCodeLeakFindings } from "../../../server/scanner/code-leak-watch";
 
 /**
  * Two failures matter here and both are silent ones:
@@ -211,5 +211,40 @@ describe("failure handling", () => {
       token: "t", aliases: ["example.com", "EXAMPLE.COM"], fetchImpl: fakeGitHub("x"),
     });
     expect(r.terms).toEqual(["example.com"]);
+  });
+});
+
+describe("buildCodeLeakFindings", () => {
+  it("raises a high/critical finding for a file carrying a recognised secret, separate from mention-only hits", async () => {
+    const leak = 'const key = "AKIAIOSFODNN7EXAMPLE";';
+    const r = await watchForCodeLeaks("example.com", { token: "t", fetchImpl: fakeGitHub(leak) });
+    const findings = buildCodeLeakFindings("example.com", r);
+    const withSecret = findings.find((f) => f.severity === "high" || f.severity === "critical");
+    expect(withSecret).toBeDefined();
+    expect(withSecret!.category).toBe("brand_threat");
+    expect(findings.some((f) => f.title.match(/no secret detected/i))).toBe(false);
+  });
+
+  it("reports mention-only hits at low severity, never conflated with a confirmed secret", async () => {
+    const r = await watchForCodeLeaks("example.com", { token: "t", fetchImpl: fakeGitHub("plain text, no secret here") });
+    const findings = buildCodeLeakFindings("example.com", r);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].severity).toBe("low");
+    expect(findings[0].title).toMatch(/no secret detected/i);
+  });
+
+  it("reports a real, checked clean state when nothing matches — not silence", async () => {
+    const emptyResult = { terms: ["example.com"], filesInspected: 0, hits: [], counts: { withSecrets: 0, mentionsOnly: 0 }, scannedAt: new Date().toISOString() };
+    const findings = buildCodeLeakFindings("example.com", emptyResult);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].severity).toBe("info");
+  });
+
+  it("reports an unconfigured/incomplete check as its own finding, never as clean", async () => {
+    const r = await watchForCodeLeaks("example.com");
+    const findings = buildCodeLeakFindings("example.com", r);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].severity).toBe("info");
+    expect(findings[0].title).toMatch(/incomplete/i);
   });
 });

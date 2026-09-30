@@ -185,12 +185,19 @@ app.use("/api/scans", rateLimit({
   store: new PostgresRateLimitStore("scans"),
   message: { message: "Too many scan requests, please try again later" },
 }));
-// Lookalike sweeps fan out hundreds of DNS lookups; limit them like scans.
-app.use("/api/workspaces/:id/brand-threats", rateLimit({ windowMs: 60_000, max: 5, message: { message: "Too many brand threat scans, please try again later" } }));
-// The leak-site corpus is a large third-party download; be a good citizen.
-app.use("/api/workspaces/:id/ransomware-exposure", rateLimit({ windowMs: 60_000, max: 5, message: { message: "Too many exposure checks, please try again later" } }));
-// GitHub code search allows 10 requests/minute; stay well inside it.
-app.use("/api/workspaces/:id/code-leaks", rateLimit({ windowMs: 60_000, max: 2, message: { message: "Too many code leak sweeps, please try again later" } }));
+// Brand-threat sweep limiters moved to routes/brand-threats.ts, applied
+// directly to each POST handler rather than mounted here by path.
+//
+// `app.use(path, limiter)` matches every HTTP method at that path, and
+// GET and POST are the SAME path for brand-threats/ransomware-exposure/
+// code-leaks (differentiated only by verb, unlike ai-insights's GET
+// `/ai-insights` vs POST `/ai-insights/summary`, where a longer sub-path
+// let the limiter target just the POST). Mounting here meant the cheap
+// read-only GET — which just returns the last stored recon_module, no
+// external call — shared its budget with the expensive sweep: reading
+// your own code-leak result twice inside a minute answered "Too many code
+// leak sweeps, please try again later" for a request that ran no sweep at
+// all. Same failure this file already documents for `/ai-insights`.
 
 // Stricter rate limits for AI/enrichment endpoints (expensive, long-running)
 const aiRateLimit = rateLimit({ windowMs: 60_000, max: 3, message: { message: "Too many AI requests, please try again later" } });
@@ -205,11 +212,21 @@ const aiRateLimit = rateLimit({ windowMs: 60_000, max: 3, message: { message: "T
  * message sent them to debug the wrong thing — the same failure this codebase
  * documents for `no-domain` vs `corpus-unreachable`.
  *
- * `/ai-insights/summary` is the only route here that calls a model.
+ * Every path listed below calls a model; `GET .../attack-paths` (the
+ * deterministic playbook match, no AI) is deliberately NOT listed, for the
+ * same reason.
  */
 app.use("/api/workspaces/:id/ai-insights/summary", aiRateLimit);
 app.use("/api/workspaces/:id/findings/enrich-all", aiRateLimit);
 app.use("/api/workspaces/:id/imports/:id/consolidate", aiRateLimit);
+app.use("/api/workspaces/:id/attack-paths/:playbookId/explain", aiRateLimit);
+app.use("/api/workspaces/:id/compliance/:framework/explain", aiRateLimit);
+app.use("/api/reports/:id/qa-review", aiRateLimit);
+app.use("/api/workspaces/:id/trends/explain", aiRateLimit);
+app.use("/api/workspaces/:id/brand-threats/explain", aiRateLimit);
+app.use("/api/scans/:id1/diff/:id2/explain", aiRateLimit);
+app.use("/api/asset-risk/explain", aiRateLimit);
+app.use("/api/workspaces/:id/assistant/chat", aiRateLimit);
 
 const httpLog = createLogger("http");
 

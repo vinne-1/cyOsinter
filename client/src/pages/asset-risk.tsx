@@ -1,11 +1,13 @@
-import React, { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import React, { useState, useEffect } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { useDomain } from "@/lib/domain-context";
 import { apiRequest } from "@/lib/queryClient";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { usePagedList, ListPager } from "@/components/list-pager";
+import { useToast } from "@/hooks/use-toast";
 import {
   Table,
   TableBody,
@@ -24,7 +26,14 @@ import {
   AlertTriangle,
   Server,
   BarChart3,
+  Sparkles,
+  Loader2,
 } from "lucide-react";
+
+interface AssetRiskNarrative {
+  summary: string;
+  drivers: string[];
+}
 
 interface RiskFactor {
   name: string;
@@ -107,9 +116,11 @@ function topRiskFactor(factors: RiskFactor[]): string {
 
 export default function AssetRiskPage() {
   const { selectedWorkspaceId } = useDomain();
+  const { toast } = useToast();
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [sortField, setSortField] = useState<SortField>("overallScore");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [narrative, setNarrative] = useState<AssetRiskNarrative | null>(null);
 
   const { data: assets, isLoading, isError, error } = useQuery<AssetRisk[]>({
     queryKey: ["/api/asset-risk", selectedWorkspaceId],
@@ -119,6 +130,22 @@ export default function AssetRiskPage() {
     },
     enabled: !!selectedWorkspaceId,
   });
+
+  const explainMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/asset-risk/explain?workspaceId=${selectedWorkspaceId}`, undefined, { timeoutMs: 120000 });
+      return res.json() as Promise<AssetRiskNarrative>;
+    },
+    onSuccess: (data) => setNarrative(data),
+    onError: (err: Error) => {
+      toast({ title: "AI explanation failed", description: err.message, variant: "destructive" });
+    },
+  });
+  // Every hook before any early return (see the note below on `assetList`) —
+  // this page already carries a documented crash from getting that wrong once.
+  useEffect(() => {
+    setNarrative(null);
+  }, [selectedWorkspaceId]);
 
   function handleSort(field: SortField) {
     if (sortField === field) {
@@ -196,15 +223,48 @@ export default function AssetRiskPage() {
 
   return (
     <div className="p-6 space-y-6">
-      <div className="flex items-center gap-3">
-        <Shield className="w-6 h-6 text-primary" />
-        <div>
-          <h1 className="text-2xl font-bold">Asset Risk Scoring</h1>
-          <p className="text-sm text-muted-foreground">
-            View risk scores and contributing factors for each asset
-          </p>
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <div className="flex items-center gap-3">
+          <Shield className="w-6 h-6 text-primary" />
+          <div>
+            <h1 className="text-2xl font-bold">Asset Risk Scoring</h1>
+            <p className="text-sm text-muted-foreground">
+              View risk scores and contributing factors for each asset
+            </p>
+          </div>
         </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => explainMutation.mutate()}
+          disabled={explainMutation.isPending || assetList.length === 0}
+          data-testid="button-explain-asset-risk"
+        >
+          {explainMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
+          {explainMutation.isPending ? "Asking GLM..." : narrative ? "Re-explain" : "Explain with AI"}
+        </Button>
       </div>
+
+      {narrative && (
+        <Card data-testid="card-asset-risk-narrative">
+          <CardContent className="p-4 space-y-2">
+            <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+              AI Summary — correlates risk factors across the whole estate, from aggregate counts only
+            </p>
+            <p className="text-sm leading-relaxed">{narrative.summary}</p>
+            {narrative.drivers.length > 0 && (
+              <ul className="space-y-1">
+                {narrative.drivers.map((d, i) => (
+                  <li key={i} className="flex items-start gap-2 text-xs">
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-500 flex-shrink-0 mt-0.5" />
+                    {d}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid gap-4 md:grid-cols-3">
         <Card>

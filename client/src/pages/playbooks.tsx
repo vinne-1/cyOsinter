@@ -44,6 +44,7 @@ interface SimulationResult {
   totalSteps: number;
   riskScore: number;
   recommendations: string[];
+  lowConfidence?: boolean;
 }
 
 const categoryColors: Record<string, string> = {
@@ -235,6 +236,13 @@ export default function Playbooks() {
                   {simResult.exploitable ? "Exploitable" : "Not Exploitable"}
                 </span>
               </div>
+
+              {simResult.lowConfidence && (
+                <p className="text-sm text-amber-700 dark:text-amber-400 flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 shrink-0" aria-hidden="true" />
+                  Low confidence: the same finding is being cited as evidence for more than one step in this chain.
+                </p>
+              )}
 
               <div className="grid grid-cols-2 gap-4">
                 <Card>

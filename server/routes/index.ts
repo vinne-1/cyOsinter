@@ -23,6 +23,7 @@ import { retentionRouter } from "./retention";
 import { findingWorkflowRouter } from "./finding-workflow";
 import { scanDiffRouter } from "./scan-diff";
 import { playbooksRouter } from "./playbooks";
+import { assistantRouter } from "./assistant";
 import { assetRiskRouter } from "./asset-risk";
 import { threatIntelRouter } from "./threat-intel";
 import { brandThreatsRouter } from "./brand-threats";
@@ -88,6 +89,7 @@ export async function registerRoutes(
   app.use("/api", findingWorkflowRouter);
   app.use("/api", scanDiffRouter);
   app.use("/api", playbooksRouter);
+  app.use("/api", assistantRouter);
   app.use("/api", assetRiskRouter);
   app.use("/api", threatIntelRouter);
   app.use("/api", brandThreatsRouter);

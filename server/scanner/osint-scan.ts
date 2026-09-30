@@ -26,6 +26,12 @@ import { discoverSrvRecords, buildSrvFindings, summariseSrv } from "./srv-discov
 import { checkDnssec, buildDnssecFindings } from "./dnssec.js";
 import { checkZoneTransfer, buildZoneTransferFindings } from "./zone-transfer.js";
 import { analyzeCaa, buildCaaFindings } from "./caa-analysis.js";
+import { scanForLookalikes, buildTyposquatFindings } from "./typosquat.js";
+import { checkRansomwareExposure, buildRansomwareFindings } from "./ransomware-watch.js";
+import { findBrandedApps, buildMobileAppFindings } from "./mobile-app-monitor.js";
+import { checkBreachExposure, buildBreachFindings } from "./breach-exposure.js";
+import { watchForCodeLeaks, buildCodeLeakFindings, isCodeLeakConfigured } from "./code-leak-watch.js";
+import type { EvidenceItem } from "./types.js";
 
 const log = createLogger("scanner");
 
@@ -645,6 +651,98 @@ export async function runOSINTScan(domain: string, onProgress?: ScanProgressCall
     results.findings.push(...ghFindings);
   } catch (err) {
     log.warn({ err }, "GitHub dorking failed");
+  }
+
+  /*
+   * Brand monitoring: lookalike/typosquat domains, ransomware leak-site
+   * exposure, branded mobile apps, and public breach-corpus membership.
+   *
+   * This was previously wired ONLY to four manual buttons on the Brand
+   * Threats page — `scanForLookalikes`/`checkRansomwareExposure`/
+   * `findBrandedApps`/`checkBreachExposure` ran, but nothing ever turned the
+   * result into a `Finding`, so none of it reached the findings inbox, the
+   * security score, or any report. `buildMobileAppFindings` and
+   * `buildBreachFindings` existed fully written with zero callers anywhere
+   * in the codebase — the same "complete implementation, nobody wired it up"
+   * defect this codebase's own notes describe repeatedly.
+   *
+   * All four builders use category `brand_threat`, which deliberately falls
+   * through `verification-gate.ts`'s `default: return null` — no case there
+   * claims it, so it is correctly treated as "not actively re-probeable" and
+   * kept by policy rather than mis-probed. That is the right answer: a
+   * DNS-confirmed lookalike registration, a leak-site listing, an app-store
+   * result, or a breach-corpus record cannot be "re-fetched and confirmed"
+   * the way a live HTTP response can — the corpus/registry IS the evidence.
+   */
+  try {
+    await report("Checking brand impersonation, leak sites, and breach exposure...", 99, "brand_monitoring");
+    const [typosquatResult, ransomwareResult, mobileAppResult, breachResult] = await Promise.all([
+      scanForLookalikes(domain, { concurrency: 40 }),
+      checkRansomwareExposure(domain),
+      findBrandedApps(domain),
+      checkBreachExposure(domain),
+    ]);
+
+    const toEvidence = (blob: Record<string, unknown>, source: string): EvidenceItem[] => [
+      {
+        type: "osint",
+        description: `${source} result`,
+        snippet: JSON.stringify(blob).slice(0, 2000),
+        source,
+        verifiedAt: now,
+        raw: blob,
+      },
+    ];
+
+    for (const f of buildTyposquatFindings(domain, typosquatResult)) {
+      results.findings.push({ ...f, evidence: toEvidence(f.evidence, "Lookalike domain sweep") });
+    }
+    for (const f of buildRansomwareFindings(domain, ransomwareResult)) {
+      results.findings.push({ ...f, evidence: toEvidence(f.evidence, "Ransomware leak-site corpus") });
+    }
+    for (const f of buildMobileAppFindings(domain, mobileAppResult)) {
+      results.findings.push({ ...f, evidence: toEvidence(f.evidence, "App store search") });
+    }
+    for (const f of buildBreachFindings(domain, breachResult)) {
+      results.findings.push({ ...f, evidence: toEvidence(f.evidence, "Public breach corpus") });
+    }
+
+    // Matches the shape routes/brand-threats.ts already stores per check, so
+    // the Brand Threats page is populated after a scan without the operator
+    // needing to also click each manual "run sweep" button.
+    results.reconData.brandMonitoring = {
+      typosquat: {
+        target: domain,
+        generated: typosquatResult.generated,
+        checked: typosquatResult.checked,
+        registered: typosquatResult.registered,
+        counts: typosquatResult.counts,
+        ownedExcluded: 0,
+        scannedAt: now,
+      },
+      ransomware: { ...ransomwareResult, scannedAt: now },
+      mobileApps: { ...mobileAppResult, scannedAt: now },
+      breachExposure: { ...breachResult, scannedAt: now },
+    };
+
+    // Code-leak search is rate-limited to 10 requests/minute by GitHub's API
+    // (SEARCH_DELAY_MS below), so it is gold-only — adding 10-20s+ to every
+    // standard scan for the least differentiating of the five brand checks is
+    // the wrong tradeoff. `isCodeLeakConfigured()` short-circuits entirely
+    // without a token, rather than attempting a call that can only fail.
+    if (gold && isCodeLeakConfigured()) {
+      try {
+        const codeLeakResult = await watchForCodeLeaks(domain);
+        for (const f of buildCodeLeakFindings(domain, codeLeakResult)) {
+          results.findings.push({ ...f, evidence: toEvidence(f.evidence, "Public GitHub code search") });
+        }
+        results.reconData.brandMonitoring.codeLeaks = { ...codeLeakResult };
+      } catch (err) {
+        log.warn({ err }, "Code leak sweep failed");
+      }
+    }
+  } catch (err) {
+    log.warn({ err }, "Brand monitoring sweep failed");
   }
 
   await report("OSINT scan complete.", 100, "build_modules", 0);

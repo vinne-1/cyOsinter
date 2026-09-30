@@ -3,35 +3,13 @@ import { parsePageParams } from "./response";
 import { z } from "zod";
 import { storage, FULL_SET_LIMIT } from "../storage";
 import { createLogger } from "../logger";
-import { enrichFinding, generateWorkspaceInsights, buildFallbackInsights, analyzeFindingDetails, fetchCVEContextForInsights } from "../ai-service";
-import { searchThreatIntel } from "../tavily-service";
+import { enrichFinding, buildFallbackInsights, analyzeFindingDetails } from "../ai-service";
+import { generateAndPersistWorkspaceInsights, insightFindings } from "../workspace-insights";
 import { getCVEForFinding } from "../cve-service";
 import { requireWorkspaceRole } from "./auth-middleware";
 import { updateFindingSchema } from "./schemas";
-import { isSecurityFinding } from "../scanner/finding-taxonomy";
 
 const routeLog = createLogger("routes");
-
-/** Statuses that mean the work is over. */
-const CLOSED_STATUSES = new Set(["resolved", "false_positive", "accepted_risk", "closed"]);
-
-/**
- * What the AI insights panel is allowed to describe.
- *
- * `buildFallbackInsights` writes the sentence
- * *"Workspace X has N security findings"* — the words "security findings",
- * verbatim, to the operator. It was handed every row in the workspace, so a
- * live workspace read **"has 14 security findings"** while its inbox showed 4:
- * eight "… - Detect" recon rows and two controls that are WORKING, counted as
- * outstanding work. Closed rows counted too, so remediating never moved it.
- *
- * The same set becomes the LLM prompt context (the top 10 by severity), and on
- * a workspace whose findings are all info-severity that is mostly recon — so
- * the model was being asked to write a security summary of a technology list.
- */
-function insightFindings<T extends { kind?: string | null; status?: string | null }>(rows: T[]): T[] {
-  return rows.filter((f) => isSecurityFinding(f) && !CLOSED_STATUSES.has(f.status ?? "open"));
-}
 
 /**
  * How many findings the in-memory filter path will consider.
@@ -170,11 +148,22 @@ findingsRouter.get("/workspaces/:workspaceId/ai-insights", wsAuth, async (req, r
     const workspaceId = req.params.workspaceId as string;
     const ws = await storage.getWorkspace(workspaceId);
     if (!ws) return res.status(404).json({ message: "Workspace not found" });
-    const [findingsResult, modulesResult] = await Promise.all([
+    const [findingsResult, modulesResult, snapshot] = await Promise.all([
       storage.getFindings(workspaceId, { limit: FULL_SET_LIMIT }),
       storage.getReconModules(workspaceId),
+      // The last synthesis, if one was ever generated — this is what lets the
+      // page show real content on load instead of an empty "Click Generate"
+      // state. This route runs no AI itself, so it stays off the 3/min AI
+      // rate limiter (mounted only on POST .../ai-insights/summary); reading
+      // a stored result must not compete with that budget.
+      storage.getAiInsightsSnapshot(workspaceId),
     ]);
-    res.json({ findings: insightFindings(findingsResult.data), modules: modulesResult.data, workspaceName: ws.name });
+    res.json({
+      findings: insightFindings(findingsResult.data),
+      modules: modulesResult.data,
+      workspaceName: ws.name,
+      lastSummary: snapshot ? { ...snapshot.content, generatedAt: snapshot.generatedAt } : null,
+    });
   } catch (err) {
     routeLog.error({ err }, "AI insights error");
     res.status(500).json({ message: "Failed to load" });
@@ -187,21 +176,12 @@ findingsRouter.post("/workspaces/:workspaceId/ai-insights/summary", wsAuth, asyn
     const workspaceId = req.params.workspaceId as string;
     const ws = await storage.getWorkspace(workspaceId);
     if (!ws) return res.status(404).json({ message: "Workspace not found" });
-    const [findingsResult, modulesResult] = await Promise.all([
-      storage.getFindings(workspaceId, { limit: FULL_SET_LIMIT }),
-      storage.getReconModules(workspaceId),
-    ]);
-    const findings = insightFindings(findingsResult.data);
-    const modules = modulesResult.data;
-    const wsTarget = ws.domain || ws.name;
-    const [cveContext, webSearchContext] = await Promise.all([
-      fetchCVEContextForInsights(findings, modules, 2),
-      searchThreatIntel(wsTarget),
-    ]);
-    const result = await generateWorkspaceInsights(findings, modules, wsTarget, {
-      cveContext,
-      webSearchContext,
-    });
+    // Shared with scan completion (when a scan is launched with AI enrichment
+    // on) and read by the Intelligence panel, so "generate" always means the
+    // same sequence — findings + recon + CVE context, live verification
+    // against the workspace's real hosts, GLM synthesis, persisted snapshot —
+    // regardless of which of the three triggered it.
+    const result = await generateAndPersistWorkspaceInsights(workspaceId);
     res.json(result);
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : "AI summary failed";
@@ -216,7 +196,7 @@ findingsRouter.post("/workspaces/:workspaceId/ai-insights/summary", wsAuth, asyn
         ]);
         const fallback = buildFallbackInsights(insightFindings(fRes.data), mRes.data, ws.domain || ws.name);
         const reason =
-          errMsg === "Ollama AI is disabled"
+          errMsg.includes("GLM_API_KEY") || errMsg.includes("not configured")
             ? "ollama_disabled"
             : errMsg.includes("aborted") || errMsg.includes("timed out")
               ? "ollama_timeout"
@@ -227,7 +207,7 @@ findingsRouter.post("/workspaces/:workspaceId/ai-insights/summary", wsAuth, asyn
       routeLog.error({ err: innerErr }, "AI insights fallback failed");
     }
     res.json({
-      summary: "Unable to generate AI insights. Check Integrations—ensure Ollama is running and enabled.",
+      summary: "Unable to generate AI insights. GLM did not answer.",
       keyRisks: [],
       threatLandscape: "",
       isAIGenerated: false,
@@ -332,8 +312,26 @@ findingsRouter.post("/workspaces/:workspaceId/findings/enrich-all", wsAuth, asyn
   res.setTimeout(3600000); // 60 min for batch (many findings x 30 min each)
   try {
     const workspaceId = req.params.workspaceId as string;
-    const { data: findingsList } = await storage.getFindings(workspaceId, { limit: FULL_SET_LIMIT });
+    const { data: allFindings } = await storage.getFindings(workspaceId, { limit: FULL_SET_LIMIT });
     const { data: modules } = await storage.getReconModules(workspaceId);
+    /*
+     * Enrichment is triage help for WORK, not a pass over every row in the
+     * workspace. Without this filter, "Enrich all" spent a GLM call on every
+     * `control` row (a protection that IS working, e.g. "DNSSEC Detection")
+     * and every `recon` row (a technology fact, e.g. "Apache Detection") and
+     * every already-resolved finding — none of which benefit from "clearer,
+     * actionable context". This is the same `kind`/status oversight this
+     * codebase has already found and fixed in the SLA sweep, both trend
+     * endpoints, the compliance mapper input, and the report builders.
+     *
+     * Findings that already carry enrichment are skipped too, so a second
+     * click (to pick up stragglers after a partial run) does not re-spend a
+     * GLM call on rows that already have an answer.
+     */
+    const findingsList = insightFindings(allFindings).filter((f) => {
+      const ae = f.aiEnrichment as { enhancedDescription?: string } | null | undefined;
+      return !ae?.enhancedDescription;
+    });
     let enriched = 0;
     for (const f of findingsList) {
       try {

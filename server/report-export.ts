@@ -14,7 +14,38 @@ export interface ReportExportInput {
     category?: string;
     affectedAsset?: string | null;
     description?: string;
+    cvssScore?: string | null;
+    remediation?: string | null;
+    evidence?: Array<Record<string, unknown>> | null;
+    tags?: string[] | null;
+    assignee?: string | null;
+    dueDate?: string | Date | null;
+    priority?: number | null;
   }>;
+}
+
+/**
+ * One line of evidence per finding, for formats too narrow for the full
+ * array (CSV/XLSX columns, PDF table rows). The "verification" item
+ * `verification-gate.ts` appends is excluded — it restates the finding's own
+ * confirmation status, not new evidence — matching `evidenceToText` in
+ * report-docx-input.ts, which excludes it for the same reason.
+ *
+ * `[N instances]` surfaces the aggregation this codebase already does at
+ * write time (`checkCookieSecurity` and `per-asset-findings.ts` collapse many
+ * occurrences into one finding with one evidence entry per instance) — a
+ * reader of the export previously had no way to tell a finding affecting one
+ * host from one affecting ninety.
+ */
+export function summarizeEvidence(evidence: Array<Record<string, unknown>> | null | undefined, maxLen = 300): string {
+  if (!Array.isArray(evidence) || evidence.length === 0) return "";
+  const real = evidence.filter((e) => e.type !== "verification");
+  if (real.length === 0) return "";
+  const parts = real
+    .map((e) => (e.snippet as string | undefined) ?? (e.description as string | undefined) ?? "")
+    .filter(Boolean);
+  const instanceNote = real.length > 1 ? `[${real.length} instances] ` : "";
+  return (instanceNote + parts.join(" | ")).replace(/\n/g, " ").slice(0, maxLen);
 }
 
 function escapeCsvCell(value: string): string {
@@ -32,7 +63,10 @@ function escapeCsvCell(value: string): string {
 
 export function generateReportCsv(input: ReportExportInput): string {
   const lines: string[] = [];
-  const headers = ["ID", "Title", "Severity", "Status", "Category", "Affected Asset", "Description"];
+  const headers = [
+    "ID", "Title", "Severity", "Status", "Category", "Affected Asset", "Description",
+    "CVSS Score", "Remediation", "Evidence", "Tags", "Assignee", "Due Date", "Priority",
+  ];
   lines.push(headers.map(escapeCsvCell).join(","));
 
   for (const f of input.findings) {
@@ -44,6 +78,13 @@ export function generateReportCsv(input: ReportExportInput): string {
       f.category ?? "",
       f.affectedAsset ?? "",
       (f.description ?? "").replace(/\n/g, " ").slice(0, 500),
+      f.cvssScore ?? "",
+      (f.remediation ?? "").replace(/\n/g, " ").slice(0, 500),
+      summarizeEvidence(f.evidence),
+      (f.tags ?? []).join("; "),
+      f.assignee ?? "",
+      f.dueDate ? formatReportDateOnly(typeof f.dueDate === "string" ? f.dueDate : f.dueDate.toISOString()) : "",
+      f.priority != null ? String(f.priority) : "",
     ]
       .map(escapeCsvCell)
       .join(","));
@@ -86,7 +127,10 @@ export async function generateReportExcel(input: ReportExportInput): Promise<Buf
 
   // Findings sheet
   const wsFindings = wb.addWorksheet("Findings");
-  wsFindings.addRow(["ID", "Title", "Severity", "Status", "Category", "Affected Asset", "Description"]);
+  wsFindings.addRow([
+    "ID", "Title", "Severity", "Status", "Category", "Affected Asset", "Description",
+    "CVSS Score", "Remediation", "Evidence", "Tags", "Assignee", "Due Date", "Priority",
+  ]);
   for (const f of input.findings) {
     wsFindings.addRow([
       escapeExcelCell(f.id),
@@ -96,6 +140,13 @@ export async function generateReportExcel(input: ReportExportInput): Promise<Buf
       escapeExcelCell(f.category ?? ""),
       escapeExcelCell(f.affectedAsset ?? ""),
       escapeExcelCell((f.description ?? "").replace(/\n/g, " ").slice(0, 2000)),
+      escapeExcelCell(f.cvssScore ?? ""),
+      escapeExcelCell((f.remediation ?? "").replace(/\n/g, " ").slice(0, 2000)),
+      escapeExcelCell(summarizeEvidence(f.evidence, 2000)),
+      escapeExcelCell((f.tags ?? []).join("; ")),
+      escapeExcelCell(f.assignee ?? ""),
+      f.dueDate ? formatReportDateOnly(typeof f.dueDate === "string" ? f.dueDate : f.dueDate.toISOString()) : "",
+      f.priority ?? "",
     ]);
   }
 

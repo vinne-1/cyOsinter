@@ -31,7 +31,22 @@ export interface SimulationResult {
   matchedSteps: Array<{ step: PlaybookStep; matchingFindings: Finding[] }>;
   riskScore: number;
   recommendations: string[];
+  /** True when the chain's "coverage" is really one finding cited as evidence
+   *  for two or more different steps, rather than distinct findings each
+   *  showing real progress along the chain. `riskScore` and `exploitable`
+   *  already reflect this dampening — callers deciding whether to DISPLAY a
+   *  chain should also check `riskScore` against `MIN_DISPLAY_RISK_SCORE`. */
+  lowConfidence: boolean;
 }
+
+/**
+ * Below this, the matched evidence is too thin to present as an actionable
+ * attack chain — a category token or two happened to overlap, not a chain an
+ * attacker could actually walk. Callers rendering a list of chains (not a
+ * single lookup) should omit results scoring below this floor rather than
+ * showing a confident-looking "Risk: 50" built from one weak finding.
+ */
+export const MIN_DISPLAY_RISK_SCORE = 30;
 
 const PLAYBOOKS: readonly Playbook[] = [
   {
@@ -52,14 +67,21 @@ const PLAYBOOKS: readonly Playbook[] = [
         order: 2,
         action: "Extract database schema",
         description: "Use UNION-based or error-based techniques to enumerate tables and columns.",
-        findingCategories: ["sql-injection", "information-disclosure", "error-handling", "vulnerability", "information_disclosure"],
+        // `information_disclosure` deliberately excluded: a robots.txt hint
+        // or a directory-listing finding does not show a database schema was
+        // ever enumerated. `injection` is the real taxonomy category for a
+        // confirmed SQL injection finding (see finding-taxonomy.ts), so an
+        // actual SQLi finding legitimately supports this step too — the same
+        // one finding proving several stages of ONE real vulnerability is
+        // correct; a generic disclosure finding proving them is not.
+        findingCategories: ["injection", "sql-injection", "vulnerability"],
         severity: "high",
       },
       {
         order: 3,
         action: "Dump sensitive data",
         description: "Extract credentials, PII, or other sensitive records from the database.",
-        findingCategories: ["sql-injection", "sensitive-data", "data-exposure", "data_leak", "leaked_credential", "secret_exposure", "information_disclosure"],
+        findingCategories: ["injection", "sql-injection", "data_leak", "leaked_credential", "secret_exposure"],
         severity: "critical",
       },
       {
@@ -179,6 +201,11 @@ const PLAYBOOKS: readonly Playbook[] = [
         order: 1,
         action: "Discover unprotected endpoints",
         description: "Identify API endpoints missing authentication or authorization checks.",
+        // `information_disclosure` kept ONLY here: a robots.txt/sitemap hint
+        // revealing an API path is genuine (weak) evidence of "an endpoint was
+        // discovered" — the one claim it actually supports. It is deliberately
+        // absent from every later step, which claim things a disclosure hint
+        // says nothing about.
         findingCategories: ["broken-authentication", "missing-auth", "api-security", "idor", "api_exposure", "information_disclosure"],
         severity: "high",
       },
@@ -186,7 +213,7 @@ const PLAYBOOKS: readonly Playbook[] = [
         order: 2,
         action: "Enumerate sensitive resources",
         description: "Access user data, admin panels, or internal APIs without credentials.",
-        findingCategories: ["broken-authentication", "access-control", "idor", "information-disclosure", "api_exposure", "data_leak"],
+        findingCategories: ["broken-authentication", "access-control", "idor", "api_exposure", "data_leak"],
         severity: "high",
       },
       {
@@ -209,14 +236,17 @@ const PLAYBOOKS: readonly Playbook[] = [
         order: 1,
         action: "Gain initial low-privilege access",
         description: "Obtain a valid low-privilege account through credential stuffing, default creds, or registration.",
-        findingCategories: ["default-credentials", "weak-password", "broken-authentication", "leaked_credential", "secret_exposure", "information_disclosure"],
+        // A generic information-disclosure hint (robots.txt, a directory
+        // listing) does not hand over an account — only a real credential or
+        // auth-bypass finding does.
+        findingCategories: ["default-credentials", "weak-password", "broken-authentication", "leaked_credential", "secret_exposure"],
         severity: "medium",
       },
       {
         order: 2,
         action: "Identify privilege boundaries",
         description: "Map role differences and find endpoints that check roles client-side only.",
-        findingCategories: ["access-control", "idor", "broken-access-control", "missing-authorization", "api_exposure", "information_disclosure"],
+        findingCategories: ["access-control", "idor", "broken-access-control", "missing-authorization", "api_exposure"],
         severity: "high",
       },
       {
@@ -297,7 +327,69 @@ function buildRecommendations(
 }
 
 /**
- * Simulate an attack playbook against real findings in a workspace.
+ * Only open security rows are steps an attacker could take today.
+ *
+ * A `recon` or `control` row is not a rung on an attack chain, and a
+ * REMEDIATED finding is the opposite of one — leaving closed rows in means
+ * fixing an issue never clears the path it was part of, so the simulation
+ * keeps reporting the organisation as exploitable through a hole that no
+ * longer exists.
+ */
+export function actionableFindings(findings: readonly Finding[]): Finding[] {
+  return findings.filter((f) => isSecurityFinding(f) && !CLOSED_STATUSES.has(f.status ?? "open"));
+}
+
+/**
+ * Matches one playbook against an ALREADY-FETCHED, already-filtered finding
+ * set. Pure — no DB access — so a caller checking every playbook against the
+ * same workspace (the Attack Paths list) fetches findings once and reuses
+ * them, instead of `simulateAttack`'s one-query-per-playbook.
+ */
+export function matchPlaybook(playbook: Playbook, actionable: readonly Finding[]): SimulationResult {
+  const matchedSteps: SimulationResult["matchedSteps"] = [];
+
+  for (const step of playbook.steps) {
+    const matching = doesStepMatch(step, actionable);
+    if (matching.length > 0) {
+      matchedSteps.push({ step, matchingFindings: matching });
+    }
+  }
+
+  const coverageExploitable = matchedSteps.length >= Math.ceil(playbook.steps.length * 0.5);
+
+  const rawRiskScore = Math.min(
+    100,
+    Math.round(
+      (matchedSteps.length / playbook.steps.length) * 100 *
+        (coverageExploitable ? 1.0 : 0.6),
+    ),
+  );
+
+  // A "chain" whose entire matched evidence reduces to ONE finding is not a
+  // chain — it is one weak, generic signal (e.g. "Robots.txt Reveals Sensitive
+  // Paths") stretched across several steps that each claim something the
+  // finding does not actually show. This is deliberately narrower than "any
+  // finding shared by two steps": several playbooks legitimately let one
+  // strong, specific finding (a confirmed SQLi, a real exposed API) evidence
+  // multiple adjacent stages of the SAME vulnerability, and that is correct,
+  // not a stretch — see the SQL-injection-chain category comments above. What
+  // is never legitimate is the WHOLE chain resting on a single finding.
+  const distinctFindingIds = new Set(matchedSteps.flatMap(({ matchingFindings }) => matchingFindings.map((f) => f.id)));
+  const lowConfidence = matchedSteps.length >= 2 && distinctFindingIds.size === 1;
+
+  const exploitable = coverageExploitable && !lowConfidence;
+  const riskScore = lowConfidence ? Math.min(rawRiskScore, 35) : rawRiskScore;
+
+  const recommendations = buildRecommendations(playbook, matchedSteps);
+
+  return { playbook, exploitable, matchedSteps, riskScore, recommendations, lowConfidence };
+}
+
+/**
+ * Simulate ONE attack playbook against real findings in a workspace. Fetches
+ * findings itself, so a caller checking multiple playbooks against the same
+ * workspace should fetch once with `storage.getFindings` + `actionableFindings`
+ * and call `matchPlaybook` directly instead (see `GET .../attack-paths`).
  */
 export async function simulateAttack(
   workspaceId: string,
@@ -311,18 +403,7 @@ export async function simulateAttack(
     }
 
     const result = await storage.getFindings(workspaceId, { limit: 10000 });
-    /*
-     * Only open security rows are steps an attacker could take today.
-     *
-     * A `recon` or `control` row is not a rung on an attack chain, and a
-     * REMEDIATED finding is the opposite of one — leaving closed rows in means
-     * fixing an issue never clears the path it was part of, so the simulation
-     * keeps reporting the organisation as exploitable through a hole that no
-     * longer exists.
-     */
-    const allFindings = result.data.filter(
-      (f) => isSecurityFinding(f) && !CLOSED_STATUSES.has(f.status ?? "open"),
-    );
+    const allFindings = actionableFindings(result.data);
 
     log.info(
       {
@@ -334,39 +415,20 @@ export async function simulateAttack(
       "Running attack simulation",
     );
 
-    const matchedSteps: SimulationResult["matchedSteps"] = [];
-
-    for (const step of playbook.steps) {
-      const matching = doesStepMatch(step, allFindings);
-      if (matching.length > 0) {
-        matchedSteps.push({ step, matchingFindings: matching });
-      }
-    }
-
-    const exploitable = matchedSteps.length >= Math.ceil(playbook.steps.length * 0.5);
-
-    const riskScore = Math.min(
-      100,
-      Math.round(
-        (matchedSteps.length / playbook.steps.length) * 100 *
-          (exploitable ? 1.0 : 0.6),
-      ),
-    );
-
-    const recommendations = buildRecommendations(playbook, matchedSteps);
+    const matched = matchPlaybook(playbook, allFindings);
 
     log.info(
       {
         playbookId,
-        exploitable,
-        matchedSteps: matchedSteps.length,
+        exploitable: matched.exploitable,
+        matchedSteps: matched.matchedSteps.length,
         totalSteps: playbook.steps.length,
-        riskScore,
+        riskScore: matched.riskScore,
       },
       "Attack simulation complete",
     );
 
-    return { playbook, exploitable, matchedSteps, riskScore, recommendations };
+    return matched;
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Unknown error";
     log.error({ workspaceId, playbookId, error: message }, "Attack simulation failed");

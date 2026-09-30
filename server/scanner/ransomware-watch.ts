@@ -300,3 +300,109 @@ export async function checkRansomwareExposure(
     feedFetchedAt: new Date(fetchedAt).toISOString(),
   };
 }
+
+export interface RansomwareFinding {
+  title: string;
+  description: string;
+  severity: "critical" | "medium" | "low" | "info";
+  category: string;
+  affectedAsset: string;
+  cvssScore: string;
+  remediation: string;
+  evidence: Record<string, unknown>;
+}
+
+const BAND_SCORE: Record<RansomwareFinding["severity"], string> = {
+  critical: "9.1",
+  medium: "5.3",
+  low: "2.0",
+  info: "0.0",
+};
+
+/**
+ * Renders a ransomware-watch result as findings.
+ *
+ * `confirmed` and `possible` are NEVER merged into one finding — see the
+ * module header. A confirmed match (the victim's published website resolves
+ * to this exact domain) is `critical`: the organisation's own leaked data is
+ * already being extorted with, which is the loudest signal this product can
+ * raise about anything. A `possible` match is a name-similarity lead, not an
+ * incident, and is reported at `medium` precisely so it cannot be mistaken
+ * for the former on severity alone.
+ */
+export function buildRansomwareFindings(domain: string, result: RansomwareWatchResult): RansomwareFinding[] {
+  const findings: RansomwareFinding[] = [];
+
+  if (result.error) {
+    findings.push({
+      title: `Ransomware leak-site check incomplete for ${domain}`,
+      description: `The ransomware leak-site corpus could not be reached, so exposure could not be checked: ${result.error}. This is not a clean result — it means the check did not run.`,
+      severity: "info",
+      category: "brand_threat",
+      affectedAsset: domain,
+      cvssScore: BAND_SCORE.info,
+      remediation: "Re-run when the feed is reachable.",
+      evidence: { target: domain, error: result.error },
+    });
+    return findings;
+  }
+
+  const confirmed = result.matches.filter((m) => m.confidence === "confirmed");
+  const possible = result.matches.filter((m) => m.confidence === "possible");
+
+  if (confirmed.length > 0) {
+    const groups = Array.from(new Set(confirmed.map((m) => m.group)));
+    const names = confirmed.map((m) => `"${m.victim}" posted by ${m.group}${m.publishedAt ? ` on ${m.publishedAt.slice(0, 10)}` : ""}`);
+    findings.push({
+      title: `${domain} is named on a ransomware leak site — confirmed`,
+      description:
+        `${confirmed.length} post${confirmed.length === 1 ? "" : "s"} on ransomware leak sites name a victim whose published website resolves to ` +
+        `${domain} itself, from ${groups.length === 1 ? `the ${groups[0]} group` : `${groups.length} groups (${groups.join(", ")})`}: ` +
+        `${names.slice(0, 5).join("; ")}${names.length > 5 ? `; and ${names.length - 5} more` : ""}. ` +
+        `This is an identity match on the victim's own domain, not a name resemblance — the organisation is already being extorted, or was. ` +
+        `Leak sites are usually published AFTER encryption and exfiltration have already happened, so this is historical evidence of a completed ` +
+        `incident at minimum, and an active one at worst.`,
+      severity: "critical",
+      category: "brand_threat",
+      affectedAsset: domain,
+      cvssScore: BAND_SCORE.critical,
+      remediation:
+        "If this incident is not already known internally, treat this as an active incident: engage incident response immediately, do not pay or " +
+        "negotiate without counsel, and preserve logs. If the incident is already known and remediated, confirm no residual access remains and that " +
+        "the root cause (initial access vector) has been closed, not just the ransomware payload.",
+      evidence: { target: domain, source: "ransomware.live public leak-site corpus", recordsChecked: result.recordsChecked, matches: confirmed },
+    });
+  }
+
+  if (possible.length > 0) {
+    const names = possible.map((m) => `"${m.victim}" posted by ${m.group}`);
+    findings.push({
+      title: `${possible.length} ransomware leak-site post${possible.length === 1 ? "" : "s"} with a similar organisation name — unconfirmed`,
+      description:
+        `${possible.length} post${possible.length === 1 ? "" : "s"} name a victim whose NAME resembles this organisation, but whose published ` +
+        `website does not resolve to ${domain} — so identity is not established: ${names.slice(0, 5).join("; ")}${names.length > 5 ? `; and ${names.length - 5} more` : ""}. ` +
+        `Organisation names are not unique, so this is reported as a lead to rule out, never as a confirmed incident.`,
+      severity: "medium",
+      category: "brand_threat",
+      affectedAsset: domain,
+      cvssScore: BAND_SCORE.medium,
+      remediation: "Manually review each listing to confirm or rule out that it refers to this organisation, a subsidiary, or an unrelated namesake.",
+      evidence: { target: domain, source: "ransomware.live public leak-site corpus", recordsChecked: result.recordsChecked, matches: possible },
+    });
+  }
+
+  if (result.matches.length === 0) {
+    findings.push({
+      title: `No ransomware leak-site mentions found for ${domain}`,
+      description: `Checked ${result.recordsChecked} records in the public ransomware leak-site corpus — no post names this domain, confirmed or possible.`,
+      severity: "info",
+      category: "brand_threat",
+      affectedAsset: domain,
+      cvssScore: BAND_SCORE.info,
+      remediation: "No action needed now. This corpus updates continuously; re-run periodically.",
+      evidence: { target: domain, source: "ransomware.live public leak-site corpus", recordsChecked: result.recordsChecked },
+    });
+  }
+
+  return findings;
+}

@@ -1,14 +1,16 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { useState, useId, useMemo } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Progress } from "@/components/ui/progress";
-import { CheckCircle2, XCircle, AlertTriangle, HelpCircle, ShieldCheck, Download, ChevronRight } from "lucide-react";
+import { CheckCircle2, XCircle, AlertTriangle, HelpCircle, ShieldCheck, Download, ChevronRight, Sparkles, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useDomain } from "@/lib/domain-context";
 import { FindingDrilldown, type DrilldownFinding } from "@/components/finding-drilldown";
+import { apiRequest } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 import type { Finding } from "@shared/schema";
 
 function exportComplianceCSV(reports: Record<string, ComplianceReport>) {
@@ -166,17 +168,87 @@ function ControlRow({
   );
 }
 
+interface ComplianceNarrative {
+  summary: string;
+  topGaps: string[];
+}
+
+/**
+ * The narrative explains and prioritizes gaps the mapper already computed —
+ * it never re-grades a control. Ephemeral (not persisted): the report itself
+ * is cheap to recompute from current findings, so there is no stable row to
+ * cache the narrative against, same reasoning as the attack-path explanation.
+ */
+function AiComplianceSummary({ workspaceId, frameworkKey }: { workspaceId: string; frameworkKey: string }) {
+  const { toast } = useToast();
+  const [narrative, setNarrative] = useState<ComplianceNarrative | null>(null);
+
+  const explainMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest(
+        "POST",
+        `/api/workspaces/${workspaceId}/compliance/${frameworkKey}/explain`,
+        undefined,
+        { timeoutMs: 120000 },
+      );
+      return res.json() as Promise<ComplianceNarrative>;
+    },
+    onSuccess: (data) => setNarrative(data),
+    onError: (err: Error) => {
+      toast({ title: "AI explanation failed", description: err.message, variant: "destructive" });
+    },
+  });
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">AI Summary</p>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => explainMutation.mutate()}
+          disabled={explainMutation.isPending}
+          data-testid={`button-explain-compliance-${frameworkKey}`}
+        >
+          {explainMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+          {explainMutation.isPending ? "Asking GLM..." : narrative ? "Re-explain" : "Explain with AI"}
+        </Button>
+      </div>
+      {narrative && (
+        <div className="rounded-lg border bg-muted/30 p-3 space-y-2" data-testid={`text-compliance-narrative-${frameworkKey}`}>
+          <p className="text-sm leading-relaxed">{narrative.summary}</p>
+          {narrative.topGaps.length > 0 && (
+            <ul className="space-y-1">
+              {narrative.topGaps.map((gap, i) => (
+                <li key={i} className="flex items-start gap-2 text-xs">
+                  <AlertTriangle className="w-3.5 h-3.5 text-amber-500 flex-shrink-0 mt-0.5" />
+                  {gap}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FrameworkCard({
   report,
   findingById,
+  workspaceId,
+  frameworkKey,
 }: {
   report: ComplianceReport;
   findingById: Map<string, DrilldownFinding>;
+  workspaceId: string;
+  frameworkKey: string;
 }) {
   const scoreColor = report.score >= 80 ? "text-green-500" : report.score >= 60 ? "text-yellow-500" : report.score >= 40 ? "text-orange-500" : "text-red-500";
 
   return (
     <div className="space-y-4">
+      <AiComplianceSummary workspaceId={workspaceId} frameworkKey={frameworkKey} />
       {/* Summary */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         <Card>
@@ -388,9 +460,9 @@ export default function Compliance() {
               <TabsTrigger value="certin">CERT-In</TabsTrigger>
               <TabsTrigger value="dpdp">DPDP Act</TabsTrigger>
             </TabsList>
-            {owasp && <TabsContent value="owasp"><FrameworkCard report={owasp} findingById={findingById} /></TabsContent>}
-            {cis && <TabsContent value="cis"><FrameworkCard report={cis} findingById={findingById} /></TabsContent>}
-            {nist && <TabsContent value="nist"><FrameworkCard report={nist} findingById={findingById} /></TabsContent>}
+            {owasp && <TabsContent value="owasp"><FrameworkCard report={owasp} findingById={findingById} workspaceId={selectedWorkspaceId!} frameworkKey="owasp" /></TabsContent>}
+            {cis && <TabsContent value="cis"><FrameworkCard report={cis} findingById={findingById} workspaceId={selectedWorkspaceId!} frameworkKey="cis" /></TabsContent>}
+            {nist && <TabsContent value="nist"><FrameworkCard report={nist} findingById={findingById} workspaceId={selectedWorkspaceId!} frameworkKey="nist" /></TabsContent>}
             {certin && (
               <TabsContent value="certin">
                 <p className="mb-3 text-xs text-muted-foreground">
@@ -398,7 +470,7 @@ export default function Compliance() {
                   <strong> six hours</strong> of noticing it. These are the incident types your current external
                   exposure relates to — early warning, not a statement that an incident has occurred.
                 </p>
-                <FrameworkCard report={certin} findingById={findingById} />
+                <FrameworkCard report={certin} findingById={findingById} workspaceId={selectedWorkspaceId!} frameworkKey="certin" />
               </TabsContent>
             )}
             {dpdp && (
@@ -409,7 +481,7 @@ export default function Compliance() {
                   process obligations marked <strong>not externally assessable</strong> — an external scan cannot
                   certify them, and showing them blank would read as a pass.
                 </p>
-                <FrameworkCard report={dpdp} findingById={findingById} />
+                <FrameworkCard report={dpdp} findingById={findingById} workspaceId={selectedWorkspaceId!} frameworkKey="dpdp" />
               </TabsContent>
             )}
           </Tabs>

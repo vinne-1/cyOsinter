@@ -1,19 +1,10 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Switch } from "@/components/ui/switch";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Plug, Shield, CheckCircle2, XCircle, Loader2, Cpu, Search, PowerOff, TicketCheck, Github, Radar } from "lucide-react";
 import {
   AlertDialog,
@@ -34,14 +25,8 @@ interface IntegrationsStatus {
   tavily: { configured: boolean };
   shodan: { configured: boolean };
   ollama: { configured: boolean; baseUrl: string; model: string; enabled: boolean };
+  glm?: { configured: boolean; model: string };
 }
-
-const OLLAMA_MODEL_OPTIONS = [
-  { value: "smollm2:135m", label: "smollm2:135m (271MB, smallest)" },
-  { value: "tinyllama", label: "tinyllama (637MB, default)" },
-  { value: "smollm2:360m", label: "smollm2:360m (726MB, better quality)" },
-  { value: "custom", label: "Custom" },
-] as const;
 
 export default function Integrations() {
   const [abuseipdbKey, setAbuseipdbKey] = useState("");
@@ -52,10 +37,6 @@ export default function Integrations() {
   const [showVirustotalInput, setShowVirustotalInput] = useState(false);
   const [showTavilyInput, setShowTavilyInput] = useState(false);
   const [showShodanInput, setShowShodanInput] = useState(false);
-  const [ollamaBaseUrl, setOllamaBaseUrl] = useState("http://localhost:11434");
-  const [ollamaModelSelect, setOllamaModelSelect] = useState<string>("tinyllama");
-  const [ollamaModelCustom, setOllamaModelCustom] = useState("");
-  const [ollamaEnabled, setOllamaEnabled] = useState(false);
   const [shutdownDialogOpen, setShutdownDialogOpen] = useState(false);
   const [shutdownPending, setShutdownPending] = useState(false);
   // Jira/GitHub ticketing state
@@ -80,21 +61,9 @@ export default function Integrations() {
     queryKey: ["/api/integrations/ticketing"],
   });
 
-  const { data: ollamaStatus, refetch: refetchOllamaStatus } = useQuery<{ reachable: boolean; modelLoaded?: boolean }>({
+  const { data: ollamaStatus, refetch: refetchOllamaStatus } = useQuery<{ reachable: boolean; modelLoaded?: boolean; model?: string }>({
     queryKey: ["/api/ollama/status"],
-    refetchInterval: status?.ollama?.enabled ? 10000 : false,
   });
-
-  useEffect(() => {
-    if (status?.ollama) {
-      setOllamaBaseUrl(status.ollama.baseUrl || "http://localhost:11434");
-      const model = status.ollama.model || "tinyllama";
-      const preset = OLLAMA_MODEL_OPTIONS.find((o) => o.value !== "custom" && (model === o.value || model.startsWith(o.value + ":")));
-      setOllamaModelSelect(preset ? preset.value : "custom");
-      setOllamaModelCustom(preset ? "" : model);
-      setOllamaEnabled(status.ollama.enabled ?? false);
-    }
-  }, [status]);
 
   const updateMutation = useMutation({
     mutationFn: async (keys: { abuseipdb?: string; virustotal?: string; tavily?: string; shodan?: string; ollamaBaseUrl?: string; ollamaModel?: string; ollamaEnabled?: boolean }) => {
@@ -185,20 +154,7 @@ export default function Integrations() {
   const handleRemoveTavily = () => updateMutation.mutate({ tavily: "" });
   const handleRemoveShodan = () => updateMutation.mutate({ shodan: "" });
 
-  const resolvedOllamaModel = ollamaModelSelect === "custom" ? ollamaModelCustom.trim() || "tinyllama" : ollamaModelSelect;
-
-  const handleSaveOllama = () => {
-    updateMutation.mutate({
-      ollamaBaseUrl: ollamaBaseUrl.trim() || "http://localhost:11434",
-      ollamaModel: resolvedOllamaModel,
-      ollamaEnabled,
-    });
-  };
-
   const isSaving = updateMutation.isPending;
-
-  const ollamaConfigured = status?.ollama?.enabled && ollamaStatus?.reachable;
-  const ollamaReachable = ollamaStatus?.reachable === true;
 
   if (isLoading) {
     return (
@@ -516,30 +472,34 @@ export default function Integrations() {
 
       <div>
         <h2 className="text-sm font-medium uppercase tracking-wider text-muted-foreground mb-3">
-          AI (Ollama / DeepSeek R1 Abliterated)
+          AI (GLM)
         </h2>
         <Card data-testid="card-ollama">
           <CardHeader className="pb-2">
             <div className="flex items-center justify-between gap-2">
               <CardTitle className="text-base flex items-center gap-2">
                 <Cpu className="w-4 h-4" />
-                Ollama
+                GLM
               </CardTitle>
               <Badge
                 variant="outline"
                 className={`text-xs border-0 no-default-hover-elevate no-default-active-elevate ${
-                  ollamaConfigured ? "bg-green-600/15 text-green-400" : ollamaStatus?.reachable === false ? "bg-red-600/15 text-red-400" : "bg-slate-600/15 text-slate-400"
+                  status?.glm?.configured && ollamaStatus?.reachable
+                    ? "bg-green-600/15 text-green-400"
+                    : status?.glm?.configured
+                      ? "bg-red-600/15 text-red-400"
+                      : "bg-slate-600/15 text-slate-400"
                 }`}
               >
-                {ollamaConfigured ? (
+                {status?.glm?.configured && ollamaStatus?.reachable ? (
                   <>
                     <CheckCircle2 className="w-3 h-3 mr-1" />
-                    Configured
+                    Answering
                   </>
-                ) : ollamaStatus?.reachable === false ? (
+                ) : status?.glm?.configured ? (
                   <>
                     <XCircle className="w-3 h-3 mr-1" />
-                    Ollama unreachable
+                    Key set, no answer yet
                   </>
                 ) : (
                   <>
@@ -552,96 +512,26 @@ export default function Integrations() {
           </CardHeader>
           <CardContent className="space-y-4">
             <p className="text-sm text-muted-foreground">
-              Local AI for finding enrichment, automated reports, and scan consolidation. Uses Ollama (fast on CPU).
+              Finding enrichment, AI insights, and report narrative use Zhipu GLM.
+              The key is read from <span className="font-mono">GLM_API_KEY</span> on the server and is never shown here.
+              The model is the free <span className="font-mono">{status?.glm?.model ?? "glm-4.5-flash"}</span>.
             </p>
-            <div className="rounded-md bg-muted/50 p-3 text-xs text-muted-foreground space-y-1">
-              <p className="font-medium text-foreground">Setup:</p>
-              <ol className="list-decimal list-inside space-y-0.5">
-                <li>Install Ollama and run <code className="bg-muted px-1 rounded">ollama serve</code></li>
-                <li>Pull a model: <code className="bg-muted px-1 rounded">ollama pull smollm2:135m</code> (smallest) or <code className="bg-muted px-1 rounded">ollama pull tinyllama</code></li>
-                <li>Toggle <strong>Enable AI</strong> on and click Save</li>
-              </ol>
-            </div>
-            <div className="space-y-2">
-              <Label className="text-xs">Base URL</Label>
-              <p className="text-xs text-muted-foreground">Use localhost for best performance. Remote Ollama may cause timeouts.</p>
-              <Input
-                placeholder="http://localhost:11434"
-                value={ollamaBaseUrl}
-                onChange={(e) => setOllamaBaseUrl(e.target.value)}
-                className="font-mono text-sm"
-                data-testid="input-ollama-url"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label className="text-xs">Model</Label>
-              <p className="text-xs text-muted-foreground">smollm2:135m is smallest; run <code className="bg-muted px-1 rounded">ollama pull smollm2:135m</code> to use.</p>
-              <Select value={ollamaModelSelect} onValueChange={setOllamaModelSelect} data-testid="select-ollama-model">
-                <SelectTrigger className="font-mono text-sm" aria-label="Ollama model">
-                  <SelectValue placeholder="Select model" />
-                </SelectTrigger>
-                <SelectContent>
-                  {OLLAMA_MODEL_OPTIONS.map((opt) => (
-                    <SelectItem key={opt.value} value={opt.value}>
-                      {opt.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {ollamaModelSelect === "custom" && (
-                <Input
-                  placeholder="e.g. llama3.2:latest"
-                  value={ollamaModelCustom}
-                  onChange={(e) => setOllamaModelCustom(e.target.value)}
-                  className="font-mono text-sm"
-                  data-testid="input-ollama-model-custom"
-                />
-              )}
-            </div>
-            <div className={`flex items-center justify-between rounded-md border p-3 ${!ollamaEnabled ? "bg-amber-500/10 border-amber-500/30" : "bg-muted/30"}`}>
-              <div>
-                <Label className="text-sm font-medium">Enable AI</Label>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  {ollamaEnabled ? "AI features are active" : "Turn ON and click Save—required for AI Insights"}
-                </p>
-              </div>
-              <Switch
-                checked={ollamaEnabled}
-                onCheckedChange={setOllamaEnabled}
-                aria-label="Enable AI features via Ollama"
-                data-testid="switch-ollama-enabled"
-              />
-            </div>
             <div className="flex items-center gap-2">
-              <Button
-                size="sm"
-                onClick={handleSaveOllama}
-                disabled={isSaving}
-                data-testid="button-save-ollama"
-              >
-                {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : "Save"}
-              </Button>
               <Button
                 variant="outline"
                 size="sm"
                 onClick={async () => {
                   const { data } = await refetchOllamaStatus();
                   if (data?.reachable) {
-                    toast({ title: "Ollama reachable", description: data.modelLoaded ? "Model loaded" : "Model may need to be pulled" });
+                    toast({ title: "GLM answered", description: data.model ?? status?.glm?.model ?? "glm-4.5-flash" });
                   } else {
-                    toast({ title: "Ollama unreachable", description: "Ensure ollama serve is running", variant: "destructive" });
+                    toast({ title: "GLM did not answer", description: "Check GLM_API_KEY and try again.", variant: "destructive" });
                   }
                 }}
-                disabled={!ollamaBaseUrl.trim()}
               >
                 Test connection
               </Button>
             </div>
-            {!ollamaReachable && ollamaEnabled && (
-              <p className="text-xs text-amber-600 dark:text-amber-500">
-                Ollama is enabled but unreachable. Ensure <code className="bg-muted px-1 rounded">ollama serve</code> is running.
-              </p>
-            )}
           </CardContent>
         </Card>
       </div>

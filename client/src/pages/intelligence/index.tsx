@@ -32,6 +32,7 @@ import {
   Radar,
   ShieldCheck,
   Eye,
+  Sparkles,
 } from "lucide-react";
 import type { ReconModule, Scan } from "@shared/schema";
 
@@ -55,9 +56,11 @@ import { SecretExposurePanel } from "./secret-exposure-panel";
 import { DASTPanel } from "./dast-panel";
 import { RoutedFootprintPanel, DiscoveryHealthPanel, VerificationSummaryPanel } from "./discovery-panels";
 import { DarkWebPanel } from "../dark-web-panel";
+import { AiInsightsPanel } from "./ai-insights-panel";
 
 const IPReputationPanelWrapper: React.FC<{ mod: ReconModule }> = () => <IPReputationPanel />;
 const DarkWebPanelWrapper: React.FC<{ mod: ReconModule }> = ({ mod }) => <DarkWebPanel workspaceId={mod.workspaceId} />;
+const AiInsightsPanelWrapper: React.FC<{ mod: ReconModule }> = () => <AiInsightsPanel />;
 
 const moduleTypeToPanel: Record<string, { component: React.FC<{ mod: ReconModule }>; label: string; icon: React.ElementType }> = {
   org_identity: { component: OrgIdentityPanel, label: "Org Profile", icon: Building2 },
@@ -87,9 +90,11 @@ const moduleTypeToPanel: Record<string, { component: React.FC<{ mod: ReconModule
   discovery_health: { component: DiscoveryHealthPanel, label: "Discovery Health", icon: Radar },
   verification_summary: { component: VerificationSummaryPanel, label: "Verification", icon: ShieldCheck },
   dark_web_monitoring: { component: DarkWebPanelWrapper, label: "Dark Web", icon: Eye },
+  ai_insights: { component: AiInsightsPanelWrapper, label: "AI Insights", icon: Sparkles },
 };
 
 const moduleOrder = [
+  "ai_insights",
   "org_identity", "web_presence", "tech_stack", "cloud_footprint",
   "exposed_content", "attack_surface", "ip_reputation", "bgp_routing", "nuclei", "brand_signals",
   "dns_overview", "redirect_chain", "domain_info", "website_overview",
@@ -140,7 +145,7 @@ export default function Intelligence() {
   }
 
   const hasAnyModules = Object.keys(modulesByType).length > 0;
-  const availableModules = moduleOrder.filter((t) => (t === "ip_reputation" ? hasAnyModules : modulesByType[t]));
+  const availableModules = moduleOrder.filter((t) => (t === "ip_reputation" || t === "ai_insights" ? hasAnyModules : modulesByType[t]));
   const defaultTab = availableModules[0] || "org_identity";
 
   return (

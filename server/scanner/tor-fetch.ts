@@ -46,10 +46,33 @@ import { createLogger } from "../logger.js";
 const log = createLogger("tor-fetch");
 
 /**
- * SOCKS5 proxy address. Set to the local Tor daemon's SOCKS port.
- * In Docker, this is typically `socks5://tor:9050`.
+ * The SOCKS URL the agent will dial.
+ *
+ * `socks5://` resolves the destination on this machine before asking the
+ * proxy. A `.onion` name has no DNS record, so that lookup fails with
+ * `ENOTFOUND` in milliseconds and the request never reaches Tor.
+ * `isTorAvailable()` still returns true in that state, because
+ * `check.torproject.org` resolves locally and only the TCP connection goes
+ * through the proxy. `socks5h://` hands the hostname to Tor, which is the
+ * only resolver that knows a hidden service.
+ *
+ * An operator-supplied `socks5://` (or bare `socks://`) URL is rewritten.
+ * Leaving the documented form in place would reintroduce the failure.
  */
-const PROXY_URL = process.env.TOR_SOCKS_PROXY ?? "socks5://127.0.0.1:9050";
+export function normaliseTorProxyUrl(raw: string): string {
+  const trimmed = raw.trim();
+  const scheme = trimmed.match(/^(socks5|socks):\/\//i);
+  if (!scheme) return trimmed;
+  return `socks5h://${trimmed.slice(scheme[0].length)}`;
+}
+
+/**
+ * SOCKS proxy address. Host dev uses the local daemon; the Compose app
+ * service sets `socks5h://tor:9050` so it reaches the `tor` container.
+ */
+const PROXY_URL = normaliseTorProxyUrl(
+  process.env.TOR_SOCKS_PROXY ?? "socks5h://127.0.0.1:9050",
+);
 
 /** Default timeout for dark web fetches — .onion services are slow. */
 const DEFAULT_TIMEOUT_MS = 60_000;

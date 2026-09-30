@@ -52,6 +52,8 @@ import {
   Eye,
   Trash2,
   ChevronDown,
+  Sparkles,
+  AlertTriangle,
 } from "lucide-react";
 import type { Report, Finding, ReconModule } from "@shared/schema";
 import { usePagedList, ListPager } from "@/components/list-pager";
@@ -116,14 +118,39 @@ function ReportDetailDialog({
     },
   });
 
-  if (!report) return null;
+  // Hook must run unconditionally (see the note below `if (!report)`), so it
+  // is declared here rather than after the early return.
+  const [qaResult, setQaResult] = useState<{ clean: boolean; issues: string[]; recommendation: string } | null>(null);
+  const qaMutation = useMutation({
+    mutationFn: async () => {
+      if (!report) throw new Error("No report selected");
+      const res = await apiRequest("POST", `/api/reports/${report.id}/qa-review`, undefined, { timeoutMs: 120000 });
+      return res.json() as Promise<{ clean: boolean; issues: string[]; recommendation: string }>;
+    },
+    onSuccess: (data) => setQaResult(data),
+    onError: (error: Error) => {
+      toast({ title: "AI QA review failed", description: error.message, variant: "destructive" });
+    },
+  });
+  useEffect(() => {
+    setQaResult(null);
+  }, [report?.id]);
 
   const reportFindings = findings.filter((f) =>
-    (report.findingIds || []).includes(f.id)
+    (report?.findingIds || []).includes(f.id)
   );
-  const pagedReportFindings = usePagedList(reportFindings, report.id);
+  // Every hook must run on every render, regardless of `report` — this used to
+  // sit after `if (!report) return null`, so the dialog's first render (report
+  // still null) executed fewer hooks than the render right after selecting a
+  // report, and React threw "Rendered more hooks than during the previous
+  // render" on that same component instance. See CLAUDE.md's identical
+  // asset-risk.tsx bug.
+  const pagedReportFindings = usePagedList(reportFindings, report?.id ?? null);
+
+  if (!report) return null;
 
   const content = report.content as Record<string, unknown> | null;
+  const followUp = readFollowUp(content?.aiFollowUp);
 
   const contentAttackSurface = content?.attackSurface as Record<string, unknown> | null | undefined;
   const contentAttackSurfaceSummary = content?.attackSurfaceSummary as { totalHosts: number; highRiskCount: number; wafCoverage: number } | null | undefined;
@@ -226,6 +253,19 @@ function ReportDetailDialog({
                   </DropdownMenuContent>
                 </DropdownMenu>
               )}
+              {report.status === "completed" && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-2"
+                  onClick={() => qaMutation.mutate()}
+                  disabled={qaMutation.isPending}
+                  data-testid="button-qa-review"
+                >
+                  {qaMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
+                  {qaMutation.isPending ? "Reviewing..." : "AI QA Review"}
+                </Button>
+              )}
               <Button
                 variant="ghost"
                 size="sm"
@@ -259,15 +299,111 @@ function ReportDetailDialog({
         </DialogHeader>
 
         <div className="space-y-5 mt-2">
+          {report.status === "generating" && report.type === "ai_follow_up" && (
+            <div className="p-3 rounded-md bg-muted/40 text-sm text-muted-foreground" data-testid="text-follow-up-pending">
+              GLM is consolidating this workspace’s findings and running the follow-up checks. This usually takes about a minute.
+            </div>
+          )}
+
+          {qaResult && (
+            <div
+              className={`rounded-lg border p-3 space-y-2 ${qaResult.clean ? "border-emerald-500/30 bg-emerald-500/5" : "border-amber-500/30 bg-amber-500/5"}`}
+              data-testid="panel-qa-review"
+            >
+              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                AI QA Review — proofreads the summary against this report's own findings, not a severity re-check
+              </p>
+              {qaResult.issues.length > 0 ? (
+                <ul className="space-y-1">
+                  {qaResult.issues.map((issue, i) => (
+                    <li key={i} className="flex items-start gap-2 text-sm">
+                      <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
+                      {issue}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-sm flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+                  No inconsistencies found against this report's own numbers and findings.
+                </p>
+              )}
+              <p className="text-xs text-muted-foreground">{qaResult.recommendation}</p>
+            </div>
+          )}
+
           {report.summary && (
             <div>
               <h4 className="text-xs font-medium uppercase tracking-wider text-muted-foreground mb-2">
                 Executive Summary
-                {content?.aiNarrative != null && (
+                {(content?.aiNarrative != null || content?.aiFollowUp != null) && (
                   <span className="ml-2 text-[10px] font-normal normal-case text-muted-foreground">(AI-generated)</span>
                 )}
               </h4>
               <p className="text-sm leading-relaxed">{report.summary}</p>
+            </div>
+          )}
+
+          {followUp && (
+            <div data-testid="segment-ai-follow-up" className="space-y-3">
+              <h4 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                AI Follow-up
+                <span className="ml-2 text-[10px] font-normal normal-case">
+                  {followUp.generatedBy === "glm" ? "Written by GLM" : "Built from finding categories"}
+                  {followUp.domain ? ` · ${followUp.domain}` : ""}
+                </span>
+              </h4>
+              {followUp.themes.length > 0 && (
+                <div className="space-y-2">
+                  {followUp.themes.map((theme, i) => (
+                    <div key={`${theme.title}-${i}`} className="p-3 rounded-md bg-muted/40 space-y-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-sm font-medium">{theme.title}</p>
+                        <SeverityBadge severity={theme.severity} />
+                      </div>
+                      <p className="text-sm text-muted-foreground">{theme.narrative}</p>
+                      {theme.action && <p className="text-xs text-muted-foreground">Next: {theme.action}</p>}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {followUp.checks.length > 0 && (
+                <div className="space-y-2">
+                  {followUp.checks.map((check) => {
+                    const ok = check.status === "completed";
+                    return (
+                      <div key={check.id} className="rounded-lg border p-3 space-y-1.5" data-testid={`row-followup-check-${check.id}`}>
+                        <div className="flex items-center justify-between gap-3 flex-wrap">
+                          <span className="text-sm font-medium">{check.label}</span>
+                          <Badge
+                            variant="outline"
+                            className={`text-xs border-0 no-default-hover-elevate no-default-active-elevate ${
+                              ok ? "bg-emerald-600/15 text-emerald-400" : "bg-muted text-muted-foreground"
+                            }`}
+                          >
+                            {check.status}
+                          </Badge>
+                        </div>
+                        <ul className="space-y-1">
+                          {check.summary.split(/;\s+/).map((line, i, arr) => (
+                            <li key={i} className="flex items-start gap-2 text-xs text-muted-foreground leading-relaxed">
+                              {arr.length > 1 && <span className="text-muted-foreground/50 mt-0.5" aria-hidden="true">–</span>}
+                              <span>{line}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              {followUp.nextSteps.length > 0 && (
+                <ul className="list-disc pl-5 space-y-1 text-sm" aria-label="Follow-up next steps">
+                  {followUp.nextSteps.map((step, i) => (
+                    <li key={i}>{step}</li>
+                  ))}
+                </ul>
+              )}
             </div>
           )}
 
@@ -587,9 +723,54 @@ function ReportDetailDialog({
   );
 }
 
+interface AiFollowUpView {
+  generatedBy: string;
+  domain: string | null;
+  themes: Array<{ title: string; severity: string; narrative: string; action: string }>;
+  checks: Array<{ id: string; label: string; status: string; summary: string }>;
+  nextSteps: string[];
+}
+
+function readFollowUp(value: unknown): AiFollowUpView | null {
+  if (!value || typeof value !== "object") return null;
+  const row = value as Record<string, unknown>;
+  const themes = Array.isArray(row.themes)
+    ? row.themes.flatMap((item) => {
+        if (!item || typeof item !== "object") return [];
+        const theme = item as Record<string, unknown>;
+        return [{
+          title: String(theme.title ?? ""),
+          severity: String(theme.severity ?? "info"),
+          narrative: String(theme.narrative ?? ""),
+          action: String(theme.action ?? ""),
+        }];
+      })
+    : [];
+  const checks = Array.isArray(row.checks)
+    ? row.checks.flatMap((item) => {
+        if (!item || typeof item !== "object") return [];
+        const check = item as Record<string, unknown>;
+        return [{
+          id: String(check.id ?? check.label ?? ""),
+          label: String(check.label ?? ""),
+          status: String(check.status ?? ""),
+          summary: String(check.summary ?? ""),
+        }];
+      })
+    : [];
+  if (themes.length === 0 && checks.length === 0 && !row.narrative) return null;
+  return {
+    generatedBy: String(row.generatedBy ?? "rules"),
+    domain: typeof row.domain === "string" ? row.domain : null,
+    themes,
+    checks,
+    nextSteps: Array.isArray(row.nextSteps) ? row.nextSteps.map((step) => String(step)) : [],
+  };
+}
+
 const reportFormSchema = z.object({
   title: z.string().min(1, "Report title is required"),
-  type: z.enum(["executive_summary", "full_report", "evidence_pack"]),
+  type: z.enum(["executive_summary", "full_report", "evidence_pack", "ai_follow_up"]),
 });
 
 function NewReportDialog() {
@@ -601,6 +782,7 @@ function NewReportDialog() {
     resolver: zodResolver(reportFormSchema),
     defaultValues: { title: "", type: "full_report" },
   });
+  const reportType = form.watch("type");
 
   const { data: findings = [] } = useQuery<Finding[]>({
     queryKey: [`/api/workspaces/${selectedWorkspaceId}/findings`],
@@ -631,9 +813,14 @@ function NewReportDialog() {
       });
       return res.json();
     },
-    onSuccess: () => {
+    onSuccess: (_data, variables) => {
       queryClient.invalidateQueries({ queryKey: [`/api/workspaces/${selectedWorkspaceId}/reports`] });
-      toast({ title: "Report created" });
+      toast({
+        title: variables.type === "ai_follow_up" ? "Follow-up report started" : "Report created",
+        description: variables.type === "ai_follow_up"
+          ? "GLM is consolidating findings and running follow-up checks. This usually takes about a minute."
+          : undefined,
+      });
       setOpen(false);
       form.reset();
       setSelectedFindings([]);
@@ -692,11 +879,19 @@ function NewReportDialog() {
                       <SelectItem value="executive_summary">Executive Summary</SelectItem>
                       <SelectItem value="full_report">Full Report</SelectItem>
                       <SelectItem value="evidence_pack">Evidence Pack</SelectItem>
+                      <SelectItem value="ai_follow_up">AI Follow-up</SelectItem>
                     </SelectContent>
                   </Select>
                 </FormItem>
               )}
             />
+
+            {reportType === "ai_follow_up" && (
+              <p className="text-xs text-muted-foreground">
+                GLM groups this workspace’s open findings, re-checks the hosts those findings name
+                (live fingerprint, security headers, DNSSEC, TLS versions, SPF and DMARC), and writes one consolidated report.
+              </p>
+            )}
 
             {findings.length > 0 && (
               <div>
@@ -745,7 +940,20 @@ export default function Reports() {
   const { data: reports = [], isLoading } = useQuery<Report[]>({
     queryKey: [`/api/workspaces/${selectedWorkspaceId}/reports`],
     enabled: !!selectedWorkspaceId,
+    refetchInterval: (query) => {
+      const rows = query.state.data;
+      return Array.isArray(rows) && rows.some((report) => report.status === "generating") ? 4000 : false;
+    },
   });
+
+  useEffect(() => {
+    if (!selectedReport) return;
+    const fresh = reports.find((report) => report.id === selectedReport.id);
+    if (!fresh) return;
+    if (fresh.status !== selectedReport.status || fresh.summary !== selectedReport.summary) {
+      setSelectedReport(fresh);
+    }
+  }, [reports, selectedReport]);
 
   if (isLoading) {
     return (
@@ -766,7 +974,7 @@ export default function Reports() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight" data-testid="text-reports-title">Reports</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Generate deterministic security reports with full evidence packs
+            Generate security reports, including an AI follow-up that re-checks this workspace
           </p>
         </div>
         <NewReportDialog />

@@ -1,7 +1,7 @@
 import { eq, desc, and, sql, lt, asc, count, inArray } from "drizzle-orm";
 import { db } from "./db";
-import { workspaces, assets, scans, findings, reports, reconModules, continuousMonitoring, uploadedScans, postureSnapshots, alerts, scheduledScans, scanProfiles, workspaceMembers } from "@shared/schema";
-import type { Workspace, InsertWorkspace, Asset, InsertAsset, Scan, InsertScan, Finding, InsertFinding, Report, InsertReport, ReconModule, InsertReconModule, ContinuousMonitoring, InsertContinuousMonitoring, UploadedScan, InsertUploadedScan, PostureSnapshot, InsertPostureSnapshot, Alert, InsertAlert, ScheduledScan, InsertScheduledScan, ScanProfile, InsertScanProfile, WorkspaceMember } from "@shared/schema";
+import { workspaces, assets, scans, findings, reports, reconModules, continuousMonitoring, uploadedScans, postureSnapshots, alerts, scheduledScans, scanProfiles, workspaceMembers, aiInsightsSnapshots } from "@shared/schema";
+import type { Workspace, InsertWorkspace, Asset, InsertAsset, Scan, InsertScan, Finding, InsertFinding, Report, InsertReport, ReconModule, InsertReconModule, ContinuousMonitoring, InsertContinuousMonitoring, UploadedScan, InsertUploadedScan, PostureSnapshot, InsertPostureSnapshot, Alert, InsertAlert, ScheduledScan, InsertScheduledScan, ScanProfile, InsertScanProfile, WorkspaceMember, AiInsightsSnapshot } from "@shared/schema";
 import { computeDueDate, computePriority, computeCvssScore } from "./finding-workflow";
 
 export interface PaginationOpts {
@@ -72,6 +72,9 @@ export interface IStorage {
   getPostureHistory(workspaceId: string, limit?: number): Promise<PostureSnapshot[]>;
   createPostureSnapshot(snapshot: InsertPostureSnapshot): Promise<PostureSnapshot>;
   getStuckScans(maxAgeMs: number): Promise<Scan[]>;
+
+  getAiInsightsSnapshot(workspaceId: string): Promise<AiInsightsSnapshot | undefined>;
+  upsertAiInsightsSnapshot(workspaceId: string, content: Record<string, unknown>): Promise<AiInsightsSnapshot>;
 
   // Workspace Members
   getWorkspaceMember(workspaceId: string, userId: string): Promise<WorkspaceMember | undefined>;
@@ -159,7 +162,7 @@ export class DatabaseStorage implements IStorage {
     const childTables = [
       scanProfiles, alerts, scheduledScans, reconModules,
       postureSnapshots, findings, assets, reports,
-      continuousMonitoring, uploadedScans,
+      continuousMonitoring, uploadedScans, aiInsightsSnapshots,
     ] as const;
     for (const table of childTables) {
       await db.delete(table).where(eq(table.workspaceId, id));
@@ -179,6 +182,23 @@ export class DatabaseStorage implements IStorage {
     const [created] = await db.insert(postureSnapshots).values(snapshot).returning();
     if (!created) throw new Error("Posture snapshot insert did not return row");
     return created;
+  }
+
+  async getAiInsightsSnapshot(workspaceId: string): Promise<AiInsightsSnapshot | undefined> {
+    const [row] = await db.select().from(aiInsightsSnapshots).where(eq(aiInsightsSnapshots.workspaceId, workspaceId));
+    return row;
+  }
+
+  async upsertAiInsightsSnapshot(workspaceId: string, content: Record<string, unknown>): Promise<AiInsightsSnapshot> {
+    const [row] = await db.insert(aiInsightsSnapshots)
+      .values({ workspaceId, content, generatedAt: new Date() })
+      .onConflictDoUpdate({
+        target: aiInsightsSnapshots.workspaceId,
+        set: { content, generatedAt: new Date() },
+      })
+      .returning();
+    if (!row) throw new Error("AI insights snapshot upsert did not return row");
+    return row;
   }
 
   async getAssets(workspaceId: string, opts?: PaginationOpts): Promise<PaginatedResult<Asset>> {

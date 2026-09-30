@@ -257,6 +257,21 @@ export interface ReconData {
     people: Array<{ name?: string; email?: string; emailInferred?: boolean; source: string; gravatar?: { displayName?: string; location?: string; accounts?: string[]; profileUrl?: string } }>;
     emailFormat?: string;
   };
+  /**
+   * Lookalike domains, ransomware leak-site exposure, branded mobile apps and
+   * breach-corpus membership — each shaped exactly like the `data` field
+   * `routes/brand-threats.ts` stores per check, so `recon-builder.ts` can
+   * persist the same four recon_module types the manual "run sweep" buttons
+   * produce, and the Brand Threats page renders either source identically.
+   */
+  brandMonitoring?: {
+    typosquat: Record<string, unknown>;
+    ransomware: Record<string, unknown>;
+    mobileApps: Record<string, unknown>;
+    breachExposure: Record<string, unknown>;
+    /** Gold-mode + GITHUB_TOKEN only — see the scan step for why. */
+    codeLeaks?: Record<string, unknown>;
+  };
 }
 
 export interface EvidenceItem {

@@ -315,7 +315,7 @@ export function buildBreachFindings(domain: string, result: BreachExposureResult
           : "") +
         `This describes historical incidents already in the public record; it does not indicate a current, ongoing compromise.`,
       severity,
-      category: "data_leak",
+      category: "brand_threat",
       affectedAsset: domain,
       cvssScore: BAND_SCORE[severity],
       remediation:
@@ -342,7 +342,7 @@ export function buildBreachFindings(domain: string, result: BreachExposureResult
         `${result.unverified.map((b) => b.title).slice(0, 5).join(", ")}. ` +
         `Unverified data circulates and is sometimes recycled or invented, so this is reported as a lead to check rather than as an established exposure.`,
       severity: "low",
-      category: "data_leak",
+      category: "brand_threat",
       affectedAsset: domain,
       cvssScore: BAND_SCORE.low,
       remediation:
@@ -375,7 +375,7 @@ export function buildBreachFindings(domain: string, result: BreachExposureResult
           ? ` ${result.fabricated.length} record(s) naming this domain are flagged by the corpus as fabricated and were deliberately excluded rather than reported as exposure.`
           : ""),
     severity: "info",
-    category: "data_leak",
+    category: "brand_threat",
     affectedAsset: domain,
     cvssScore: BAND_SCORE.info,
     remediation: result.unavailableReason === "no-domain"

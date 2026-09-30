@@ -11,6 +11,7 @@ import { computeSecurityScore } from "@shared/scoring";
 import { fetchBGPViewForIPs } from "./api-integrations";
 import { correlateExploitability } from "./cve-service";
 import { enrichFinding } from "./ai-service";
+import { generateAndPersistWorkspaceInsights } from "./workspace-insights.js";
 import { emitScanCompleted, emitScanFailed, emitNewCriticalFinding } from "./notifications";
 
 const log = createLogger("scan-trigger");
@@ -564,7 +565,7 @@ export async function triggerScan(
   type: string,
   workspaceId: string,
   mode: string,
-  opts: { autoGenerateReport?: boolean } = {},
+  opts: { autoGenerateReport?: boolean; aiEnrich?: boolean } = {},
 ): Promise<string> {
   // Defensive validation — route layer validates too, but this is also called by the scheduler
   const normalizedTarget = target.trim().toLowerCase().replace(/[./]+$/, "");
@@ -796,6 +797,24 @@ export async function triggerScan(
       // any mid-scan key save.
       reEnrichWorkspaceThreatIntel(workspaceId).catch((err) =>
         log.warn({ err }, "Auto re-enrichment failed"));
+
+      /*
+       * AI-enriched scan: the operator asked for GLM to verify and synthesize
+       * on top of this scan, not just discover. Same choke point as the other
+       * two post-completion steps above, and the same function the manual
+       * "Generate" button and the Intelligence panel use — one implementation
+       * of "what does this workspace's AI insights say right now", regardless
+       * of what triggered it.
+       *
+       * Not awaited: a slow or rate-limited GLM call must not hold a scan in
+       * "completing" state, the same reasoning as auto-report generation
+       * above. Runs after `runBackgroundEnrichment` so the per-finding
+       * enrichment it does is available as extra context if GLM reads it.
+       */
+      if (opts.aiEnrich) {
+        void generateAndPersistWorkspaceInsights(workspaceId, { knownTarget: normalizedTarget }).catch((err) =>
+          log.warn({ err, scanId: scan.id }, "AI-enriched scan: insights generation failed"));
+      }
     } catch (err) {
       log.error({ err }, "Scan processing error");
       // Surface a friendly, non-leaky message to the user (raw error stays in

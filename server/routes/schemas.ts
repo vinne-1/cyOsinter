@@ -24,13 +24,40 @@ export const createScanSchema = z.object({
   status: z.enum(["pending", "running", "completed", "failed"]).default("pending"),
   workspaceId: z.string().optional(),
   autoGenerateReport: z.boolean().optional(),
+  /**
+   * After the scan's findings are written, run the same GLM verification +
+   * synthesis pipeline as the AI Insights "Generate" button (live checks
+   * against the workspace's real hosts, then a correlated summary), and
+   * persist it — so the operator lands on a scan that already has AI-verified
+   * insights instead of a separate manual step.
+   */
+  aiEnrich: z.boolean().optional(),
   mode: z.enum(["standard", "gold", "safe"]).optional(),
   profileId: z.string().optional(),
 });
 
+export const assistantChatSchema = z.object({
+  message: z.string().min(1, "Message is required").max(2000, "Message is too long"),
+  // Capped at 20 turns and 2000 chars each — bounds both prompt cost and the
+  // size of any injection payload smuggled in through prior turns.
+  history: z
+    .array(
+      z.object({
+        role: z.enum(["user", "assistant"]),
+        content: z.string().max(2000),
+      }),
+    )
+    .max(20)
+    .optional()
+    .default([]),
+  // The client's current route, used only to pick which extra context block
+  // the server composes — see server/ai-chat.ts. Never rendered verbatim.
+  page: z.string().max(200).optional(),
+});
+
 export const createReportSchema = z.object({
   title: z.string().min(1, "Title is required"),
-  type: z.enum(["executive_summary", "full_report", "evidence_pack"]),
+  type: z.enum(["executive_summary", "full_report", "evidence_pack", "ai_follow_up"]),
   workspaceId: z.string(),
   status: z.enum(["draft", "generating", "completed"]).default("draft"),
   findingIds: z.array(z.string()).optional(),

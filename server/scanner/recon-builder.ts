@@ -625,5 +625,38 @@ export async function buildReconModules(
     });
   }
 
+  // ── Brand monitoring ─────────────────────────────────────────────────────
+  // Four separate module types, matching exactly what routes/brand-threats.ts
+  // stores per manual "run sweep" — so the Brand Threats page renders
+  // identically whether the data came from a scan or a manual click, and a
+  // manual re-run afterwards simply refreshes the same module type rather
+  // than creating a parallel one.
+  if (osint?.brandMonitoring) {
+    const bm = osint.brandMonitoring;
+    modules.push({ moduleType: "brand_threats", data: bm.typosquat, confidence: 90 });
+    modules.push({
+      moduleType: "ransomware_exposure",
+      data: bm.ransomware,
+      confidence: (bm.ransomware as { counts?: { confirmed?: number } }).counts?.confirmed ? 95 : 80,
+    });
+    modules.push({
+      moduleType: "mobile_apps",
+      data: bm.mobileApps,
+      confidence: (bm.mobileApps as { official?: unknown[] }).official?.length ? 90 : 70,
+    });
+    modules.push({
+      moduleType: "breach_exposure",
+      data: bm.breachExposure,
+      confidence: (bm.breachExposure as { confirmed?: unknown[] }).confirmed?.length ? 95 : 85,
+    });
+    if (bm.codeLeaks) {
+      modules.push({
+        moduleType: "code_leak",
+        data: bm.codeLeaks,
+        confidence: (bm.codeLeaks as { counts?: { withSecrets?: number } }).counts?.withSecrets ? 85 : 70,
+      });
+    }
+  }
+
   return modules;
 }

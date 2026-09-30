@@ -5,6 +5,7 @@ import {
   checkRansomwareExposure,
   getFeed,
   __resetFeedCache,
+  buildRansomwareFindings,
   type LeakPost,
 } from "../../../server/scanner/ransomware-watch";
 
@@ -213,5 +214,47 @@ describe("feed caching", () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("down")));
     const second = await getFeed({ force: true });
     expect(second.posts).toHaveLength(POSTS.length);
+  });
+});
+
+describe("buildRansomwareFindings", () => {
+  it("raises a CRITICAL finding for a confirmed identity match, never merged with possible matches", async () => {
+    const r = await checkRansomwareExposure("acme-manufacturing.com", { posts: POSTS });
+    const findings = buildRansomwareFindings("acme-manufacturing.com", r);
+    const critical = findings.find((f) => f.severity === "critical");
+    expect(critical).toBeDefined();
+    expect(critical!.category).toBe("brand_threat");
+    expect(critical!.title).toMatch(/confirmed/i);
+    // No possible-match finding should exist when only confirmed matches were found.
+    expect(findings.some((f) => f.title.match(/unconfirmed/i))).toBe(false);
+  });
+
+  it("reports a possible (name-only) match at medium severity, never as confirmed", async () => {
+    const r = await checkRansomwareExposure("something-else.com", {
+      posts: POSTS,
+      organisationName: "Acme Manufacturing",
+    });
+    const findings = buildRansomwareFindings("something-else.com", r);
+    const medium = findings.find((f) => f.severity === "medium");
+    expect(medium).toBeDefined();
+    expect(medium!.title).toMatch(/unconfirmed/i);
+    expect(findings.some((f) => f.severity === "critical")).toBe(false);
+  });
+
+  it("reports a real, checked clean state when nothing matches — not silence", async () => {
+    const r = await checkRansomwareExposure("definitely-clean.com", { posts: POSTS });
+    const findings = buildRansomwareFindings("definitely-clean.com", r);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].severity).toBe("info");
+    expect(findings[0].description).toContain(String(POSTS.length));
+  });
+
+  it("reports an incomplete check as its own finding, never as a clean result", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("feed down")));
+    const r = await checkRansomwareExposure("example.com");
+    const findings = buildRansomwareFindings("example.com", r);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].severity).toBe("info");
+    expect(findings[0].title).toMatch(/incomplete/i);
   });
 });

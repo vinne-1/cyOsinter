@@ -1,8 +1,7 @@
 import { storage, FULL_SET_LIMIT } from "../storage";
 import { selectReportFindings } from "../report-scope";
 import { enrichIPs } from "../api-integrations";
-import { getOllamaConfig } from "../api-integrations";
-import { generateReportSummary } from "../ai-service";
+import { getGlmConfig, generateReportSummary } from "../ai-service";
 import { isSafeOutboundUrl } from "../utils/ssrf.js";
 import { createLogger } from "../logger";
 
@@ -260,8 +259,10 @@ export async function buildReportContent(
   summary = summary.trimEnd();
 
   const originalSummary = summary;
-  const ollamaConfig = getOllamaConfig();
-  if (ollamaConfig.enabled && includedFindings.length > 0) {
+  // The follow-up report writes its own narrative after the extra checks.
+  // A summary here would be a second model call about findings the checks
+  // have not looked at yet.
+  if (reportType !== "ai_follow_up" && getGlmConfig().enabled && includedFindings.length > 0) {
     try {
       const aiSummary = await generateReportSummary(includedFindings, content);
       if (aiSummary && aiSummary.trim()) {

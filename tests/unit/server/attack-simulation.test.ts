@@ -81,4 +81,43 @@ describe("attack playbooks match real scanner categories", () => {
     expect(r.exploitable).toBe(false);
     expect(r.riskScore).toBe(0);
   });
+
+  // Regression: a single weak, generic "Robots.txt Reveals Sensitive Paths"
+  // (information_disclosure) finding was the ONLY evidence in a real workspace,
+  // yet the SQL Injection Chain and API Authentication Bypass playbooks both
+  // rendered as confident multi-step chains (Risk: 50 and 67) built entirely
+  // from it. information_disclosure must no longer satisfy SQLi-chain steps at
+  // all, and a lone info-disclosure finding must not carry API Auth Bypass past
+  // its first (weakest) step.
+  it("a single generic information_disclosure finding does not fabricate a SQLi chain", async () => {
+    getFindings.mockResolvedValue({ data: [f("information_disclosure")] });
+    const r = await simulateAttack("ws", "sqli-chain");
+    expect(r.matchedSteps.length).toBe(0);
+    expect(r.exploitable).toBe(false);
+  });
+
+  it("a single generic information_disclosure finding does not fabricate an API auth bypass chain past step 1", async () => {
+    getFindings.mockResolvedValue({ data: [f("information_disclosure")] });
+    const r = await simulateAttack("ws", "api-auth-bypass");
+    expect(r.matchedSteps.length).toBe(1);
+    expect(r.exploitable).toBe(false);
+    expect(r.riskScore).toBeLessThan(30);
+  });
+
+  it("flags lowConfidence when the entire matched chain rests on one finding", async () => {
+    const shared = f("leaked_credential");
+    getFindings.mockResolvedValue({ data: [shared] });
+    const r = await simulateAttack("ws", "privilege-escalation");
+    expect(r.matchedSteps.length).toBeGreaterThanOrEqual(2);
+    expect(r.lowConfidence).toBe(true);
+    expect(r.exploitable).toBe(false);
+    expect(r.riskScore).toBeLessThanOrEqual(35);
+  });
+
+  it("does not flag lowConfidence when distinct findings back the chain, even with adjacent overlap", async () => {
+    getFindings.mockResolvedValue({ data: [f("api_exposure"), f("data_leak"), f("information_disclosure")] });
+    const r = await simulateAttack("ws", "api-auth-bypass");
+    expect(r.lowConfidence).toBe(false);
+    expect(r.exploitable).toBe(true);
+  });
 });

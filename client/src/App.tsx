@@ -12,6 +12,7 @@ import { DomainSelector } from "@/components/domain-selector";
 import { NotificationBell } from "@/components/notification-bell";
 import { useAuth } from "@/pages/auth";
 import { CommandPalette } from "@/components/command-palette";
+import { AssistantWidget } from "@/components/assistant-widget";
 import { navItemForPath } from "@/components/nav-items";
 import { Loader2, AlertTriangle, RefreshCw, Search } from "lucide-react";
 
@@ -150,6 +151,7 @@ function AuthenticatedApp() {
     <DomainProvider>
       <SidebarProvider>
         <CommandPalette />
+        <AssistantWidget />
         <a
           href="#main-content"
           className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-primary focus:px-4 focus:py-2 focus:text-sm focus:font-medium focus:text-primary-foreground"

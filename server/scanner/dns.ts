@@ -29,7 +29,15 @@ const fastResolver = makeResolver(2500, 2);
 
 // More forgiving resolver for authoritative record lookups (A/MX/NS/TXT/SOA/CAA)
 // where completeness matters more than raw speed.
-const recordResolver = makeResolver(5000, 2);
+//
+// Exported (not just the functions below) so a caller that needs its OWN
+// error-classification logic — e.g. `ai-follow-up.ts` distinguishing "did not
+// answer" from "answered with no records", which `getDNSTxtRecords` below
+// collapses into a single `[]` — can still use the same hardened public
+// resolvers instead of falling back to the OS default (see the module
+// comment above on why that matters: it returns ETIMEOUT/ESERVFAIL for names
+// public resolvers answer fine).
+export const recordResolver = makeResolver(5000, 2);
 
 export interface ResolvedHost {
   /** IPv4 addresses. */

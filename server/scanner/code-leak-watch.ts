@@ -276,3 +276,97 @@ export async function watchForCodeLeaks(
 export function isCodeLeakConfigured(): boolean {
   return !!(process.env.GITHUB_TOKEN ?? process.env.GITHUB_PAT);
 }
+
+export interface CodeLeakFinding {
+  title: string;
+  description: string;
+  severity: "critical" | "high" | "medium" | "low" | "info";
+  category: string;
+  affectedAsset: string;
+  cvssScore: string;
+  remediation: string;
+  evidence: Record<string, unknown>;
+}
+
+const BAND_SCORE: Record<CodeLeakFinding["severity"], string> = {
+  critical: "9.1", high: "7.5", medium: "5.3", low: "3.1", info: "0.0",
+};
+
+/**
+ * Renders a code-leak sweep as findings.
+ *
+ * One finding for files carrying a recognised secret, one for files that only
+ * mention an identifier — the same "strongest evidence in its own row"
+ * separation `breach-exposure.ts` and `ransomware-watch.ts` use, because a
+ * bare domain mention in someone's fork is a very different fact from a
+ * matched AWS key in a committed config.
+ */
+export function buildCodeLeakFindings(domain: string, result: CodeLeakResult): CodeLeakFinding[] {
+  const findings: CodeLeakFinding[] = [];
+
+  if (result.error) {
+    findings.push({
+      title: `Code leak sweep incomplete for ${domain}`,
+      description: `${result.error}. This is not a clean result — it means the check did not fully run.`,
+      severity: "info",
+      category: "brand_threat",
+      affectedAsset: domain,
+      cvssScore: BAND_SCORE.info,
+      remediation: "Re-run when GitHub's code search API is reachable.",
+      evidence: { terms: result.terms, filesInspected: result.filesInspected, error: result.error },
+    });
+    return findings;
+  }
+
+  const withSecrets = result.hits.filter((h) => h.hasSecret);
+  const mentionsOnly = result.hits.filter((h) => !h.hasSecret);
+
+  if (withSecrets.length > 0) {
+    const hasCritical = withSecrets.some((h) => h.secrets.some((s) => s.severity === "critical"));
+    const severity: CodeLeakFinding["severity"] = hasCritical ? "critical" : "high";
+    const repos = withSecrets.map((h) => `${h.repository}/${h.path}`);
+    findings.push({
+      title: `${withSecrets.length} public repository file${withSecrets.length === 1 ? "" : "s"} contain${withSecrets.length === 1 ? "s" : ""} a credential matching ${domain}`,
+      description:
+        `${withSecrets.length} file${withSecrets.length === 1 ? "" : "s"} in public GitHub repositories mention ${domain} (or a related identifier) AND contain a recognised ` +
+        `secret pattern: ${repos.slice(0, 6).join(", ")}${repos.length > 6 ? `, and ${repos.length - 6} more` : ""}. This is a live credential exposed in developer-facing ` +
+        `code, which is typically reachable long before it is noticed on the production perimeter.`,
+      severity,
+      category: "brand_threat",
+      affectedAsset: domain,
+      cvssScore: BAND_SCORE[severity],
+      remediation: "Rotate every matched credential immediately, then request removal or history rewrite from the repository owner. Treat as already compromised.",
+      evidence: { terms: result.terms, filesInspected: result.filesInspected, hits: withSecrets },
+    });
+  }
+
+  if (mentionsOnly.length > 0) {
+    findings.push({
+      title: `${mentionsOnly.length} public repository file${mentionsOnly.length === 1 ? "" : "s"} mention ${domain} with no secret detected`,
+      description:
+        `${mentionsOnly.length} file${mentionsOnly.length === 1 ? "" : "s"} in public repositories reference ${domain} or a related identifier, but no recognised secret ` +
+        `pattern was found in them. This is commonly a legitimate integration, documentation, or a former employee's personal project — worth a quick look, not an incident.`,
+      severity: "low",
+      category: "brand_threat",
+      affectedAsset: domain,
+      cvssScore: BAND_SCORE.low,
+      remediation: "Spot-check a few for anything unexpected (internal hostnames, architecture detail). No action needed if they are benign integrations.",
+      evidence: { terms: result.terms, filesInspected: result.filesInspected, hits: mentionsOnly },
+    });
+  }
+
+  if (result.hits.length === 0) {
+    findings.push({
+      title: `No public code leaks found mentioning ${domain}`,
+      description: `Searched public GitHub code for ${result.terms.join(", ")} across ${result.filesInspected} file(s) — no matches.`,
+      severity: "info",
+      category: "brand_threat",
+      affectedAsset: domain,
+      cvssScore: BAND_SCORE.info,
+      remediation: "No action needed now. Re-run periodically — new commits happen constantly.",
+      evidence: { terms: result.terms, filesInspected: result.filesInspected },
+    });
+  }
+
+  return findings;
+}

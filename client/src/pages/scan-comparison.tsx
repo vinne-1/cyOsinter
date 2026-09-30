@@ -1,7 +1,8 @@
-import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useState, useEffect } from "react";
+import { useQuery, useMutation } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Select,
@@ -18,21 +19,30 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { GitCompareArrows, ArrowUp, ArrowDown, Minus } from "lucide-react";
+import { GitCompareArrows, ArrowUp, ArrowDown, Minus, Sparkles, Loader2, AlertTriangle } from "lucide-react";
 import { useDomain } from "@/lib/domain-context";
+import { apiRequest } from "@/lib/queryClient";
+import { useToast } from "@/hooks/use-toast";
 
 interface Scan {
-  id: number;
+  id: string;
   target: string;
   status: string;
-  createdAt: string;
+  /** Scans have no `createdAt` — `startedAt` is when the row was created. */
+  startedAt: string | null;
 }
 
 interface DiffFinding {
   title: string;
   severity: string;
-  asset: string;
+  /** The server sends `affectedAsset` (the `Finding` shape), not `asset`. */
+  affectedAsset: string | null;
   category: string;
+}
+
+interface ScanDiffNarrative {
+  summary: string;
+  watchFor: string[];
 }
 
 interface ScanDiff {
@@ -79,14 +89,14 @@ function FindingsTable({ findings }: { findings: DiffFinding[] }) {
       </TableHeader>
       <TableBody>
         {findings.map((f, idx) => (
-          <TableRow key={`${f.title}-${f.asset}-${idx}`}>
+          <TableRow key={`${f.title}-${f.affectedAsset}-${idx}`}>
             <TableCell className="font-medium">{f.title}</TableCell>
             <TableCell>
               <Badge className={severityColors[f.severity] || ""} variant="secondary">
                 {f.severity}
               </Badge>
             </TableCell>
-            <TableCell className="text-sm text-muted-foreground">{f.asset}</TableCell>
+            <TableCell className="text-sm text-muted-foreground">{f.affectedAsset ?? "—"}</TableCell>
             <TableCell>
               <Badge variant="outline">{f.category}</Badge>
             </TableCell>
@@ -99,9 +109,11 @@ function FindingsTable({ findings }: { findings: DiffFinding[] }) {
 
 export default function ScanComparison() {
   const { selectedWorkspaceId } = useDomain();
+  const { toast } = useToast();
   const [scanA, setScanA] = useState<string>("");
   const [scanB, setScanB] = useState<string>("");
   const [activeTab, setActiveTab] = useState<TabKey>("new");
+  const [narrative, setNarrative] = useState<ScanDiffNarrative | null>(null);
 
   const { data: scans = [], isLoading: scansLoading } = useQuery<Scan[]>({
     queryKey: [`/api/workspaces/${selectedWorkspaceId}/scans`],
@@ -112,6 +124,20 @@ export default function ScanComparison() {
     queryKey: [`/api/scans/${scanA}/diff/${scanB}`],
     enabled: !!scanA && !!scanB && scanA !== scanB,
   });
+
+  const explainMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", `/api/scans/${scanA}/diff/${scanB}/explain`, undefined, { timeoutMs: 120000 });
+      return res.json() as Promise<ScanDiffNarrative>;
+    },
+    onSuccess: (data) => setNarrative(data),
+    onError: (err: Error) => {
+      toast({ title: "AI explanation failed", description: err.message, variant: "destructive" });
+    },
+  });
+  useEffect(() => {
+    setNarrative(null);
+  }, [scanA, scanB]);
 
   if (scansLoading) {
     return (
@@ -152,8 +178,8 @@ export default function ScanComparison() {
                 </SelectTrigger>
                 <SelectContent>
                   {scans.map((s) => (
-                    <SelectItem key={s.id} value={String(s.id)}>
-                      {s.target} - {new Date(s.createdAt).toLocaleDateString()}
+                    <SelectItem key={s.id} value={s.id}>
+                      {s.target} - {s.startedAt ? new Date(s.startedAt).toLocaleDateString() : "—"}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -167,10 +193,10 @@ export default function ScanComparison() {
                 </SelectTrigger>
                 <SelectContent>
                   {scans
-                    .filter((s) => String(s.id) !== scanA)
+                    .filter((s) => s.id !== scanA)
                     .map((s) => (
-                      <SelectItem key={s.id} value={String(s.id)}>
-                        {s.target} - {new Date(s.createdAt).toLocaleDateString()}
+                      <SelectItem key={s.id} value={s.id}>
+                        {s.target} - {s.startedAt ? new Date(s.startedAt).toLocaleDateString() : "—"}
                       </SelectItem>
                     ))}
                 </SelectContent>
@@ -231,8 +257,37 @@ export default function ScanComparison() {
                   persisting
                 </span>
               </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => explainMutation.mutate()}
+                disabled={explainMutation.isPending}
+                data-testid="button-explain-scan-diff"
+              >
+                {explainMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Sparkles className="w-4 h-4 mr-2" />}
+                {explainMutation.isPending ? "Asking GLM..." : narrative ? "Re-explain" : "Explain with AI"}
+              </Button>
             </CardContent>
           </Card>
+
+          {narrative && (
+            <Card data-testid="card-scan-diff-narrative">
+              <CardContent className="p-4 space-y-2">
+                <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">AI Summary</p>
+                <p className="text-sm leading-relaxed">{narrative.summary}</p>
+                {narrative.watchFor.length > 0 && (
+                  <ul className="space-y-1">
+                    {narrative.watchFor.map((w, i) => (
+                      <li key={i} className="flex items-start gap-2 text-xs">
+                        <AlertTriangle className="w-3.5 h-3.5 text-amber-500 flex-shrink-0 mt-0.5" />
+                        {w}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </CardContent>
+            </Card>
+          )}
 
           <Card>
             <CardHeader className="pb-0">

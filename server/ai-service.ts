@@ -1,125 +1,199 @@
 /**
  * AI service for finding enrichment, report generation, and scan consolidation.
- * Uses Ollama with DeepSeek R1 Abliterated (or configurable model).
+ * Calls Zhipu GLM (OpenAI-compatible chat completions). The free model is
+ * glm-4.5-flash. The API key stays in GLM_API_KEY on the server.
  */
 
 import type { Finding } from "@shared/schema";
 import type { ReconModule } from "@shared/schema";
-import { getOllamaConfig } from "./api-integrations";
 import { getCVEForFinding, type CVERecord } from "./cve-service";
 import { createLogger } from "./logger";
+import type { FollowUpCheckResult } from "./ai-follow-up.js";
 
 const log = createLogger("ai");
 
-export const AI_REQUEST_TIMEOUT_MS = 30 * 60 * 1000; // 30 min for CPU inference
-const TIMEOUT_MS = AI_REQUEST_TIMEOUT_MS;
+/** Chat calls return in seconds. This bounds a stuck request. */
+export const AI_REQUEST_TIMEOUT_MS = 120_000;
+
+const GLM_DEFAULT_BASE = "https://open.bigmodel.cn/api/paas/v4";
+const GLM_DEFAULT_MODEL = "glm-4.5-flash";
+const GLM_RETRY_DELAYS_MS = [3000, 8000];
 
 export { getOllamaConfig, setOllamaConfig } from "./api-integrations";
 
-export async function getOllamaStatus(): Promise<{ reachable: boolean; modelLoaded?: boolean }> {
-  const ollamaConfig = getOllamaConfig();
-  const base = ollamaConfig.baseUrl.replace(/\/$/, "");
+export interface GlmConfig {
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+  enabled: boolean;
+}
+
+/** Server-side GLM settings. Enabled only when a key is present. */
+export function getGlmConfig(): GlmConfig {
+  const apiKey = process.env.GLM_API_KEY?.trim() ?? "";
+  const baseUrl = (process.env.GLM_BASE_URL?.trim() || GLM_DEFAULT_BASE).replace(/\/$/, "");
+  const model = process.env.GLM_MODEL?.trim() || GLM_DEFAULT_MODEL;
+  return { apiKey, baseUrl, model, enabled: apiKey.length > 0 };
+}
+
+interface GlmMessage {
+  content?: string;
+  reasoning_content?: string;
+}
+
+interface GlmChoice {
+  finish_reason?: string;
+  message?: GlmMessage;
+}
+
+let statusCache: { at: number; value: { reachable: boolean; modelLoaded?: boolean; provider: string; model?: string } } | null = null;
+
+/**
+ * One short completion, cached for a minute so the integrations page does not
+ * spend a request every time it polls.
+ */
+export async function getOllamaStatus(): Promise<{ reachable: boolean; modelLoaded?: boolean; provider: string; model?: string }> {
+  const cfg = getGlmConfig();
+  if (!cfg.enabled) return { reachable: false, provider: "glm", model: cfg.model };
+  if (statusCache && Date.now() - statusCache.at < 60_000) return statusCache.value;
   try {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), 5000);
-    const res = await fetch(`${base}/api/tags`, { signal: ctrl.signal });
-    clearTimeout(t);
-    if (!res.ok) return { reachable: true, modelLoaded: false };
-    const json = (await res.json()) as { models?: Array<{ name?: string }> };
-    const models = json.models ?? [];
-    const modelLoaded = models.some((m) => (m.name ?? "").includes(ollamaConfig.model.split(":")[0]));
-    return { reachable: true, modelLoaded };
-  } catch {
-    return { reachable: false };
+    const text = await callGlm("Reply with the single word ok.", undefined, { maxTokens: 32, timeoutMs: 30_000 });
+    const value = { reachable: text.trim().length > 0, modelLoaded: true, provider: "glm", model: cfg.model };
+    if (value.reachable) statusCache = { at: Date.now(), value };
+    return value;
+  } catch (err) {
+    log.warn({ err: err instanceof Error ? err.message : "request failed", model: cfg.model }, "GLM status check failed");
+    return { reachable: false, provider: "glm", model: cfg.model };
   }
 }
 
-const OLLAMA_RETRY_ATTEMPTS = 3;
-const OLLAMA_RETRY_DELAYS_MS = [5000, 10000, 15000]; // exponential backoff
-
-function getErrnoCode(err: unknown): string | undefined {
-  return (err as NodeJS.ErrnoException)?.code;
+function redactSecret(text: string, secret: string): string {
+  if (!secret) return text;
+  return text.split(secret).join("[redacted]");
 }
 
-async function callOllama(prompt: string, system?: string, options?: { format?: "json" }): Promise<string> {
-  const ollamaConfig = getOllamaConfig();
-  if (!ollamaConfig.enabled) throw new Error("Ollama AI is disabled");
-  const base = ollamaConfig.baseUrl.replace(/\/$/, "");
-  const url = `${base}/api/generate`;
-  const body: Record<string, unknown> = {
-    model: ollamaConfig.model,
-    prompt: system ? `${system}\n\n${prompt}` : prompt,
-    stream: false,
-  };
-  if (options?.format === "json") body.format = "json";
-  const bodyStr = JSON.stringify(body);
+/**
+ * The actual HTTP round trip, shared by `callGlm` (single prompt+system) and
+ * `callGlmChat` (a full multi-turn conversation) — one retry/timeout/error
+ * implementation rather than two copies that could drift.
+ */
+async function postGlmMessages(
+  messages: Array<{ role: string; content: string }>,
+  options?: { maxTokens?: number; timeoutMs?: number },
+): Promise<string> {
+  const cfg = getGlmConfig();
+  if (!cfg.enabled) throw new Error("GLM is not configured. Set GLM_API_KEY on the server.");
+  const url = `${cfg.baseUrl}/chat/completions`;
+  const bodyStr = JSON.stringify({
+    model: cfg.model,
+    messages,
+    temperature: 0.2,
+    max_tokens: options?.maxTokens ?? 4096,
+    // This model spends the token budget on reasoning unless thinking is off,
+    // and the visible answer then comes back empty.
+    thinking: { type: "disabled" },
+  });
 
   let lastErr: Error | null = null;
-  for (let attempt = 1; attempt <= OLLAMA_RETRY_ATTEMPTS; attempt++) {
+  for (let attempt = 1; attempt <= GLM_RETRY_DELAYS_MS.length + 1; attempt++) {
     const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+    const t = setTimeout(() => ctrl.abort(), options?.timeoutMs ?? AI_REQUEST_TIMEOUT_MS);
     try {
       const res = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${cfg.apiKey}`,
+        },
         body: bodyStr,
         signal: ctrl.signal,
       });
       clearTimeout(t);
+      const raw = await res.text();
+      const safe = redactSecret(raw, cfg.apiKey);
       if (!res.ok) {
-        const errText = await res.text();
-        const is503 = res.status === 503;
-        if (is503 && attempt < OLLAMA_RETRY_ATTEMPTS) {
-          const delay = OLLAMA_RETRY_DELAYS_MS[attempt - 1] ?? 5000;
-          log.warn({ url, attempt, maxAttempts: OLLAMA_RETRY_ATTEMPTS, delayMs: delay }, "Ollama 503 (model loading?), retrying");
+        const retryable = res.status === 429 || res.status === 503;
+        if (retryable && attempt <= GLM_RETRY_DELAYS_MS.length) {
+          const delay = GLM_RETRY_DELAYS_MS[attempt - 1] ?? 3000;
+          log.warn({ status: res.status, attempt, delayMs: delay, model: cfg.model }, "GLM busy, retrying");
           await new Promise((r) => setTimeout(r, delay));
           continue;
         }
-        const snippet = errText.slice(0, 200).toLowerCase();
-        const resourceHint =
-          snippet.includes("memory") ||
-          snippet.includes("oom") ||
-          snippet.includes("out of memory") ||
-          snippet.includes("cuda") ||
-          snippet.includes("gpu") ||
-          is503
-            ? " Likely due to insufficient resources (CPU/memory/GPU) or model loading."
-            : "";
-        throw new Error(`Ollama error ${res.status}: ${errText.slice(0, 150)}${resourceHint}`);
+        throw new Error(`GLM error ${res.status}: ${safe.slice(0, 180)}`);
       }
-      const json = (await res.json()) as { response?: string };
-      return (json.response ?? "").trim();
+      const json = JSON.parse(safe) as { choices?: GlmChoice[] };
+      const message = json.choices?.[0]?.message;
+      const content = (message?.content ?? "").trim();
+      if (content) return content;
+      const reasoning = (message?.reasoning_content ?? "").trim();
+      if (reasoning) return reasoning;
+      throw new Error("GLM returned an empty completion.");
     } catch (err) {
       clearTimeout(t);
       lastErr = err instanceof Error ? err : new Error(String(err));
-      const errCode = getErrnoCode(err);
-      const isConnectionError =
-        lastErr.message.includes("ECONNREFUSED") ||
-        lastErr.message.includes("fetch failed") ||
-        lastErr.message.includes("ECONNRESET") ||
-        lastErr.message.includes("socket hang up");
-      if (isConnectionError && attempt < OLLAMA_RETRY_ATTEMPTS) {
-        const delay = OLLAMA_RETRY_DELAYS_MS[attempt - 1] ?? 5000;
-        log.warn({ url, attempt, maxAttempts: OLLAMA_RETRY_ATTEMPTS, errCode: errCode ?? "n/a", delayMs: delay, err: lastErr }, "Ollama connection error, retrying");
+      if (lastErr.name === "AbortError" || lastErr.message.includes("aborted")) {
+        throw new Error("GLM request timed out. The model did not answer in time.");
+      }
+      if (lastErr.message.startsWith("GLM error") || lastErr.message.startsWith("GLM returned")) throw lastErr;
+      const retryable = lastErr.message.includes("fetch failed") || lastErr.message.includes("ECONNRESET");
+      if (retryable && attempt <= GLM_RETRY_DELAYS_MS.length) {
+        const delay = GLM_RETRY_DELAYS_MS[attempt - 1] ?? 3000;
+        log.warn({ attempt, delayMs: delay, model: cfg.model }, "GLM connection error, retrying");
         await new Promise((r) => setTimeout(r, delay));
         continue;
       }
-      if (lastErr.name === "AbortError" || lastErr.message.includes("aborted")) {
-        throw new Error(
-          "Ollama request timed out. This may be due to insufficient CPU or memory—try a smaller model (e.g. tinyllama) or free up system resources."
-        );
-      }
-      if (lastErr.message.includes("ECONNREFUSED") || lastErr.message.includes("fetch failed")) {
-        log.warn({ url, errCode: errCode ?? "n/a", err: lastErr }, "Ollama final failure");
-        throw new Error("Cannot reach Ollama. Ensure ollama serve is running and the base URL is correct.");
-      }
-      throw lastErr;
+      throw new Error("Cannot reach the GLM API. Check GLM_BASE_URL and network access.");
     }
   }
-  throw lastErr ?? new Error("Ollama request failed. This may be due to insufficient resources (CPU/memory) or Ollama being overloaded.");
+  throw lastErr ?? new Error("GLM request failed.");
 }
 
-function sanitize(text: string): string {
+async function callGlm(
+  prompt: string,
+  system?: string,
+  options?: { format?: "json"; maxTokens?: number; timeoutMs?: number },
+): Promise<string> {
+  const messages: Array<{ role: string; content: string }> = [];
+  const systemParts = [system, options?.format === "json" ? "Respond with one JSON object and no markdown." : ""]
+    .filter((part): part is string => !!part && part.trim().length > 0);
+  if (systemParts.length > 0) messages.push({ role: "system", content: systemParts.join("\n\n") });
+  messages.push({ role: "user", content: prompt });
+  return postGlmMessages(messages, { maxTokens: options?.maxTokens, timeoutMs: options?.timeoutMs });
+}
+
+async function callOllama(prompt: string, system?: string, options?: { format?: "json" }): Promise<string> {
+  return callGlm(prompt, system, options);
+}
+
+/** JSON completion used by the follow-up report. Throws when GLM is not configured or does not answer. */
+export async function completeAi(prompt: string, system?: string): Promise<string> {
+  return callGlm(prompt, system, { format: "json" });
+}
+
+export interface ChatTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
+/**
+ * Multi-turn chat completion for the in-app assistant. Unlike `callGlm`
+ * (one prompt + optional system string), this carries the whole conversation
+ * so far, because the assistant has to remember earlier turns within a chat
+ * session. The system prompt — including all grounding and untrusted-data
+ * framing — is entirely the caller's responsibility; this function adds none
+ * of its own.
+ */
+export async function callGlmChat(
+  system: string,
+  turns: ChatTurn[],
+  options?: { maxTokens?: number; timeoutMs?: number },
+): Promise<string> {
+  const messages: Array<{ role: string; content: string }> = [{ role: "system", content: system }];
+  for (const turn of turns) messages.push({ role: turn.role, content: turn.content });
+  return postGlmMessages(messages, options);
+}
+
+export function sanitize(text: string): string {
   return (text ?? "")
     .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, "")
     .slice(0, 8000);
@@ -152,7 +226,7 @@ function extractJSON<T>(raw: string): T | null {
   }
 }
 
-function buildFindingContext(f: Finding): string {
+export function buildFindingContext(f: Finding): string {
   const desc = (f.description ?? "").trim().slice(0, 150);
   const evidence = (f.evidence ?? [])
     .map((e: Record<string, unknown>) => (e.snippet as string) ?? (e.description as string))
@@ -165,7 +239,7 @@ function buildFindingContext(f: Finding): string {
   return `- ${f.title} (${f.severity}, ${f.category})${cveStr}\n  ${desc}${evidence ? ` | Evidence: ${evidence}` : ""}\n  Asset: ${(f.affectedAsset ?? "N/A").slice(0, 80)}`;
 }
 
-function buildReconContext(reconModules: ReconModule[]): string {
+export function buildReconContext(reconModules: ReconModule[]): string {
   const lines: string[] = [];
   const byType = reconModules.reduce((acc, m) => {
     if (!(m.moduleType in acc)) acc[m.moduleType] = m;
@@ -205,6 +279,142 @@ function buildReconContext(reconModules: ReconModule[]): string {
     const live = (webPresence.liveSubdomains as unknown[])?.length ?? 0;
     const dangling = (webPresence.danglingCnames as unknown[])?.length ?? 0;
     lines.push(`Web presence: ${live} live subdomains, ${dangling} dangling CNAMEs`);
+  }
+
+  /*
+   * Everything below was added so "AI Insights" synthesizes the WHOLE
+   * Intelligence page, not four of its eighteen tabs. Each line summarizes
+   * one module's real top-level fields (checked against the shapes actually
+   * stored in `recon_modules.data` for a live workspace, not guessed) —
+   * the same one-line-per-module discipline as the four above. A module
+   * absent from this workspace's scan simply contributes no line, which is
+   * correct: it was never run, not run-and-clean.
+   */
+  const dnsOverview = byType.dns_overview?.data as Record<string, unknown> | undefined;
+  if (dnsOverview) {
+    const dnssecState = (dnsOverview.dnssec as Record<string, unknown> | undefined)?.state ?? "unknown";
+    const zoneTransfer = dnsOverview.zoneTransfer as Array<{ transferred?: boolean }> | undefined;
+    const axfrVulnerable = zoneTransfer?.some((z) => z.transferred) ?? false;
+    lines.push(`DNS: DNSSEC ${dnssecState}, zone transfer ${axfrVulnerable ? "ALLOWED (vulnerable)" : "refused"}`);
+  }
+
+  const domainInfo = byType.domain_info?.data as Record<string, unknown> | undefined;
+  if (domainInfo?.domainInfo) {
+    // Raw WHOIS field names (title-case with spaces), not camelCase — this
+    // module stores the registry's own field labels verbatim.
+    const info = domainInfo.domainInfo as Record<string, unknown>;
+    lines.push(`Domain registration: registrar=${info["Registrar"] ?? "N/A"}, created=${info["Creation Date"] ?? "N/A"}`);
+  }
+
+  const websiteOverview = byType.website_overview?.data as Record<string, unknown> | undefined;
+  if (websiteOverview) {
+    const ports = (websiteOverview.openPorts as unknown[])?.length ?? 0;
+    const techs = ((websiteOverview.techStack as Array<{ name?: string }> | undefined) ?? []).map((t) => t?.name).filter(Boolean).slice(0, 8).join(", ");
+    lines.push(`Website overview: ${ports} open port(s)${techs ? `, tech: ${techs}` : ""}`);
+  }
+
+  const exposedContent = byType.exposed_content?.data as Record<string, unknown> | undefined;
+  if (exposedContent) {
+    const files = (exposedContent.publicFiles as unknown[])?.length ?? 0;
+    const dirs = (exposedContent.directoryBruteforce as unknown[])?.length ?? 0;
+    lines.push(`Exposed content: ${files} public file(s), ${dirs} directory hit(s)`);
+  }
+
+  const apiDiscovery = byType.api_discovery?.data as Record<string, unknown> | undefined;
+  if (apiDiscovery) {
+    lines.push(`API discovery: ${apiDiscovery.endpointCount ?? 0} endpoint(s) found${apiDiscovery.openApiSpec ? " (OpenAPI spec exposed)" : ""}`);
+  }
+
+  const nuclei = byType.nuclei?.data as Record<string, unknown> | undefined;
+  if (nuclei) {
+    lines.push(
+      nuclei.skipped
+        ? `Nuclei: skipped (${nuclei.skipReason ?? "not available"})`
+        : `Nuclei: ${(nuclei.hits as unknown[])?.length ?? 0} hit(s) from ${nuclei.templateCount ?? 0} template(s)`,
+    );
+  }
+
+  const dastLite = byType.dast_lite?.data as Record<string, unknown> | undefined;
+  if (dastLite) {
+    lines.push(`DAST: ${dastLite.testsPassed ?? 0}/${dastLite.testsRun ?? 0} tests passed, ${(dastLite.findings as unknown[])?.length ?? 0} finding(s)`);
+  }
+
+  const takeover = byType.subdomain_takeover?.data as Record<string, unknown> | undefined;
+  if (takeover) {
+    lines.push(`Subdomain takeover: ${takeover.vulnerableCount ?? 0} of ${takeover.checkedCount ?? 0} checked host(s) takeoverable`);
+  }
+
+  const bgp = byType.bgp_routing?.data as Record<string, unknown> | undefined;
+  if (bgp?.ips) {
+    lines.push(`BGP/IP reputation: ${Object.keys(bgp.ips as Record<string, unknown>).length} IP(s) profiled`);
+  }
+
+  const routedFootprint = byType.routed_footprint?.data as Record<string, unknown> | undefined;
+  if (routedFootprint) {
+    lines.push(`Routed footprint: ${routedFootprint.ownedAsnCount ?? 0} owned ASN(s), ~${routedFootprint.ownedAddressCount ?? 0} addresses`);
+  }
+
+  const redirectChain = byType.redirect_chain?.data as Record<string, unknown> | undefined;
+  if (redirectChain) {
+    lines.push(`Redirect chain: ${(redirectChain.redirectChain as unknown[])?.length ?? 0} hop(s)`);
+  }
+
+  const peopleExposure = byType.people_exposure?.data as Record<string, unknown> | undefined;
+  if (peopleExposure) {
+    lines.push(`People exposure: ${peopleExposure.observedCount ?? (peopleExposure.people as unknown[])?.length ?? 0} person/people found`);
+  }
+
+  const brandThreats = byType.brand_threats?.data as Record<string, unknown> | undefined;
+  if (brandThreats) {
+    const counts = brandThreats.counts as Record<string, number> | undefined;
+    lines.push(`Brand threats: ${(brandThreats.registered as unknown[])?.length ?? 0} lookalike domain(s) registered (${counts?.high ?? 0} high-risk)`);
+  }
+
+  const ransomwareExposure = byType.ransomware_exposure?.data as Record<string, unknown> | undefined;
+  if (ransomwareExposure) {
+    const counts = ransomwareExposure.counts as Record<string, number> | undefined;
+    lines.push(
+      ransomwareExposure.error
+        ? `Ransomware leak-site check: could not complete (${ransomwareExposure.error})`
+        : `Ransomware leak-site exposure: ${counts?.confirmed ?? 0} confirmed, ${counts?.possible ?? 0} possible match(es) out of ${ransomwareExposure.recordsChecked ?? 0} records checked`,
+    );
+  }
+
+  const mobileApps = byType.mobile_apps?.data as Record<string, unknown> | undefined;
+  if (mobileApps) {
+    lines.push(
+      `Mobile app monitoring: ${(mobileApps.official as unknown[])?.length ?? 0} official app(s), ${(mobileApps.thirdParty as unknown[])?.length ?? 0} third-party app(s) using the brand`,
+    );
+  }
+
+  const breachExposure = byType.breach_exposure?.data as Record<string, unknown> | undefined;
+  if (breachExposure) {
+    lines.push(
+      breachExposure.unavailable
+        ? `Breach corpus check: could not complete (${breachExposure.unavailableReason ?? "unavailable"})`
+        : `Breach corpus: ${(breachExposure.confirmed as unknown[])?.length ?? 0} confirmed, ${(breachExposure.unverified as unknown[])?.length ?? 0} unverified record(s) naming this domain`,
+    );
+  }
+
+  const codeLeak = byType.code_leak?.data as Record<string, unknown> | undefined;
+  if (codeLeak) {
+    const counts = codeLeak.counts as Record<string, number> | undefined;
+    lines.push(
+      codeLeak.error
+        ? `Code leak sweep: could not complete (${codeLeak.error})`
+        : `Public code leak sweep: ${counts?.withSecrets ?? 0} file(s) with a matched secret, ${counts?.mentionsOnly ?? 0} mention-only`,
+    );
+  }
+
+  const discoveryHealth = byType.discovery_health?.data as Record<string, unknown> | undefined;
+  if (discoveryHealth) {
+    const failed = (discoveryHealth.sourcesFailed as unknown[])?.length ?? 0;
+    lines.push(`Discovery: ${discoveryHealth.totalHosts ?? 0} host(s) found across all sources${failed > 0 ? `, ${failed} source(s) failed` : ""}`);
+  }
+
+  const verificationSummary = byType.verification_summary?.data as Record<string, unknown> | undefined;
+  if (verificationSummary) {
+    lines.push(`Verification: ${verificationSummary.confirmedCount ?? 0} confirmed, ${verificationSummary.withheldCount ?? 0} withheld as unconfirmed`);
   }
 
   if (lines.length === 0) return reconModules.map((m) => m.moduleType).join(", ");
@@ -395,6 +605,14 @@ export interface WorkspaceInsightsResult {
   fallbackReason?: "ollama_disabled" | "ollama_timeout" | "ollama_error";
   /** When fallback: actual error message for debugging (sanitized, max 500 chars) */
   fallbackErrorDetail?: string;
+  /**
+   * Live checks run against the workspace's own hosts before the model wrote
+   * this summary — the same allowlisted probes the AI Follow-up report runs
+   * (`runVerificationChecks` in ai-follow-up.ts). Absent when the workspace
+   * has no usable domain, so the UI can tell "verified" from "nothing to
+   * verify" rather than rendering an empty table as a clean result.
+   */
+  verification?: FollowUpCheckResult[];
 }
 
 function sanitizeErrorDetail(err: unknown): string {
@@ -448,58 +666,24 @@ function collectCVEFromFindings(findings: Finding[]): CVERecord[] {
   return out.slice(0, 15);
 }
 
-async function warmUpOllama(baseUrl: string, model: string): Promise<void> {
-  const url = `${baseUrl.replace(/\/$/, "")}/api/generate`;
-  const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), 15000);
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model, prompt: "Hi", stream: false }),
-      signal: ctrl.signal,
-    });
-    clearTimeout(t);
-    if (res.ok) {
-      await res.json();
-    }
-  } catch {
-    clearTimeout(t);
-    // Ignore warm-up failures; goal is to trigger model load
-  }
-}
-
 export async function generateWorkspaceInsights(
   findings: Finding[],
   reconModules: ReconModule[],
   workspaceName: string,
-  options?: { cveContext?: CVERecord[]; webSearchContext?: string }
+  options?: { cveContext?: CVERecord[]; webSearchContext?: string; verification?: FollowUpCheckResult[] }
 ): Promise<WorkspaceInsightsResult> {
-  const ollamaConfig = getOllamaConfig();
-  log.warn({ baseUrl: ollamaConfig.baseUrl, model: ollamaConfig.model, enabled: ollamaConfig.enabled }, "AI insights config");
-  if (!ollamaConfig.enabled) {
+  const glm = getGlmConfig();
+  const verification = options?.verification;
+  log.info({ model: glm.model, enabled: glm.enabled, checks: verification?.length ?? 0 }, "AI insights config");
+  if (!glm.enabled) {
     return {
       ...buildFallbackInsights(findings, reconModules, workspaceName),
       isAIGenerated: false,
       fallbackReason: "ollama_disabled",
-      fallbackErrorDetail: "Ollama AI is disabled. Enable it in Integrations and click Save.",
+      fallbackErrorDetail: "GLM is not configured. Set GLM_API_KEY on the server.",
+      verification,
     };
   }
-
-  // Pre-flight: verify Ollama is reachable before long-running inference
-  const status = await getOllamaStatus();
-  if (!status.reachable) {
-    log.warn({ baseUrl: ollamaConfig.baseUrl }, "AI insights: Ollama not reachable");
-    return {
-      ...buildFallbackInsights(findings, reconModules, workspaceName),
-      isAIGenerated: false,
-      fallbackReason: "ollama_error",
-      fallbackErrorDetail: `Ollama not reachable at ${ollamaConfig.baseUrl}. Ensure ollama serve is running.`,
-    };
-  }
-
-  // Warm-up: trigger model load before main inference (ignores failures)
-  await warmUpOllama(ollamaConfig.baseUrl, ollamaConfig.model);
 
   const severityOrder = { critical: 0, high: 1, medium: 2, low: 3, info: 4 };
   const sortedFindings = [...findings].sort(
@@ -525,6 +709,16 @@ export async function generateWorkspaceInsights(
   const crit = findings.filter((f) => f.severity === "critical").length;
   const high = findings.filter((f) => f.severity === "high").length;
 
+  // These checks already ran against the workspace's real hosts before this
+  // prompt was built (see routes/findings.ts). Handing the model their
+  // results — rather than asking it to reason only from stored finding text —
+  // is the same "grounded in a live probe, not a stale description" principle
+  // the AI Follow-up report uses, so the two features cannot disagree about
+  // what is currently true of the target.
+  const verificationBlock = verification && verification.length > 0
+    ? verification.map((c) => `- ${c.label} [${c.status}]: ${c.summary}`).join("\n")
+    : "(no live checks were run for this synthesis)";
+
   const prompt = `You are a cybersecurity analyst. Synthesize intelligence for workspace "${sanitize(workspaceName)}".
 
 FINDINGS (${findings.length} total, ${crit} critical, ${high} high):
@@ -539,7 +733,10 @@ ${cveBlock}
 EXTERNAL THREAT INTEL:
 ${webBlock}
 
-CORRELATE: Link findings to recon data, CVEs, and known threats. Prioritize by severity and exploitability.
+LIVE VERIFICATION (probed just now against the workspace's own hosts — treat this as the current ground truth; do not contradict it, and say so explicitly if it disagrees with a stored finding):
+${verificationBlock}
+
+CORRELATE: Link findings to recon data, CVEs, known threats, and the live verification. Prioritize by severity and exploitability.
 
 Respond in valid JSON only. No markdown, no code blocks. Use exactly these keys:
 - "summary": string, 2-4 sentences on overall risk level, main vulnerabilities, and recommended priorities
@@ -557,12 +754,13 @@ Respond in valid JSON only. No markdown, no code blocks. Use exactly these keys:
       }
     })();
     if (!parsed || typeof parsed !== "object") {
-      log.warn({ rawLength: raw?.length }, "AI insights: Ollama returned non-JSON, using fallback");
+      log.warn({ rawLength: raw?.length }, "AI insights: GLM returned non-JSON, using fallback");
       return {
         ...buildFallbackInsights(findings, reconModules, workspaceName),
         isAIGenerated: false,
         fallbackReason: "ollama_error",
-        fallbackErrorDetail: `Ollama returned invalid JSON (raw length: ${raw?.length ?? 0}). Try a different model or ensure format: json is supported.`,
+        fallbackErrorDetail: `GLM returned invalid JSON (raw length: ${raw?.length ?? 0}).`,
+        verification,
       };
     }
     // Handle tinyllama/small models that may misspell keys (e.g. threaTLandScape)
@@ -581,16 +779,18 @@ Respond in valid JSON only. No markdown, no code blocks. Use exactly these keys:
       keyRisks: aiKeyRisks.length > 0 ? aiKeyRisks : fallback.keyRisks,
       threatLandscape: aiThreatLandscape || fallback.threatLandscape,
       isAIGenerated: true,
+      verification,
     };
   } catch (err) {
     const errDetail = sanitizeErrorDetail(err);
-    log.warn({ errDetail }, "AI insights: Ollama error");
+    log.warn({ errDetail }, "AI insights: GLM error");
     const isTimeout =
       err instanceof Error &&
       (err.name === "AbortError" || (err.message && err.message.includes("aborted")));
     return {
       ...buildFallbackInsights(findings, reconModules, workspaceName),
       isAIGenerated: false,
+      verification,
       fallbackReason: isTimeout ? "ollama_timeout" : "ollama_error",
       fallbackErrorDetail: errDetail,
     };
@@ -667,4 +867,415 @@ Respond in JSON only:
       recommendations: [],
     };
   }
+}
+
+export interface AttackChainNarrative {
+  narrative: string;
+  priorityAction: string;
+}
+
+/**
+ * A narrative for an attack chain that `attack-simulation.ts` already
+ * matched against real findings — the model explains and prioritizes a
+ * sequence that is already evidenced, it does not invent one. Same
+ * discipline as the AI Follow-up report's write step: the caller supplies
+ * exactly what matched, and the prompt tells the model not to add steps or
+ * findings beyond that list.
+ */
+export async function explainAttackChain(input: {
+  playbookName: string;
+  mitreTactics: string[];
+  matchedSteps: Array<{ order: number; action: string; matchingFindingTitles: string[] }>;
+  riskScore: number;
+  /** True when the same underlying finding backs 2+ different steps — the
+   *  chain's "coverage" is reused evidence, not distinct proof of progress. */
+  lowConfidence?: boolean;
+  /** Live checks run against the target JUST NOW, alongside the static
+   *  category match — manual recon the model can weigh instead of judging
+   *  from stored finding titles alone. */
+  verification?: Array<{ label: string; status: string; summary: string }>;
+}): Promise<AttackChainNarrative> {
+  const stepsBlock = input.matchedSteps
+    .map((s) => `${s.order}. ${s.action} — evidenced by: ${s.matchingFindingTitles.slice(0, 5).join("; ") || "(no specific finding titles)"}`)
+    .join("\n");
+
+  const verificationBlock = input.verification && input.verification.length > 0
+    ? input.verification.map((v) => `- ${v.label} (${v.status}): ${v.summary}`).join("\n")
+    : "(no live verification was run)";
+
+  const confidenceNote = input.lowConfidence
+    ? "\nLOW CONFIDENCE WARNING: the matched steps above are not independent — the SAME underlying finding is being cited as evidence for two or more different steps, which is category-keyword overlap, not proof each stage is actually achievable. Say so explicitly and do not describe this as a demonstrated or high-confidence chain."
+    : "";
+
+  const prompt = `You are a penetration tester briefing a client on ONE already-matched attack chain. Do not invent steps, findings, or targets beyond what is given below.
+
+CHAIN: "${sanitize(input.playbookName)}" (MITRE ATT&CK: ${input.mitreTactics.join(", ") || "none listed"})
+RISK SCORE: ${input.riskScore}/100${confidenceNote}
+
+MATCHED STEPS (each already has real findings behind it):
+${stepsBlock || "(no steps matched)"}
+
+LIVE VERIFICATION (checks run against the target just now, not just static category matching):
+${verificationBlock}
+
+Write:
+- "narrative": 2-4 sentences explaining, in plain language, how an attacker chains these SPECIFIC matched steps together against this target, referencing the evidence given AND the live verification results. If the evidence is thin, reused across steps, or the live checks do not corroborate it, say plainly that this is a low-confidence or speculative chain rather than describing it as demonstrated.
+- "priorityAction": one sentence naming the single highest-leverage fix that would break this chain (i.e. which matched step, if remediated, most reduces the risk). If the chain is low-confidence, this can instead recommend what to verify first.
+
+Respond in JSON only, no markdown, with exactly these two keys.`;
+
+  const system = "Output valid JSON only. No markdown, no extra text. Never introduce a step, finding, or target not given in the prompt.";
+  const raw = await callOllama(prompt, system, { format: "json" });
+  const parsed = extractJSON<AttackChainNarrative>(raw);
+  return {
+    narrative: (parsed?.narrative ?? "").trim().slice(0, 1200) || raw.slice(0, 1200),
+    priorityAction: (parsed?.priorityAction ?? "").trim().slice(0, 400),
+  };
+}
+
+export interface ComplianceNarrative {
+  summary: string;
+  topGaps: string[];
+}
+
+/**
+ * A narrative over a compliance report the deterministic mapper already
+ * computed — the model explains and prioritizes, it never re-grades a
+ * control. Pass/fail/partial/unknown are facts from `compliance-mapper.ts`;
+ * asking a model to also assert compliance status would be exactly the
+ * overclaim this codebase's own compliance work has repeatedly had to
+ * correct (an unmapped category silently reading as a pass, DPDP process
+ * controls that an external scan cannot assess at all). The prompt states
+ * the counts and per-control verdicts as given facts and forbids changing
+ * them.
+ */
+export async function explainComplianceReport(input: {
+  framework: string;
+  frameworkVersion: string;
+  score: number;
+  passCount: number;
+  failCount: number;
+  partialCount: number;
+  unknownCount: number;
+  failingControls: Array<{ id: string; title: string; severity: string; findingCount: number }>;
+  notAssessableCount: number;
+}): Promise<ComplianceNarrative> {
+  const failBlock = input.failingControls
+    .map((c) => `- [${c.id}] ${c.title} (${c.severity}, ${c.findingCount} finding(s))`)
+    .join("\n") || "(none failing)";
+
+  const prompt = `You are a compliance analyst. These are FACTS already computed by a deterministic mapper — do not change any verdict, invent a control, or claim a status for a control not listed.
+
+FRAMEWORK: ${sanitize(input.framework)} ${sanitize(input.frameworkVersion)}
+SCORE: ${input.score}/100
+CONTROLS: ${input.passCount} pass, ${input.failCount} fail, ${input.partialCount} partial, ${input.unknownCount} unassessed${input.notAssessableCount > 0 ? `, ${input.notAssessableCount} not externally assessable (process controls, out of scope for a surface scan)` : ""}
+
+FAILING CONTROLS:
+${failBlock}
+
+Write:
+- "summary": 2-3 sentences, plain-language business risk of the current gaps, for a reader who is not a security engineer.
+- "topGaps": array of up to 4 strings, each naming ONE failing control from the list above and the single most important reason it matters.
+
+Respond in JSON only, no markdown, with exactly these two keys.`;
+
+  const system = "Output valid JSON only. No markdown, no extra text. Never assert a control's status beyond what is given; never invent a control.";
+  const raw = await callOllama(prompt, system, { format: "json" });
+  const parsed = extractJSON<ComplianceNarrative>(raw);
+  return {
+    summary: (parsed?.summary ?? "").trim().slice(0, 1000) || raw.slice(0, 1000),
+    topGaps: Array.isArray(parsed?.topGaps) ? parsed.topGaps.slice(0, 4).map((s) => String(s).slice(0, 300)) : [],
+  };
+}
+
+export interface ReportQaResult {
+  /** true = no problems the model could point to; false = it named at least one */
+  clean: boolean;
+  /** Each item names a SPECIFIC inconsistency, unsupported claim, or clarity problem — never a generic "looks good". */
+  issues: string[];
+  /** One sentence: is this ready to send to a client as-is, or does it need a look first. */
+  recommendation: string;
+}
+
+/**
+ * A QA pass over a report BEFORE the operator shares it externally.
+ *
+ * This checks the report's own internal consistency (do the stated counts
+ * match the findings actually listed, does the summary claim something the
+ * findings don't support) and prose clarity — it is a proofreader, not a
+ * second opinion on severity or a compliance certification. It must never
+ * assert a finding is wrong or invent one that is not in `findingTitles`;
+ * the prompt says so twice because a QA tool that hallucinates a problem is
+ * worse than one that misses a real one — it trains the reader to stop
+ * trusting it, the same lesson this codebase already learned about a false
+ * "no findings" reading as a clean result.
+ */
+export async function reviewReportForQA(input: {
+  title: string;
+  reportType: string;
+  summary: string;
+  totalFindings: number;
+  criticalCount: number;
+  highCount: number;
+  findingTitles: string[];
+}): Promise<ReportQaResult> {
+  const findingsBlock = input.findingTitles.slice(0, 40).map((t) => `- ${t}`).join("\n") || "(none)";
+  const truncatedNote = input.findingTitles.length > 40 ? `\n(+${input.findingTitles.length - 40} more not shown)` : "";
+
+  const prompt = `You are proofreading a security report before it is sent to a client. Check ONLY what is given below — do not judge severity, do not invent a finding, do not claim a finding is wrong.
+
+REPORT: "${sanitize(input.title)}" (${input.reportType})
+
+STATED COUNTS: ${input.totalFindings} total findings, ${input.criticalCount} critical, ${input.highCount} high
+
+EXECUTIVE SUMMARY AS WRITTEN:
+${sanitize(input.summary).slice(0, 1500)}
+
+FINDING TITLES ACTUALLY LISTED (${input.findingTitles.length}):
+${findingsBlock}${truncatedNote}
+
+Check for:
+1. Does the summary's own numbers or severity claims match the stated counts and the finding titles listed?
+2. Does the summary claim something (a specific vulnerability class, an affected system) that no listed finding title supports?
+3. Is the summary vague, repetitive, or missing an actionable next step?
+
+Respond in JSON only, no markdown, with exactly these keys:
+- "issues": array of strings, each naming ONE specific problem found (empty array if none)
+- "recommendation": one sentence — ready to send, or what to fix first`;
+
+  const system = "Output valid JSON only. No markdown, no extra text. Report only problems you can point to in the text given; never invent a finding or a claim that is not there.";
+  const raw = await callOllama(prompt, system, { format: "json" });
+  const parsed = extractJSON<{ issues?: unknown; recommendation?: unknown }>(raw);
+  const issues = Array.isArray(parsed?.issues) ? parsed.issues.slice(0, 8).map((s) => String(s).slice(0, 300)) : [];
+  return {
+    clean: issues.length === 0,
+    issues,
+    recommendation: String(parsed?.recommendation ?? "").trim().slice(0, 400) || raw.slice(0, 400),
+  };
+}
+
+export interface TrendNarrative {
+  summary: string;
+  drivers: string[];
+}
+
+/**
+ * A narrative over trend data the server already aggregated
+ * (`routes/analytics.ts` — posture snapshots, findings-by-day, categories,
+ * MTTR). Same discipline as the other explain endpoints: the model
+ * describes direction and likely cause from the numbers given, it does not
+ * introduce a finding, category or date that is not in the data.
+ */
+export async function explainTrends(input: {
+  workspaceName: string;
+  securityScoreTrend: Array<{ date: string; securityScore: number | null }>;
+  findingsByDay: Array<{ date: string; total: number; critical: number; high: number }>;
+  topCategories: Array<{ category: string; total: number; open: number; critical: number; high: number }>;
+  mttr: { totalResolved: number; overallAvgHours: number | null };
+}): Promise<TrendNarrative> {
+  const scoreLine = input.securityScoreTrend.length >= 2
+    ? `${input.securityScoreTrend[0]?.securityScore ?? "N/A"} → ${input.securityScoreTrend[input.securityScoreTrend.length - 1]?.securityScore ?? "N/A"} over ${input.securityScoreTrend.length} snapshots`
+    : `${input.securityScoreTrend.length} snapshot(s), not enough to show a direction`;
+  const findingsBlock = input.findingsByDay.slice(-14).map((d) => `${d.date}: ${d.total} total (${d.critical} critical, ${d.high} high)`).join("\n") || "(no dated findings)";
+  const categoriesBlock = input.topCategories.slice(0, 8).map((c) => `- ${c.category}: ${c.total} total, ${c.open} open, ${c.critical} critical, ${c.high} high`).join("\n") || "(none)";
+  const mttrLine = input.mttr.totalResolved > 0
+    ? `${input.mttr.totalResolved} findings resolved, average ${input.mttr.overallAvgHours ?? "N/A"} hours to resolve`
+    : "no findings resolved yet — MTTR not established";
+
+  const prompt = `You are a security analyst summarizing trend data for workspace "${sanitize(input.workspaceName)}". Use ONLY the numbers given below — do not name a specific vulnerability or date not shown here.
+
+SECURITY SCORE TREND: ${scoreLine}
+
+FINDINGS DISCOVERED BY DAY (most recent 14):
+${findingsBlock}
+
+TOP CATEGORIES (by volume):
+${categoriesBlock}
+
+MEAN TIME TO RESOLVE: ${mttrLine}
+
+Write:
+- "summary": 2-3 sentences on the overall direction (improving, worsening, or flat) and what is driving it.
+- "drivers": array of up to 3 strings, each naming ONE specific category or pattern from the data above that best explains the trend.
+
+Respond in JSON only, no markdown, with exactly these two keys.`;
+
+  const system = "Output valid JSON only. No markdown, no extra text. Never name a category, date or number not present in the prompt.";
+  const raw = await callOllama(prompt, system, { format: "json" });
+  const parsed = extractJSON<{ summary?: unknown; drivers?: unknown }>(raw);
+  return {
+    summary: String(parsed?.summary ?? "").trim().slice(0, 1000) || raw.slice(0, 1000),
+    drivers: Array.isArray(parsed?.drivers) ? parsed.drivers.slice(0, 3).map((s) => String(s).slice(0, 300)) : [],
+  };
+}
+
+export interface BrandThreatNarrative {
+  summary: string;
+  priorities: string[];
+}
+
+/**
+ * A narrative correlating the five independent brand-threat signals
+ * (typosquats, ransomware leak sites, source-code leaks, mobile app abuse,
+ * breach corpus) into one read, instead of an operator mentally combining
+ * five separate panels.
+ *
+ * The three-state discipline this codebase uses everywhere else (checked /
+ * found-nothing / never-run) is the hardest thing to get right here, so the
+ * prompt is explicit: a `null` signal is NOT EVIDENCE of anything and must
+ * be named as "not yet checked", never folded into "no threats found". That
+ * is the exact "No Data reads as a pass" failure this file's compliance and
+ * dark-web work already had to correct twice.
+ */
+export async function explainBrandThreats(input: {
+  domain: string;
+  typosquat: { checked: boolean; registeredCount?: number; highRiskCount?: number };
+  ransomware: { checked: boolean; confirmedCount?: number };
+  codeLeaks: { checked: boolean; configured: boolean; withSecretsCount?: number; totalCount?: number };
+  mobileApps: { checked: boolean; officialCount?: number; thirdPartyCount?: number; brandInBundleIdCount?: number };
+  breaches: { checked: boolean; confirmedCount?: number; unverifiedCount?: number };
+}): Promise<BrandThreatNarrative> {
+  const line = (label: string, s: { checked: boolean }, detail: string) =>
+    `- ${label}: ${s.checked ? detail : "NOT YET CHECKED — say so, do not imply clean"}`;
+
+  const factsBlock = [
+    line("Lookalike domains", input.typosquat, `${input.typosquat.registeredCount ?? 0} registered, ${input.typosquat.highRiskCount ?? 0} high-risk`),
+    line("Ransomware leak sites", input.ransomware, `${input.ransomware.confirmedCount ?? 0} confirmed posting(s) naming this domain`),
+    line(
+      "Source-code leaks",
+      input.codeLeaks,
+      input.codeLeaks.configured
+        ? `${input.codeLeaks.totalCount ?? 0} matching repositories, ${input.codeLeaks.withSecretsCount ?? 0} containing secret-shaped values`
+        : "check not configured on this deployment (no GITHUB_TOKEN) — not the same as clean",
+    ),
+    line("Mobile app impersonation", input.mobileApps, `${input.mobileApps.officialCount ?? 0} official app(s), ${input.mobileApps.thirdPartyCount ?? 0} third-party app(s) using the brand, ${input.mobileApps.brandInBundleIdCount ?? 0} with the brand in their bundle id (not proof of ownership)`),
+    line("Public breach corpus", input.breaches, `${input.breaches.confirmedCount ?? 0} confirmed breach record(s), ${input.breaches.unverifiedCount ?? 0} unverified`),
+  ].join("\n");
+
+  const prompt = `You are a brand-protection analyst. These are FACTS about "${sanitize(input.domain)}" from five independent checks — some may say NOT YET CHECKED, which you must report as "not yet checked", never as clean or safe.
+
+${factsBlock}
+
+Write:
+- "summary": 2-4 sentences on overall brand-abuse exposure, explicitly noting anything not yet checked rather than ignoring it.
+- "priorities": array of up to 3 strings, each naming the single most urgent action from what WAS checked (empty array if nothing was checked or everything is clean).
+
+Respond in JSON only, no markdown, with exactly these two keys.`;
+
+  const system = "Output valid JSON only. No markdown, no extra text. A signal marked NOT YET CHECKED must be reported as unchecked, never as absence of a threat.";
+  const raw = await callOllama(prompt, system, { format: "json" });
+  const parsed = extractJSON<{ summary?: unknown; priorities?: unknown }>(raw);
+  return {
+    summary: String(parsed?.summary ?? "").trim().slice(0, 1200) || raw.slice(0, 1200),
+    priorities: Array.isArray(parsed?.priorities) ? parsed.priorities.slice(0, 3).map((s) => String(s).slice(0, 300)) : [],
+  };
+}
+
+export interface ScanDiffNarrative {
+  summary: string;
+  watchFor: string[];
+}
+
+/**
+ * A narrative over a scan-to-scan diff `differential-reporting.ts` already
+ * computed (new / fixed / persisting findings, risk delta). The model
+ * explains what changed between the two scans and why it matters — it does
+ * not decide whether a finding is new or fixed (that is a deterministic set
+ * comparison already done), and every finding it can name is already in one
+ * of the three lists given.
+ */
+export async function explainScanDiff(input: {
+  target: string;
+  scan1Date: string;
+  scan2Date: string;
+  riskDelta: number;
+  newFindings: Array<{ title: string; severity: string; category: string }>;
+  fixedFindings: Array<{ title: string; severity: string; category: string }>;
+  persistingCount: number;
+}): Promise<ScanDiffNarrative> {
+  const list = (findings: Array<{ title: string; severity: string; category: string }>) =>
+    findings.slice(0, 20).map((f) => `- ${f.title} (${f.severity}, ${f.category})`).join("\n") || "(none)";
+
+  const prompt = `You are a security analyst summarizing what changed between two scans of "${sanitize(input.target)}" — ${input.scan1Date} vs ${input.scan2Date}. Use ONLY the findings listed below; do not name anything not listed.
+
+RISK DELTA: ${input.riskDelta > 0 ? "+" : ""}${input.riskDelta} (positive = worse)
+
+NEW FINDINGS (${input.newFindings.length}):
+${list(input.newFindings)}
+
+FIXED FINDINGS (${input.fixedFindings.length}):
+${list(input.fixedFindings)}
+
+PERSISTING (unchanged): ${input.persistingCount} finding(s), not itemized here
+
+Write:
+- "summary": 2-3 sentences on whether posture improved or worsened and the main reason why, referencing specific findings/categories from the lists above.
+- "watchFor": array of up to 3 strings, each naming ONE new finding (from the NEW list) most worth prioritizing (empty array if no new findings).
+
+Respond in JSON only, no markdown, with exactly these two keys.`;
+
+  const system = "Output valid JSON only. No markdown, no extra text. Only name a finding that appears in the NEW or FIXED lists given.";
+  const raw = await callOllama(prompt, system, { format: "json" });
+  const parsed = extractJSON<{ summary?: unknown; watchFor?: unknown }>(raw);
+  return {
+    summary: String(parsed?.summary ?? "").trim().slice(0, 1000) || raw.slice(0, 1000),
+    watchFor: Array.isArray(parsed?.watchFor) ? parsed.watchFor.slice(0, 3).map((s) => String(s).slice(0, 300)) : [],
+  };
+}
+
+export interface AssetRiskNarrative {
+  summary: string;
+  drivers: string[];
+}
+
+/**
+ * A narrative correlating risk factors ACROSS an asset estate — the page
+ * shows overallScore + factors per asset, one row at a time, and nothing
+ * currently says "which factor is systemically driving the estate's score."
+ *
+ * Grounded strictly in server-computed AGGREGATE counts (score bands, most
+ * common contributing factor names, average), never in a per-asset listing —
+ * an estate can hold hundreds of assets, and naming individual hostnames
+ * would both blow the prompt budget and invite the model to draw a
+ * conclusion about one host it wasn't actually shown in detail. This also
+ * preserves the codebase's `findingCount === 0` vs `not_assessed` rule: the
+ * caller must exclude unscored assets from the aggregates before calling
+ * this, the same way the page's own "Average Score" tile does — a factor
+ * from zero findings is "not assessed," never "clean."
+ */
+export async function explainAssetRisk(input: {
+  totalAssets: number;
+  scoredAssets: number;
+  averageScore: number;
+  bandCounts: { critical: number; high: number; medium: number; low: number };
+  topFactors: Array<{ name: string; assetCount: number }>;
+  trendCounts: { improving: number; stable: number; degrading: number; unknown: number };
+}): Promise<AssetRiskNarrative> {
+  const factorsBlock = input.topFactors.slice(0, 6).map((f) => `- ${f.name}: contributes to ${f.assetCount} scored asset(s)`).join("\n") || "(no contributing factors recorded)";
+
+  const prompt = `You are a security analyst summarizing an asset risk estate. Use ONLY the aggregate numbers given below — do not name a specific hostname, you were not given any.
+
+ASSETS: ${input.totalAssets} total, ${input.scoredAssets} scored (have findings — the rest are "not assessed," not clean)
+AVERAGE SCORE (scored assets only): ${input.averageScore.toFixed(1)}/100
+
+SCORE BANDS (scored assets only): ${input.bandCounts.critical} critical (>=80), ${input.bandCounts.high} high (>=60), ${input.bandCounts.medium} medium (>=40), ${input.bandCounts.low} low (<40)
+
+MOST COMMON CONTRIBUTING RISK FACTORS ACROSS SCORED ASSETS:
+${factorsBlock}
+
+TREND: ${input.trendCounts.improving} improving, ${input.trendCounts.stable} stable, ${input.trendCounts.degrading} degrading, ${input.trendCounts.unknown} no history yet
+
+Write:
+- "summary": 2-3 sentences on the overall estate posture and which factor(s) are systemically driving it, referencing the aggregate numbers above.
+- "drivers": array of up to 3 strings, each naming ONE factor from the list above and roughly how many assets it affects.
+
+Respond in JSON only, no markdown, with exactly these two keys.`;
+
+  const system = "Output valid JSON only. No markdown, no extra text. Never name a hostname — only aggregate counts were given. A count of 0 scored assets for a band or factor means not assessed, never clean.";
+  const raw = await callOllama(prompt, system, { format: "json" });
+  const parsed = extractJSON<{ summary?: unknown; drivers?: unknown }>(raw);
+  return {
+    summary: String(parsed?.summary ?? "").trim().slice(0, 1000) || raw.slice(0, 1000),
+    drivers: Array.isArray(parsed?.drivers) ? parsed.drivers.slice(0, 3).map((s) => String(s).slice(0, 300)) : [],
+  };
 }

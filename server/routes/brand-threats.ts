@@ -1,4 +1,5 @@
 import { Router } from "express";
+import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { storage } from "../storage";
 import { createLogger } from "../logger";
@@ -22,6 +23,21 @@ const BREACH_MODULE_TYPE = "breach_exposure";
 
 const wsRead = requireWorkspaceRole("owner", "admin", "analyst", "viewer");
 const wsWrite = requireWorkspaceRole("owner", "admin", "analyst");
+
+/*
+ * Applied directly to each sweep's POST handler, not mounted by path in
+ * index.ts — GET and POST share the exact same path here
+ * (`/workspaces/:workspaceId/brand-threats` etc., differentiated only by
+ * verb), so a path-mounted limiter caught the cheap read-only GET (just
+ * returns the last stored recon_module) in the same budget as the
+ * expensive sweep. That meant reading your own result twice inside a
+ * minute answered "Too many ... sweeps, please try again later" for a
+ * request that triggered no sweep at all — found live, the same failure
+ * this codebase already documents for `/ai-insights`.
+ */
+const lookalikeSweepLimit = rateLimit({ windowMs: 60_000, max: 5, message: { message: "Too many brand threat scans, please try again later" } });
+const ransomwareSweepLimit = rateLimit({ windowMs: 60_000, max: 5, message: { message: "Too many exposure checks, please try again later" } });
+const codeLeakSweepLimit = rateLimit({ windowMs: 60_000, max: 2, message: { message: "Too many code leak sweeps, please try again later" } });
 
 const scanSchema = z.object({
   target: z
@@ -67,7 +83,7 @@ brandThreatsRouter.get("/workspaces/:workspaceId/brand-threats", wsRead, async (
  * This is DNS-only and touches no third-party API, but it does fan out a few
  * hundred resolutions, so it is rate limited alongside the other scan routes.
  */
-brandThreatsRouter.post("/workspaces/:workspaceId/brand-threats", wsWrite, async (req, res) => {
+brandThreatsRouter.post("/workspaces/:workspaceId/brand-threats", wsWrite, lookalikeSweepLimit, async (req, res) => {
   try {
     const parsed = scanSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
@@ -158,7 +174,7 @@ brandThreatsRouter.get("/workspaces/:workspaceId/ransomware-exposure", wsRead, a
  * Reads one aggregated public dataset — it does not touch Tor, and never
  * fetches the .onion URLs it reports.
  */
-brandThreatsRouter.post("/workspaces/:workspaceId/ransomware-exposure", wsWrite, async (req, res) => {
+brandThreatsRouter.post("/workspaces/:workspaceId/ransomware-exposure", wsWrite, ransomwareSweepLimit, async (req, res) => {
   try {
     const parsed = ransomwareSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
@@ -230,7 +246,7 @@ brandThreatsRouter.get("/workspaces/:workspaceId/code-leaks", wsRead, async (req
 });
 
 /** Searches public code for the workspace's identifiers. */
-brandThreatsRouter.post("/workspaces/:workspaceId/code-leaks", wsWrite, async (req, res) => {
+brandThreatsRouter.post("/workspaces/:workspaceId/code-leaks", wsWrite, codeLeakSweepLimit, async (req, res) => {
   try {
     const parsed = codeLeakSchema.safeParse(req.body ?? {});
     if (!parsed.success) {
@@ -399,5 +415,75 @@ brandThreatsRouter.post("/workspaces/:workspaceId/breach-exposure", wsWrite, asy
   } catch (err) {
     log.error({ err }, "Breach exposure check failed");
     sendError(res, 500, "Breach exposure check failed");
+  }
+});
+
+/**
+ * POST /api/workspaces/:workspaceId/brand-threats/explain — GLM correlates
+ * the five checks above into one narrative. Reads whatever has already run;
+ * never triggers a sweep itself, so it costs nothing beyond the GLM call.
+ * Ephemeral, like the other explain endpoints — the five underlying modules
+ * are the stored record, this is a read over them.
+ */
+brandThreatsRouter.post("/workspaces/:workspaceId/brand-threats/explain", wsRead, async (req, res) => {
+  try {
+    const workspaceId = req.params.workspaceId as string;
+    const workspace = await storage.getWorkspace(workspaceId);
+    if (!workspace) return sendError(res, 404, "Workspace not found");
+    const domain = (workspace.domain ?? workspace.name ?? "").trim();
+
+    const latestOf = async (type: string) => {
+      const modules = await storage.getReconModulesByType(workspaceId, type);
+      return [...modules].sort((a, b) => new Date(b.generatedAt ?? 0).getTime() - new Date(a.generatedAt ?? 0).getTime())[0] ?? null;
+    };
+
+    const [typosquatMod, ransomwareMod, codeLeakMod, mobileMod, breachMod] = await Promise.all([
+      latestOf(MODULE_TYPE),
+      latestOf(RANSOMWARE_MODULE_TYPE),
+      latestOf(CODE_LEAK_MODULE_TYPE),
+      latestOf(MOBILE_APP_MODULE_TYPE),
+      latestOf(BREACH_MODULE_TYPE),
+    ]);
+
+    const typosquatData = typosquatMod?.data as { registered?: unknown[]; counts?: { high?: number } } | undefined;
+    const ransomwareData = ransomwareMod?.data as { counts?: { confirmed?: number } } | undefined;
+    const codeLeakData = codeLeakMod?.data as { hits?: unknown[]; counts?: { withSecrets?: number; mentionsOnly?: number } } | undefined;
+    const mobileData = mobileMod?.data as { official?: unknown[]; thirdParty?: Array<{ brandInBundleId?: boolean }> } | undefined;
+    const breachData = breachMod?.data as { confirmed?: unknown[]; unverified?: unknown[] } | undefined;
+
+    const { explainBrandThreats } = await import("../ai-service.js");
+    const narrative = await explainBrandThreats({
+      domain,
+      typosquat: {
+        checked: !!typosquatMod,
+        registeredCount: typosquatData?.registered?.length,
+        highRiskCount: typosquatData?.counts?.high,
+      },
+      ransomware: {
+        checked: !!ransomwareMod,
+        confirmedCount: ransomwareData?.counts?.confirmed,
+      },
+      codeLeaks: {
+        checked: !!codeLeakMod,
+        configured: isCodeLeakConfigured(),
+        withSecretsCount: codeLeakData?.counts?.withSecrets,
+        totalCount: codeLeakData?.hits?.length,
+      },
+      mobileApps: {
+        checked: !!mobileMod,
+        officialCount: mobileData?.official?.length,
+        thirdPartyCount: mobileData?.thirdParty?.length,
+        brandInBundleIdCount: mobileData?.thirdParty?.filter((a) => a.brandInBundleId).length,
+      },
+      breaches: {
+        checked: !!breachMod,
+        confirmedCount: breachData?.confirmed?.length,
+        unverifiedCount: breachData?.unverified?.length,
+      },
+    });
+    res.json(narrative);
+  } catch (err) {
+    log.warn({ err }, "Brand threat explanation failed");
+    sendError(res, 500, "GLM did not answer. Try again.");
   }
 });

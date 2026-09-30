@@ -6,7 +6,17 @@ interface ReportPdfInput {
   summary: string;
   generatedAt: string | null;
   content: Record<string, unknown> | null;
-  findings: Array<{ id: string; title: string; severity: string; affectedAsset?: string | null }>;
+  findings: Array<{
+    id: string;
+    title: string;
+    severity: string;
+    affectedAsset?: string | null;
+    category?: string | null;
+    description?: string | null;
+    remediation?: string | null;
+    cvssScore?: string | null;
+    evidenceSummary?: string;
+  }>;
 }
 
 const MARGIN = 20;
@@ -106,6 +116,27 @@ export function generateReportPdfBuffer(input: ReportPdfInput): Buffer {
   y = addParagraph(doc, y, input.summary || "No summary available.");
   y = checkNewPage(doc, y, 30);
 
+  const followUp = (input.content?.aiFollowUp && typeof input.content.aiFollowUp === "object"
+    ? input.content.aiFollowUp as Record<string, unknown>
+    : null);
+  if (followUp) {
+    y = addSectionTitle(doc, y, "AI Follow-up");
+    const themes = Array.isArray(followUp.themes) ? followUp.themes as Array<Record<string, unknown>> : [];
+    const checks = Array.isArray(followUp.checks) ? followUp.checks as Array<Record<string, unknown>> : [];
+    const steps = Array.isArray(followUp.nextSteps) ? followUp.nextSteps.map((step) => String(step)) : [];
+    if (themes.length > 0) {
+      y = addParagraph(doc, y, themes.map((theme) => `${theme.title} (${theme.severity}): ${theme.narrative}`).join(" "));
+    }
+    if (checks.length > 0) {
+      y = addParagraph(doc, y, checks.map((check) => `${check.label} [${check.status}]: ${check.summary}`).join(" "));
+    }
+    if (steps.length > 0) {
+      y = addParagraph(doc, y, `Next steps: ${steps.join("; ")}`);
+    }
+    y = addSep(doc, y);
+    y = checkNewPage(doc, y, 30);
+  }
+
   const content = input.content || {};
 
   if (content.totalFindings !== undefined) {
@@ -186,32 +217,73 @@ export function generateReportPdfBuffer(input: ReportPdfInput): Buffer {
   if (input.findings.length > 0) {
     y = addSep(doc, y);
     y = addSectionTitle(doc, y, `Included Findings (${input.findings.length})`);
-    const fColWidths = [4, 86, 50, 30];
-    doc.setFontSize(8);
-    doc.setFont("helvetica", "bold");
-    let fx = MARGIN;
-    ["", "Title", "Asset", "Severity"].forEach((h, i) => { doc.text(h, fx, y); fx += fColWidths[i]; });
-    y += 7;
-    doc.setDrawColor(200, 200, 200);
-    doc.line(MARGIN, y - 5, MARGIN + fColWidths.reduce((a, b) => a + b, 0), y - 5);
-    doc.setFont("helvetica", "normal");
+
+    // A per-finding block, not a table \u2014 the DOCX and web reports already
+    // show description/remediation/evidence per finding, and a table with
+    // only title/asset/severity was the reason this format silently omitted
+    // almost everything the other two showed. jsPDF's fixed-width columns
+    // cannot hold a paragraph, so this trades row density for actually
+    // carrying the content.
     for (const f of input.findings) {
-      if (y > PAGE_HEIGHT - MARGIN - 15) { doc.addPage(); y = MARGIN; }
+      y = checkNewPage(doc, y, 22);
       const sevColor = SEVERITY_COLORS[f.severity] ?? [100, 116, 139];
       doc.setFillColor(sevColor[0], sevColor[1], sevColor[2]);
       doc.circle(MARGIN + 1.5, y - 1.5, 1.5, "F");
-      doc.setTextColor(0, 0, 0);
-      const tMax = Math.floor(fColWidths[1] / 1.8);
-      doc.text(f.title.length > tMax ? f.title.substring(0, tMax - 1) + "\u2026" : f.title, MARGIN + fColWidths[0], y);
-      const asset = f.affectedAsset || "\u2014";
-      const aMax = Math.floor(fColWidths[2] / 1.8);
-      doc.text(asset.length > aMax ? asset.substring(0, aMax - 1) + "\u2026" : asset, MARGIN + fColWidths[0] + fColWidths[1], y);
-      doc.setTextColor(sevColor[0], sevColor[1], sevColor[2]);
       doc.setFont("helvetica", "bold");
-      doc.text(f.severity.toUpperCase(), MARGIN + fColWidths[0] + fColWidths[1] + fColWidths[2], y);
-      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
       doc.setTextColor(0, 0, 0);
-      y += 7;
+      const titleLines = wrapText(doc, f.title, CONTENT_WIDTH - 6);
+      doc.text(titleLines, MARGIN + 5, y);
+      y += titleLines.length * LINE_HEIGHT;
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(8);
+      doc.setTextColor(sevColor[0], sevColor[1], sevColor[2]);
+      const metaParts = [f.severity.toUpperCase()];
+      if (f.category) metaParts.push(f.category.replace(/_/g, " "));
+      if (f.affectedAsset) metaParts.push(f.affectedAsset);
+      if (f.cvssScore) metaParts.push(`CVSS ${f.cvssScore}`);
+      doc.text(metaParts.join("   \u00b7   "), MARGIN + 5, y);
+      doc.setTextColor(0, 0, 0);
+      y += LINE_HEIGHT;
+
+      if (f.description) {
+        y = checkNewPage(doc, y, 14);
+        doc.setFontSize(9);
+        const descLines = wrapText(doc, f.description, CONTENT_WIDTH - 6).slice(0, 5);
+        doc.text(descLines, MARGIN + 5, y);
+        y += descLines.length * LINE_HEIGHT;
+      }
+
+      if (f.remediation) {
+        y = checkNewPage(doc, y, 12);
+        doc.setFontSize(8);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(60, 60, 60);
+        doc.text("Remediation:", MARGIN + 5, y);
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(0, 0, 0);
+        const remLines = wrapText(doc, f.remediation, CONTENT_WIDTH - 32).slice(0, 3);
+        doc.text(remLines, MARGIN + 32, y);
+        y += Math.max(remLines.length, 1) * LINE_HEIGHT;
+      }
+
+      if (f.evidenceSummary) {
+        y = checkNewPage(doc, y, 12);
+        doc.setFontSize(7.5);
+        doc.setFont("helvetica", "italic");
+        doc.setTextColor(110, 110, 110);
+        const evLines = wrapText(doc, `Evidence: ${f.evidenceSummary}`, CONTENT_WIDTH - 6).slice(0, 2);
+        doc.text(evLines, MARGIN + 5, y);
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(0, 0, 0);
+        y += evLines.length * LINE_HEIGHT;
+      }
+
+      y += 3;
+      doc.setDrawColor(230, 230, 230);
+      doc.line(MARGIN, y - 2, MARGIN + CONTENT_WIDTH, y - 2);
+      y += 3;
     }
   }
 
